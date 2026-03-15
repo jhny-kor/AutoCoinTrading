@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
 - BTC 전략 버전 이름(strategy_version)을 구조화 로그와 체결 이력에 함께 남겨 버전별 비교가 가능하도록 확장
 - BTC 거래 품질 분석용으로 최저가, MFE/MAE, 트레일링 활성화 소요 시간까지 체결 로그에 함께 남기도록 확장
 - 트레일링 익절이 이미 활성화된 뒤에는 trend_exit 가 먼저 포지션을 끊지 않도록 조정
@@ -184,6 +185,7 @@ def run_bot():
     trailing_armed_at: float | None = None
     trailing_activation_price: float | None = None
     last_trade_at = 0.0
+    last_stop_loss_at = 0.0
     daily_realized_pnl_quote = 0.0
     daily_pnl_date = datetime.now().date()
     daily_limit_notified = False
@@ -304,7 +306,14 @@ def run_bot():
                     context={"bootstrap_entry_price": last_close},
                 )
 
-            in_cooldown = (time.time() - last_trade_at) < settings.min_trade_interval_sec
+            now_ts = time.time()
+            base_cooldown_remaining = max(0.0, settings.min_trade_interval_sec - (now_ts - last_trade_at))
+            stop_loss_cooldown_remaining = max(
+                0.0,
+                settings.stop_loss_reentry_cooldown_sec - (now_ts - last_stop_loss_at),
+            )
+            cooldown_remaining = max(base_cooldown_remaining, stop_loss_cooldown_remaining)
+            in_cooldown = cooldown_remaining > 0
             volume_filter_passed = volume_ratio is not None and volume_ratio >= settings.min_volume_ratio
             atr_filter_passed = settings.min_atr_pct <= atr_pct <= settings.max_atr_pct
             daily_loss_limit_reached = daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
@@ -498,8 +507,16 @@ def run_bot():
                     stage="cooldown",
                     passed=not in_cooldown,
                     reason="cooldown_active",
-                    actual={"min_trade_interval_sec": settings.min_trade_interval_sec},
-                    required={"cooldown_inactive": True},
+                    actual={
+                        "cooldown_remaining_sec": cooldown_remaining,
+                        "base_cooldown_remaining_sec": base_cooldown_remaining,
+                        "stop_loss_cooldown_remaining_sec": stop_loss_cooldown_remaining,
+                    },
+                    required={
+                        "base_min_trade_interval_sec": settings.min_trade_interval_sec,
+                        "stop_loss_reentry_cooldown_sec": settings.stop_loss_reentry_cooldown_sec,
+                        "cooldown_inactive": True,
+                    },
                 ),
                 FunnelStep(
                     stage="volume",
@@ -811,6 +828,8 @@ def run_bot():
                             if entry_price and amount
                             else realized_pnl_pct
                         )
+                    if stop_triggered:
+                        last_stop_loss_at = time.time()
                     last_trade_at = time.time()
                     structured_logger.log_strategy(
                         symbol=symbol,
