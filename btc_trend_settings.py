@@ -2,6 +2,7 @@
 BTC 전용 EMA 추세추종 설정 로더
 
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운 설정을 추가했다.
+- BTC 는 수익 구간에서 1회만 추가매수하는 보수적 피라미딩 설정을 .env 에서 읽도록 확장했다.
 - BTC 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
 - BTC 진입 신호를 골든크로스뿐 아니라 EMA 상승 정렬 유지 구간까지 허용하는 설정을 추가했다.
 - BTC 전용 최소 거래 간격 기본값을 300초로 낮춰 실환경 .env 와 기본 동작을 맞췄다.
@@ -50,6 +51,10 @@ class BtcTrendSettings:
     min_order_amount: float
     min_trade_interval_sec: int
     stop_loss_reentry_cooldown_sec: int
+    enable_pyramid_add_on: bool
+    pyramid_trigger_profit_pct: float
+    pyramid_position_ratio: float
+    pyramid_max_add_ons: int
     stop_mode: str
     take_profit_mode: str
     stop_atr_multiple: float
@@ -95,6 +100,17 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         stop_loss_reentry_cooldown_sec=int(
             os.getenv("BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC", "600")
         ),
+        enable_pyramid_add_on=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_PYRAMID_ADD_ON", "true"),
+            default=True,
+        ),
+        pyramid_trigger_profit_pct=float(
+            os.getenv("BTC_TREND_PYRAMID_TRIGGER_PROFIT_PCT", "0.35")
+        ),
+        pyramid_position_ratio=float(
+            os.getenv("BTC_TREND_PYRAMID_POSITION_RATIO", "0.15")
+        ),
+        pyramid_max_add_ons=int(os.getenv("BTC_TREND_PYRAMID_MAX_ADD_ONS", "1")),
         stop_mode=os.getenv("BTC_TREND_STOP_MODE", "atr").strip().lower(),
         take_profit_mode=os.getenv("BTC_TREND_TAKE_PROFIT_MODE", "atr").strip().lower(),
         stop_atr_multiple=float(os.getenv("BTC_TREND_STOP_ATR_MULTIPLE", "1.5")),

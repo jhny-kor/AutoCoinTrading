@@ -1,6 +1,7 @@
 """
 수정 요약
 - 업비트 BTC 순손익 계산을 매도 수수료만이 아니라 왕복 수수료 기준으로 통일해 /pnl 집계가 더 정확해지도록 보강
+- BTC 는 수익 구간에서 1회만 추가매수하는 보수적 피라미딩을 지원하도록 확장
 - 업비트 BTC 에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
 - 업비트 BTC 에서 최소 주문 금액 미만 잔량은 포지션으로 보지 않아 잔량 보유 중에도 재진입할 수 있게 조정
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
@@ -187,6 +188,7 @@ def run_bot():
     trailing_armed = False
     trailing_armed_at: float | None = None
     trailing_activation_price: float | None = None
+    add_on_count = 0
     last_trade_at = 0.0
     last_stop_loss_at = 0.0
     daily_realized_pnl_quote = 0.0
@@ -300,6 +302,7 @@ def run_bot():
                 trailing_armed = False
                 trailing_armed_at = None
                 trailing_activation_price = None
+                add_on_count = settings.pyramid_max_add_ons
                 log(
                     f"[{symbol}] 기존 보유 물량이 감지되어 평균 진입가를 현재가({last_close:.0f})로 임시 설정합니다."
                 )
@@ -423,6 +426,7 @@ def run_bot():
                     trailing_armed = False
                     trailing_armed_at = None
                     trailing_activation_price = None
+                    add_on_count = 0
 
             if daily_loss_limit_reached:
                 log(f"[{symbol}] 일일 최대 손실 제한에 도달하여 신규 진입을 중단합니다.")
@@ -448,6 +452,9 @@ def run_bot():
                 and not trailing_armed
             )
             order_value = quote_free * config["risk_per_trade"] * settings.position_ratio
+            add_on_order_value = (
+                quote_free * config["risk_per_trade"] * settings.pyramid_position_ratio
+            )
 
             common_metrics = {
                 "strategy_name": "upbit_btc_ema_trend",
@@ -482,6 +489,10 @@ def run_bot():
                 "trailing_activation_price": trailing_activation_price,
                 "mfe_pct": mfe_pct,
                 "mae_pct": mae_pct,
+                "add_on_count": add_on_count,
+                "pyramid_add_on_enabled": settings.enable_pyramid_add_on,
+                "pyramid_trigger_profit_pct": settings.pyramid_trigger_profit_pct,
+                "pyramid_max_add_ons": settings.pyramid_max_add_ons,
             }
 
             entry_steps = [
@@ -578,6 +589,126 @@ def run_bot():
                 ready_stage="buy_ready",
                 ready_reason="entry_conditions_met",
             )
+
+            add_on_profit_ready = (
+                has_position
+                and entry_price is not None
+                and pnl_pct is not None
+                and pnl_pct >= settings.pyramid_trigger_profit_pct
+            )
+            add_on_limit_available = add_on_count < settings.pyramid_max_add_ons
+            add_on_ready = False
+            if settings.enable_pyramid_add_on:
+                add_on_ready, _ = structured_logger.run_funnel(
+                    symbol=symbol,
+                    side="entry",
+                    steps=[
+                        FunnelStep(
+                            stage="add_on_position",
+                            passed=has_position,
+                            reason="no_position",
+                            actual={"has_position": has_position},
+                            required={"has_position": True},
+                        ),
+                        FunnelStep(
+                            stage="add_on_profit",
+                            passed=add_on_profit_ready,
+                            reason="pyramid_profit_not_reached",
+                            actual={"pnl_pct": pnl_pct},
+                            required={
+                                "min_pnl_pct": settings.pyramid_trigger_profit_pct,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_limit",
+                            passed=add_on_limit_available,
+                            reason="pyramid_limit_reached",
+                            actual={"add_on_count": add_on_count},
+                            required={"max_add_ons": settings.pyramid_max_add_ons},
+                        ),
+                        FunnelStep(
+                            stage="add_on_trailing",
+                            passed=not trailing_armed,
+                            reason="trailing_already_armed",
+                            actual={"trailing_armed": trailing_armed},
+                            required={"trailing_armed": False},
+                        ),
+                        FunnelStep(
+                            stage="add_on_trend",
+                            passed=entry_signal,
+                            reason="no_entry_signal",
+                            actual={
+                                "bullish_signal": bullish,
+                                "trend_follow_entry": trend_follow_entry,
+                            },
+                            required={
+                                "bullish_signal_or_trend_follow_entry": True,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_cooldown",
+                            passed=not in_cooldown,
+                            reason="cooldown_active",
+                            actual={"cooldown_remaining_sec": cooldown_remaining},
+                            required={"cooldown_inactive": True},
+                        ),
+                        FunnelStep(
+                            stage="add_on_volume",
+                            passed=volume_filter_passed,
+                            reason="volume_low"
+                            if volume_ratio is not None
+                            else "volume_data_missing",
+                            actual={"volume_ratio": volume_ratio},
+                            required={"min_volume_ratio": settings.min_volume_ratio},
+                        ),
+                        FunnelStep(
+                            stage="add_on_atr",
+                            passed=atr_filter_passed,
+                            reason=choose_atr_reason(
+                                atr_pct,
+                                min_value=settings.min_atr_pct,
+                                max_value=settings.max_atr_pct,
+                            ),
+                            actual={"atr_pct": atr_pct},
+                            required={
+                                "min_atr_pct": settings.min_atr_pct,
+                                "max_atr_pct": settings.max_atr_pct,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_higher_timeframe",
+                            passed=(
+                                not settings.enable_confirm_timeframe_filter
+                                or confirm_bullish
+                            ),
+                            reason="higher_timeframe_not_bullish",
+                            actual={"confirm_bullish": confirm_bullish},
+                            required={"confirm_bullish": True},
+                        ),
+                        FunnelStep(
+                            stage="add_on_risk_limit",
+                            passed=not daily_loss_limit_reached,
+                            reason="daily_loss_limit_reached",
+                            actual={
+                                "daily_realized_pnl_quote": daily_realized_pnl_quote
+                            },
+                            required={
+                                "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_order_value",
+                            passed=add_on_order_value > min_buy_order_value,
+                            reason="order_value_too_small",
+                            actual={"order_value_quote": add_on_order_value},
+                            required={"min_buy_order_value": min_buy_order_value},
+                        ),
+                    ],
+                    metrics=common_metrics,
+                    ready_stage="add_on_ready",
+                    ready_reason="add_on_conditions_met",
+                    ready_extra={"entry_type": "add_on_winner"},
+                )
 
             exit_steps = [
                 FunnelStep(
@@ -754,12 +885,162 @@ def run_bot():
                         extra={
                             "strategy_version": settings.version,
                             "strategy": "btc_ema_trend",
+                            "entry_type": "initial_entry",
                             "volume_ratio": volume_ratio,
                             "atr_value": atr_value,
                             "atr_pct": atr_pct,
                             "confirm_bullish": confirm_bullish,
                         },
                     )
+                    add_on_count = 0
+
+            elif add_on_ready:
+                amount = safe_amount_to_precision(exchange, symbol, add_on_order_value / last_close)
+                cost_to_spend = float(f"{add_on_order_value:.8f}")
+                structured_logger.log_strategy(
+                    symbol=symbol,
+                    side="entry",
+                    stage="order_requested",
+                    result="requested",
+                    reason="market_buy_requested",
+                    actual={
+                        "order_value_quote": cost_to_spend,
+                        "amount": amount,
+                    },
+                    metrics={**common_metrics, "entry_type": "add_on_winner"},
+                )
+                try:
+                    order = exchange.create_market_buy_order(
+                        symbol,
+                        cost_to_spend,
+                        params={"createMarketBuyOrderRequiresPrice": False},
+                    )
+                except Exception as order_error:
+                    structured_logger.log_strategy(
+                        symbol=symbol,
+                        side="entry",
+                        stage="filled",
+                        result="error",
+                        reason="order_failed",
+                        actual={
+                            "order_value_quote": cost_to_spend,
+                            "amount": amount,
+                        },
+                        metrics={**common_metrics, "entry_type": "add_on_winner"},
+                        extra={
+                            "error": repr(order_error),
+                            "strategy_version": settings.version,
+                        },
+                    )
+                    structured_logger.log_system(
+                        level="WARNING",
+                        event="order_failed",
+                        message="BTC 추가매수 주문 요청이 실패했습니다.",
+                        symbol=symbol,
+                        context={
+                            "side": "buy",
+                            "order_value_quote": cost_to_spend,
+                            "amount": amount,
+                            "error": repr(order_error),
+                        },
+                    )
+                    raise
+
+                previous_amount = base_free
+                added_amount = amount
+                total_amount = previous_amount + added_amount
+                previous_entry_price = entry_price or last_close
+                if total_amount > 0:
+                    entry_price = (
+                        (previous_entry_price * previous_amount) + (last_close * added_amount)
+                    ) / total_amount
+                else:
+                    entry_price = last_close
+                add_on_count += 1
+                last_trade_at = time.time()
+                highest_price_since_entry = max(highest_price_since_entry or last_close, last_close)
+                lowest_price_since_entry = min(lowest_price_since_entry or last_close, last_close)
+
+                structured_logger.log_strategy(
+                    symbol=symbol,
+                    side="entry",
+                    stage="filled",
+                    result="filled",
+                    reason="buy_add_on_filled",
+                    actual={
+                        "filled_amount": added_amount,
+                        "order_value_quote": cost_to_spend,
+                    },
+                    metrics={
+                        **common_metrics,
+                        "entry_type": "add_on_winner",
+                        "estimated_entry_price_after": entry_price,
+                        "add_on_count_after": add_on_count,
+                    },
+                )
+                structured_logger.log_trade_event(
+                    symbol=symbol,
+                    side="buy",
+                    reason="add_on_winner",
+                    result="filled",
+                    actual={
+                        "filled_amount": added_amount,
+                        "order_value_quote": cost_to_spend,
+                    },
+                    metrics={
+                        **common_metrics,
+                        "entry_type": "add_on_winner",
+                        "estimated_entry_price_after": entry_price,
+                        "add_on_count_after": add_on_count,
+                    },
+                )
+                logger.log_trade_banner(
+                    RED,
+                    f"[{symbol}] BTC EMA 전략 추가매수 체결",
+                    f"주문 결과: {order}",
+                )
+                notifier.notify_buy_fill(
+                    "UPBIT-BTC",
+                    symbol,
+                    f"사유: add_on_winner\n"
+                    f"주문 수량: {amount}\n"
+                    f"갱신 평균 진입가: {entry_price:.0f}",
+                )
+                trade_history.log_fill(
+                    exchange_name="UPBIT",
+                    program_name="upbit_btc_ema_trend_bot",
+                    strategy_version=settings.version,
+                    symbol=symbol,
+                    side="buy",
+                    reason="add_on_winner",
+                    base_currency=base,
+                    quote_currency=quote,
+                    amount=added_amount,
+                    order_value_quote=cost_to_spend,
+                    reference_price=last_close,
+                    estimated_entry_price=entry_price,
+                    base_free_before=base_free,
+                    quote_free_before=quote_free,
+                    remaining_base_after_estimate=total_amount,
+                    timeframe=settings.timeframe,
+                    ma_period=settings.slow_ema_period,
+                    position_id=position_id,
+                    leg_index=add_on_count,
+                    is_final_exit=False,
+                    raw_order=order,
+                    extra={
+                        "strategy_version": settings.version,
+                        "strategy": "btc_ema_trend",
+                        "entry_type": "add_on_winner",
+                        "previous_entry_price": previous_entry_price,
+                        "updated_entry_price": entry_price,
+                        "add_on_count_after": add_on_count,
+                        "volume_ratio": volume_ratio,
+                        "atr_value": atr_value,
+                        "atr_pct": atr_pct,
+                        "confirm_bullish": confirm_bullish,
+                    },
+                )
 
             elif exit_ready:
                 amount = safe_amount_to_precision(exchange, symbol, base_free)
@@ -963,6 +1244,7 @@ def run_bot():
                     trailing_armed = False
                     trailing_armed_at = None
                     trailing_activation_price = None
+                    add_on_count = 0
             else:
                 log(f"[{symbol}] BTC EMA 전략 조건에 해당하지 않아 대기합니다.")
 
