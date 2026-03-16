@@ -620,18 +620,30 @@ def build_pnl_text() -> str:
         gross_value = record.get("realized_pnl_quote")
         used_estimated_net = False
         used_gross_fallback = False
+        exchange_name = str(record.get("exchange", "")).strip().upper()
 
         try:
             if net_value not in (None, ""):
                 pnl_value = float(net_value)
+                if exchange_name == "OKX":
+                    okx_fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
+                    estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
+                        entry_price=record.get("estimated_entry_price"),
+                        exit_price=record.get("reference_price"),
+                        amount=record.get("amount"),
+                        fee_rate_pct=okx_fee_rate_pct,
+                        realized_pnl_quote=gross_value,
+                    )
+                    if estimated_fee is not None and estimated_net is not None:
+                        pnl_value = float(estimated_net)
+                        used_estimated_net = True
             elif gross_value not in (None, ""):
                 fee_rate_pct = record.get("fee_rate_pct")
                 if fee_rate_pct in (None, ""):
-                    exchange_name = str(record.get("exchange", "")).strip().upper()
                     if exchange_name == "UPBIT":
                         fee_rate_pct = os.getenv("UPBIT_FEE_RATE_PCT", "0.05")
                     elif exchange_name == "OKX":
-                        fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "1.0")
+                        fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
 
                 estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
                     entry_price=record.get("estimated_entry_price"),
