@@ -23,6 +23,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from log_path_utils import iter_files
+
 
 @dataclass
 class Summary:
@@ -183,7 +185,7 @@ def load_records(log_dir: Path) -> list[dict]:
     if not log_dir.exists():
         return records
 
-    for path in sorted(log_dir.glob("*.jsonl")):
+    for path in iter_files(log_dir, "*.jsonl"):
         if path.name == "errors.jsonl":
             continue
         for line in path.read_text(encoding="utf-8").splitlines():

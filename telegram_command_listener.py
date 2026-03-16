@@ -64,6 +64,7 @@ import analyze_logs
 import analyze_strategy_logs
 import bot_manager
 from bot_logger import BotLogger
+from log_path_utils import iter_files, latest_file, read_all_lines
 from ma_crossover_bot import (
     create_okx_client,
     fetch_ohlcv as fetch_okx_ohlcv,
@@ -100,10 +101,10 @@ SKIP_REASON_PATTERNS = [
 ]
 
 PROGRAM_LOG_SOURCES = [
-    ("OKX 알트", Path("logs/ma_crossover_bot.log")),
-    ("업비트 알트", Path("logs/upbit_ma_crossover_bot.log")),
-    ("OKX BTC", Path("logs/okx_btc_ema_trend_bot.log")),
-    ("업비트 BTC", Path("logs/upbit_btc_ema_trend_bot.log")),
+    ("OKX 알트", "ma_crossover_bot.log"),
+    ("업비트 알트", "upbit_ma_crossover_bot.log"),
+    ("OKX BTC", "okx_btc_ema_trend_bot.log"),
+    ("업비트 BTC", "upbit_btc_ema_trend_bot.log"),
 ]
 
 PROGRAM_STRUCTURE_SOURCES = [
@@ -417,39 +418,36 @@ def build_positions_text(settings: ListenerSettings) -> str:
 
 def load_latest_entry_prices() -> dict[tuple[str, str], float]:
     """체결 이력에서 거래소/심볼별 최신 추정 진입가를 읽는다."""
-    path = Path("trade_logs/trade_history.jsonl")
-    if not path.exists():
-        return {}
-
     latest_prices: dict[tuple[str, str], float] = {}
     latest_ts: dict[tuple[str, str], str] = {}
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            record = json.loads(stripped)
-        except (ValueError, json.JSONDecodeError):
-            continue
+    for path in iter_files("trade_logs", "trade_history.jsonl"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except (ValueError, json.JSONDecodeError):
+                continue
 
-        exchange = str(record.get("exchange", "")).strip().upper()
-        symbol = str(record.get("symbol", "")).strip()
-        estimated_entry_price = record.get("estimated_entry_price")
-        recorded_at = str(record.get("recorded_at_local", ""))
+            exchange = str(record.get("exchange", "")).strip().upper()
+            symbol = str(record.get("symbol", "")).strip()
+            estimated_entry_price = record.get("estimated_entry_price")
+            recorded_at = str(record.get("recorded_at_local", ""))
 
-        if not exchange or not symbol or estimated_entry_price in (None, ""):
-            continue
+            if not exchange or not symbol or estimated_entry_price in (None, ""):
+                continue
 
-        try:
-            price = float(estimated_entry_price)
-        except (TypeError, ValueError):
-            continue
+            try:
+                price = float(estimated_entry_price)
+            except (TypeError, ValueError):
+                continue
 
-        key = (exchange, symbol)
-        if key not in latest_ts or recorded_at >= latest_ts[key]:
-            latest_ts[key] = recorded_at
-            latest_prices[key] = price
+            key = (exchange, symbol)
+            if key not in latest_ts or recorded_at >= latest_ts[key]:
+                latest_ts[key] = recorded_at
+                latest_prices[key] = price
 
     return latest_prices
 
@@ -587,8 +585,8 @@ def build_upbit_positions_text(symbols: list[str]) -> str:
 
 def build_pnl_text() -> str:
     """오늘 체결 이력 기준 KRW, USDT 누적 손익 요약을 만든다."""
-    path = Path("trade_logs/trade_history.jsonl")
-    if not path.exists():
+    trade_paths = iter_files("trade_logs", "trade_history.jsonl")
+    if not trade_paths:
         return "오늘 누적 실현 손익\n- 체결 이력이 아직 없습니다."
 
     today_prefix = datetime.now().strftime("%Y-%m-%d")
@@ -597,78 +595,79 @@ def build_pnl_text() -> str:
     estimated_counts: dict[str, int] = {}
     gross_fallback_counts: dict[str, int] = {}
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            record = json.loads(stripped)
-        except (ValueError, json.JSONDecodeError):
-            continue
+    for path in trade_paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except (ValueError, json.JSONDecodeError):
+                continue
 
-        recorded_local = str(record.get("recorded_at_local", ""))
-        if not recorded_local.startswith(today_prefix):
-            continue
-        if str(record.get("side", "")).lower() != "sell":
-            continue
+            recorded_local = str(record.get("recorded_at_local", ""))
+            if not recorded_local.startswith(today_prefix):
+                continue
+            if str(record.get("side", "")).lower() != "sell":
+                continue
 
-        quote = str(record.get("quote_currency", "")).strip().upper()
-        if not quote:
-            continue
+            quote = str(record.get("quote_currency", "")).strip().upper()
+            if not quote:
+                continue
 
-        net_value = record.get("net_realized_pnl_quote")
-        gross_value = record.get("realized_pnl_quote")
-        used_estimated_net = False
-        used_gross_fallback = False
-        exchange_name = str(record.get("exchange", "")).strip().upper()
+            net_value = record.get("net_realized_pnl_quote")
+            gross_value = record.get("realized_pnl_quote")
+            used_estimated_net = False
+            used_gross_fallback = False
+            exchange_name = str(record.get("exchange", "")).strip().upper()
 
-        try:
-            if net_value not in (None, ""):
-                pnl_value = float(net_value)
-                if exchange_name == "OKX":
-                    okx_fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
+            try:
+                if net_value not in (None, ""):
+                    pnl_value = float(net_value)
+                    if exchange_name == "OKX":
+                        okx_fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
+                        estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
+                            entry_price=record.get("estimated_entry_price"),
+                            exit_price=record.get("reference_price"),
+                            amount=record.get("amount"),
+                            fee_rate_pct=okx_fee_rate_pct,
+                            realized_pnl_quote=gross_value,
+                        )
+                        if estimated_fee is not None and estimated_net is not None:
+                            pnl_value = float(estimated_net)
+                            used_estimated_net = True
+                elif gross_value not in (None, ""):
+                    fee_rate_pct = record.get("fee_rate_pct")
+                    if fee_rate_pct in (None, ""):
+                        if exchange_name == "UPBIT":
+                            fee_rate_pct = os.getenv("UPBIT_FEE_RATE_PCT", "0.05")
+                        elif exchange_name == "OKX":
+                            fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
+
                     estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
                         entry_price=record.get("estimated_entry_price"),
                         exit_price=record.get("reference_price"),
                         amount=record.get("amount"),
-                        fee_rate_pct=okx_fee_rate_pct,
+                        fee_rate_pct=fee_rate_pct,
                         realized_pnl_quote=gross_value,
                     )
                     if estimated_fee is not None and estimated_net is not None:
                         pnl_value = float(estimated_net)
                         used_estimated_net = True
-            elif gross_value not in (None, ""):
-                fee_rate_pct = record.get("fee_rate_pct")
-                if fee_rate_pct in (None, ""):
-                    if exchange_name == "UPBIT":
-                        fee_rate_pct = os.getenv("UPBIT_FEE_RATE_PCT", "0.05")
-                    elif exchange_name == "OKX":
-                        fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
-
-                estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
-                    entry_price=record.get("estimated_entry_price"),
-                    exit_price=record.get("reference_price"),
-                    amount=record.get("amount"),
-                    fee_rate_pct=fee_rate_pct,
-                    realized_pnl_quote=gross_value,
-                )
-                if estimated_fee is not None and estimated_net is not None:
-                    pnl_value = float(estimated_net)
-                    used_estimated_net = True
+                    else:
+                        pnl_value = float(gross_value)
+                        used_gross_fallback = True
                 else:
-                    pnl_value = float(gross_value)
-                    used_gross_fallback = True
-            else:
+                    continue
+            except (TypeError, ValueError):
                 continue
-        except (TypeError, ValueError):
-            continue
 
-        totals[quote] = totals.get(quote, 0.0) + pnl_value
-        trade_counts[quote] = trade_counts.get(quote, 0) + 1
-        if used_estimated_net:
-            estimated_counts[quote] = estimated_counts.get(quote, 0) + 1
-        if used_gross_fallback:
-            gross_fallback_counts[quote] = gross_fallback_counts.get(quote, 0) + 1
+            totals[quote] = totals.get(quote, 0.0) + pnl_value
+            trade_counts[quote] = trade_counts.get(quote, 0) + 1
+            if used_estimated_net:
+                estimated_counts[quote] = estimated_counts.get(quote, 0) + 1
+            if used_gross_fallback:
+                gross_fallback_counts[quote] = gross_fallback_counts.get(quote, 0) + 1
 
     if not totals:
         return "오늘 누적 실현 손익\n- 오늘 집계된 실현 손익 체결이 아직 없습니다."
@@ -955,21 +954,21 @@ def load_latest_summary_pairs() -> dict[tuple[str, str], list[dict]]:
     if not base_dir.exists():
         return pairs
 
-    for program_dir in sorted(path for path in base_dir.iterdir() if path.is_dir()):
-        summary_dir = program_dir / "summary_1h"
-        if not summary_dir.exists():
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for path in iter_files(base_dir, "*.json"):
+        if "summary_1h" not in path.parts:
             continue
-        grouped: dict[tuple[str, str], list[dict]] = {}
-        for path in summary_dir.glob("*.json"):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            key = (program_dir.name, str(record.get("symbol", "")))
-            grouped.setdefault(key, []).append(record)
-        for key, records in grouped.items():
-            records.sort(key=lambda item: str(item.get("time_bucket", "")), reverse=True)
-            pairs[key] = records[:2]
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        program_name = path.parent.parent.name
+        key = (program_name, str(record.get("symbol", "")))
+        grouped.setdefault(key, []).append(record)
+
+    for key, records in grouped.items():
+        records.sort(key=lambda item: str(item.get("time_bucket", "")), reverse=True)
+        pairs[key] = records[:2]
     return pairs
 
 
@@ -1096,19 +1095,22 @@ def is_today_timestamp(ts: str) -> bool:
     return ts.startswith(datetime.now().strftime("%Y-%m-%d"))
 
 
-def iter_log_lines(path: Path) -> list[str]:
-    """로그 파일 줄 목록을 안전하게 읽는다."""
-    if not path.exists():
-        return []
-    return path.read_text(encoding="utf-8").splitlines()
+def iter_log_lines(filename: str) -> list[str]:
+    """같은 이름의 날짜별 로그 파일 줄 목록을 모두 읽는다."""
+    return read_all_lines(iter_files("logs", filename))
+
+
+def latest_log_file(filename: str) -> Path | None:
+    """같은 이름의 날짜별 로그 중 가장 최근 파일을 반환한다."""
+    return latest_file("logs", filename)
 
 
 def build_recent_trades_text(limit: int = 5) -> str:
     """오늘 발생한 최근 체결 내역을 요약한다."""
     events: list[tuple[str, str, str, str]] = []
 
-    for exchange_name, path in PROGRAM_LOG_SOURCES:
-        for line in iter_log_lines(path):
+    for exchange_name, filename in PROGRAM_LOG_SOURCES:
+        for line in iter_log_lines(filename):
             match = TRADE_EVENT_RE.match(line.strip())
             if not match:
                 continue
@@ -1134,11 +1136,11 @@ def build_recent_trades_text(limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-def summarize_skip_reasons(path: Path) -> dict[str, int]:
+def summarize_skip_reasons(filename: str) -> dict[str, int]:
     """오늘 로그에서 스킵 사유 발생 횟수를 센다."""
     counts: dict[str, int] = {}
 
-    for line in iter_log_lines(path):
+    for line in iter_log_lines(filename):
         stripped = line.strip()
         if not stripped.startswith(f"[{datetime.now().strftime('%Y-%m-%d')}"):
             continue
@@ -1200,13 +1202,13 @@ def map_strategy_reason_to_label(
 
 def summarize_skip_reasons_from_structure(program_name: str) -> dict[str, int]:
     """오늘 구조화 전략 로그에서 스킵 사유를 센다."""
-    path = Path("structured_logs/live") / program_name / "strategy.jsonl"
-    if not path.exists():
-        return {}
-
     today_prefix = datetime.now().strftime("%Y-%m-%d")
     counts: dict[str, int] = {}
-    for record in analyze_strategy_logs.read_jsonl(path):
+    for record in analyze_strategy_logs.read_program_records(
+        Path("structured_logs/live"),
+        program_name,
+        "strategy.jsonl",
+    ):
         if record.get("log_type") != "strategy":
             continue
         if record.get("result") != "blocked":
@@ -1227,13 +1229,13 @@ def build_today_skip_summary_text(limit: int = 6) -> str:
     """오늘 스킵 사유를 거래소별로 요약한다."""
     sections = ["오늘 스킵 사유 요약"]
 
-    for (exchange_name, path), (_, program_name) in zip(
+    for (exchange_name, filename), (_, program_name) in zip(
         PROGRAM_LOG_SOURCES,
         PROGRAM_STRUCTURE_SOURCES,
     ):
         counts = summarize_skip_reasons_from_structure(program_name)
         if not counts:
-            counts = summarize_skip_reasons(path)
+            counts = summarize_skip_reasons(filename)
         sections.append(f"[{exchange_name}]")
         if not counts:
             sections.append("- 오늘 집계된 스킵 사유가 아직 없습니다.")
@@ -1246,9 +1248,9 @@ def build_today_skip_summary_text(limit: int = 6) -> str:
     return "\n".join(sections)
 
 
-def read_recent_lines(path: Path, line_count: int) -> list[str]:
+def read_recent_lines(path: Path | None, line_count: int) -> list[str]:
     """파일 끝부분의 최근 줄만 읽는다."""
-    if not path.exists():
+    if path is None or not path.exists():
         return ["로그 파일이 없습니다."]
 
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -1305,13 +1307,14 @@ def format_recent_log_line_for_telegram(line: str) -> str:
 
 
 def read_recent_lines_by_symbol(
-    path: Path,
+    filename: str,
     line_count: int,
     symbol_order: list[str] | None = None,
     lookback_multiplier: int = 20,
 ) -> dict[str, list[str]]:
     """파일 끝부분에서 심볼별 최근 줄을 모아 반환한다."""
-    if not path.exists():
+    path = latest_log_file(filename)
+    if path is None or not path.exists():
         return {"공통": ["로그 파일이 없습니다."]}
 
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -1359,9 +1362,9 @@ def build_last_logs_text(settings: ListenerSettings) -> str:
         "업비트 BTC": [symbol for symbol in settings.upbit_symbols if symbol.startswith("BTC/")],
     }
 
-    for label, path in PROGRAM_LOG_SOURCES:
+    for label, filename in PROGRAM_LOG_SOURCES:
         grouped_lines = read_recent_lines_by_symbol(
-            path,
+            filename,
             settings.recent_log_line_count,
             symbol_order=symbol_orders.get(label),
         )

@@ -31,11 +31,12 @@
 
 ## 현재 로그 구조
 
-- 운영용 텍스트 로그는 `logs/*.log` 에 유지합니다.
-- 장애 분석용 구조화 로그는 `structured_logs/live/<program>/system.jsonl` 에 저장합니다.
-- 전략 판단 로그는 `structured_logs/live/<program>/strategy.jsonl` 에 저장합니다.
-- 체결 결과는 `trade_logs/trade_history.jsonl` 과 `structured_logs/live/<program>/trade.jsonl` 에 함께 저장합니다.
-- 퍼널 요약은 `structured_logs/live/<program>/summary_1h/*.json` 에 시간 버킷별로 저장합니다.
+- 운영용 텍스트 로그는 `logs/YYYY-MM-DD/*.log` 에 저장합니다.
+- 장애 분석용 구조화 로그는 `structured_logs/live/YYYY-MM-DD/<program>/system.jsonl` 에 저장합니다.
+- 전략 판단 로그는 `structured_logs/live/YYYY-MM-DD/<program>/strategy.jsonl` 에 저장합니다.
+- 체결 결과는 `trade_logs/YYYY-MM-DD/trade_history.jsonl` 과 `structured_logs/live/YYYY-MM-DD/<program>/trade.jsonl` 에 함께 저장합니다.
+- 퍼널 요약은 `structured_logs/live/YYYY-MM-DD/<program>/summary_1h/*.json` 에 시간 버킷별로 저장합니다.
+- 최근 7일 로그는 원본을 유지하고, 그 이전은 날짜별 `tar.gz` 로 압축합니다.
 
 현재부터는 로그를 눈으로 읽기보다 아래 관점으로 집계하는 것이 우선입니다.
 

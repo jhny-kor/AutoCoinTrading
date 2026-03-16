@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from log_path_utils import dated_path
+
 
 def to_json_safe(value: Any) -> Any:
     """JSON 으로 안전하게 직렬화할 수 있는 형태로 바꾼다."""
@@ -80,8 +82,8 @@ class TradeHistoryLogger:
     """체결 결과를 JSONL 파일로 누적 저장하는 로거."""
 
     def __init__(self, path: str = "trade_logs/trade_history.jsonl"):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.root_dir = Path(path).parent
+        self.filename = Path(path).name
         self.structured_root = Path("structured_logs") / "live"
 
     def log_fill(
@@ -175,11 +177,12 @@ class TradeHistoryLogger:
             "raw_order": to_json_safe(raw_order),
             "extra": to_json_safe(extra or {}),
         }
+        dated_trade_path = dated_path(self.root_dir, self.filename)
+        dated_trade_path.parent.mkdir(parents=True, exist_ok=True)
+        with dated_trade_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-        structured_path = self.structured_root / program_name / "trade.jsonl"
+        structured_path = dated_path(self.structured_root, program_name, "trade.jsonl")
         structured_path.parent.mkdir(parents=True, exist_ok=True)
         with structured_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")

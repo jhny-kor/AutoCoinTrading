@@ -49,6 +49,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from log_path_utils import dated_path
 
 PROGRAMS = {
     "okx": "ma_crossover_bot.py",
@@ -266,14 +267,15 @@ def start_program(name: str) -> int:
     script = PROGRAMS[name]
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
-    launcher_log = log_dir / f"{Path(script).stem}.launcher.log"
+    launcher_log = dated_path("logs", f"{Path(script).stem}.launcher.log")
+    launcher_log.parent.mkdir(parents=True, exist_ok=True)
 
     with launcher_log.open("a", encoding="utf-8") as f:
         process = subprocess.Popen(
             [sys.executable, script],
             cwd=os.getcwd(),
-            stdout=f,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.DEVNULL,
+            stderr=f,
             start_new_session=True,
         )
 

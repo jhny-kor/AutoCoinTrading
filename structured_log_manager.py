@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from log_path_utils import dated_dir
+
 
 def _json_safe(value: Any) -> Any:
     """JSON 직렬화가 가능한 값으로 바꾼다."""
@@ -38,7 +40,21 @@ def _write_jsonl(path: Path, record: dict[str, Any]) -> None:
     """JSONL 한 줄을 추가한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _compact_record_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """빈 값이나 불필요한 빈 컨테이너를 제거한다."""
+    compact: dict[str, Any] = {}
+    for key, value in record.items():
+        if value is None:
+            continue
+        if isinstance(value, dict) and not value:
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        compact[key] = value
+    return compact
 
 
 def _sanitize_symbol(symbol: str) -> str:
@@ -74,11 +90,24 @@ class StructuredLogManager:
         root_dir: str = "structured_logs",
     ) -> None:
         self.program_name = program_name
-        self.base_dir = Path(root_dir) / mode / program_name
-        self.system_path = self.base_dir / "system.jsonl"
-        self.strategy_path = self.base_dir / "strategy.jsonl"
-        self.trade_path = self.base_dir / "trade.jsonl"
-        self.summary_dir = self.base_dir / "summary_1h"
+        self.root_dir = Path(root_dir)
+        self.mode = mode
+
+    def _base_dir(self, date_str: str | None = None) -> Path:
+        """현재 날짜 기준 프로그램 로그 디렉토리를 반환한다."""
+        return dated_dir(self.root_dir / self.mode, date_str=date_str) / self.program_name
+
+    def _system_path(self) -> Path:
+        return self._base_dir() / "system.jsonl"
+
+    def _strategy_path(self) -> Path:
+        return self._base_dir() / "strategy.jsonl"
+
+    def _trade_path(self) -> Path:
+        return self._base_dir() / "trade.jsonl"
+
+    def _summary_dir(self, date_str: str | None = None) -> Path:
+        return self._base_dir(date_str=date_str) / "summary_1h"
 
     def _build_base_record(self) -> dict[str, Any]:
         now_utc = datetime.now(timezone.utc)
@@ -108,7 +137,7 @@ class StructuredLogManager:
             "message": message,
             "context": _json_safe(context or {}),
         }
-        _write_jsonl(self.system_path, record)
+        _write_jsonl(self._system_path(), record)
 
     def log_strategy(
         self,
@@ -147,7 +176,7 @@ class StructuredLogManager:
             "metrics": _json_safe(metrics or {}),
             "extra": _json_safe(extra or {}),
         }
-        _write_jsonl(self.strategy_path, record)
+        _write_jsonl(self._strategy_path(), _compact_record_fields(record))
         self._update_hourly_summary(record)
 
     def log_trade_event(
@@ -175,7 +204,7 @@ class StructuredLogManager:
             "metrics": _json_safe(metrics or {}),
             "extra": _json_safe(extra or {}),
         }
-        _write_jsonl(self.trade_path, record)
+        _write_jsonl(self._trade_path(), record)
 
     def run_funnel(
         self,
@@ -208,7 +237,6 @@ class StructuredLogManager:
                     reason="passed",
                     actual=step.actual,
                     required=step.required,
-                    metrics=metrics,
                     extra=step.extra,
                 )
                 continue
@@ -221,7 +249,6 @@ class StructuredLogManager:
                 reason=step.reason,
                 actual=step.actual,
                 required=step.required,
-                metrics=metrics,
                 extra=step.extra,
             )
             return False, step.reason
@@ -246,7 +273,7 @@ class StructuredLogManager:
         bucket_dt = _floor_hour(datetime.fromisoformat(record["recorded_at_local"]))
         bucket_key = bucket_dt.strftime("%Y-%m-%dT%H:00:00%z")
         summary_path = (
-            self.summary_dir
+            self._summary_dir(date_str=bucket_dt.strftime("%Y-%m-%d"))
             / f"{self.program_name}__{_sanitize_symbol(symbol)}__{bucket_key}.json"
         )
         summary_path.parent.mkdir(parents=True, exist_ok=True)

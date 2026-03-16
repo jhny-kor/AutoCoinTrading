@@ -10,6 +10,7 @@ import os
 import re
 from datetime import datetime
 
+from log_path_utils import dated_path
 
 BOLD = "\033[1m"
 RED = "\033[31m"
@@ -26,7 +27,12 @@ class BotLogger:
         self.program_name = program_name
         self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_path = os.path.join(self.log_dir, f"{self.program_name}.log")
+
+    def _current_log_path(self) -> str:
+        """현재 날짜 기준 로그 파일 경로를 반환한다."""
+        path = dated_path(self.log_dir, f"{self.program_name}.log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
 
     def _strip_ansi(self, text: str) -> str:
         return ANSI_ESCAPE_RE.sub("", text)
@@ -35,7 +41,7 @@ class BotLogger:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{now}] {msg}"
         print(line)
-        with open(self.log_path, "a", encoding="utf-8") as f:
+        with open(self._current_log_path(), "a", encoding="utf-8") as f:
             f.write(self._strip_ansi(line) + "\n")
 
     def log_signal(self, symbol: str, bullish: bool, bearish: bool):

@@ -22,7 +22,7 @@
 - 알트 감시 심볼 목록도 `.env`에서 관리해 종목 추가 시 코드 수정 범위를 줄였습니다.
 - BTC 전용 봇은 익절 구간 도달 후 최고가 대비 되돌림으로 전량 청산하는 트레일링 익절을 적용했습니다.
 - 알트 봇은 최근 로그 기준으로 거래량 필터와 이격도 기준을 조금 완화해 실제 진입 기회를 늘려보는 테스트로 조정했습니다.
-- 로그는 프로그램별로 분리해 `logs/ma_crossover_bot.log`, `logs/upbit_ma_crossover_bot.log`에 저장되도록 변경했습니다.
+- 로그는 날짜별 폴더 아래에 종류별로 분리해 저장하도록 변경했습니다.
 - 터미널에서는 매수 신호를 빨간색, 매도 신호를 파란색으로 보여주고, 실제 주문은 강조 배너로 표시하도록 바꿨습니다.
 - 여러 번 실행돼 있던 봇 프로세스는 모두 중지했습니다.
 
@@ -40,6 +40,9 @@
 - `trade_history_logger.py`: 체결 결과를 JSONL 로 구조화 저장하는 로거
 - `structured_log_manager.py`: system / strategy / trade 구조화 로그와 퍼널 요약을 관리하는 로거
 - `analyze_strategy_logs.py`: 구조화 전략 로그의 퍼널 병목과 차단 사유를 집계하는 도구
+- `log_path_utils.py`: 일자별 로그 경로와 탐색을 공통으로 처리하는 유틸
+- `migrate_logs_to_dated_dirs.py`: 기존 평면 로그를 날짜별 폴더 구조로 옮기는 마이그레이션 도구
+- `log_archive_manager.py`: 최근 7일 원본 유지 후 오래된 로그를 날짜별 `tar.gz`로 압축하는 도구
 - `btc_trend_settings.py`: BTC 전용 EMA 추세추종 설정 로더
 - `okx_btc_ema_trend_bot.py`: OKX BTC 전용 EMA+ATR 추세추종 실험 봇
 - `upbit_btc_ema_trend_bot.py`: 업비트 BTC 전용 EMA+ATR 추세추종 실험 봇
@@ -47,17 +50,28 @@
 
 ## 로그 파일
 
-- `logs/ma_crossover_bot.log`
-- `logs/upbit_ma_crossover_bot.log`
-- `trade_logs/trade_history.jsonl`
-- `structured_logs/live/<program>/system.jsonl`
-- `structured_logs/live/<program>/strategy.jsonl`
-- `structured_logs/live/<program>/trade.jsonl`
-- `structured_logs/live/<program>/summary_1h/*.json`
+- `logs/YYYY-MM-DD/<program>.log`
+- `logs/YYYY-MM-DD/<program>.launcher.log`
+- `analysis_logs/YYYY-MM-DD/<exchange>__<symbol>.jsonl`
+- `trade_logs/YYYY-MM-DD/trade_history.jsonl`
+- `structured_logs/live/YYYY-MM-DD/<program>/system.jsonl`
+- `structured_logs/live/YYYY-MM-DD/<program>/strategy.jsonl`
+- `structured_logs/live/YYYY-MM-DD/<program>/trade.jsonl`
+- `structured_logs/live/YYYY-MM-DD/<program>/summary_1h/*.json`
 
-프로그램을 실행하면 위 파일들이 자동으로 생성되고 누적 기록됩니다.
-`trade_logs/trade_history.jsonl` 에는 매수/익절/손절 체결 결과가 거래소/심볼/수량/금액/손익/원본 주문 응답과 함께 구조화되어 저장됩니다.
-새 구조화 로그는 장애 분석은 `system.jsonl`, 전략 병목 분석은 `strategy.jsonl`, 체결 분석은 `trade.jsonl` 로 바로 나눠서 볼 수 있게 해줍니다.
+프로그램을 실행하면 위 파일들이 자동으로 생성되고 누적 기록됩니다. `trade_logs/YYYY-MM-DD/trade_history.jsonl` 에는 매수/익절/손절 체결 결과가 거래소/심볼/수량/금액/손익/원본 주문 응답과 함께 구조화되어 저장됩니다. 구조화 로그는 장애 분석은 `system.jsonl`, 전략 병목 분석은 `strategy.jsonl`, 체결 분석은 `trade.jsonl` 로 바로 나눠서 볼 수 있게 해줍니다.
+
+기존 평면 로그가 남아 있는 경우에는 아래 명령으로 날짜별 폴더 구조로 옮길 수 있습니다.
+
+- 미리보기: `.venv/bin/python migrate_logs_to_dated_dirs.py --dry-run`
+- 실제 이동: `.venv/bin/python migrate_logs_to_dated_dirs.py`
+
+오래된 로그 보관 정책은 다음과 같습니다.
+
+- 최근 7일 로그는 원본 유지
+- 7일 초과 로그는 날짜별 `tar.gz` 압축
+- 압축 점검: `.venv/bin/python log_archive_manager.py status`
+- 수동 압축: `.venv/bin/python log_archive_manager.py compress`
 
 ## 알트 심볼 추가 방법
 
@@ -115,15 +129,15 @@
 
 ## 로그 수집, 분석, 확인 프로세스
 
-평소에는 `.venv/bin/python bot_manager.py start all` 로 매매 봇 4개, 시장 분석 수집기, 텔레그램 리스너를 항상 켜두고 로그를 계속 쌓습니다. 이렇게 하면 운영용 텍스트 로그는 `logs/*.log`, 시장 상태 로그는 `analysis_logs/*.jsonl`, 전략 판단 로그는 `structured_logs/live/*/strategy.jsonl`, 체결 로그는 `trade_logs/trade_history.jsonl` 과 `structured_logs/live/*/trade.jsonl` 에 함께 기록됩니다. 수시 상태 확인은 텔레그램에서 `/status`, `/pnl`, `/analysis` 로 하고, 며칠 간 로그가 쌓이면 `.venv/bin/python analyze_strategy_logs.py` 로 퍼널 병목과 차단 사유를 보고, `.venv/bin/python analyze_logs.py` 로 코인별 이격도/변동성/거래량 특성을 확인하면 됩니다. 즉 순서는 `항상 수집 -> 텔레그램으로 수시 확인 -> analyze_strategy_logs.py 로 전략 병목 분석 -> analyze_logs.py 로 시장 특성 분석` 으로 보시면 됩니다.
+평소에는 `.venv/bin/python bot_manager.py start all` 로 매매 봇 4개, 시장 분석 수집기, 텔레그램 리스너를 항상 켜두고 로그를 계속 쌓습니다. 이렇게 하면 운영용 텍스트 로그는 `logs/YYYY-MM-DD/*.log`, 시장 상태 로그는 `analysis_logs/YYYY-MM-DD/*.jsonl`, 전략 판단 로그는 `structured_logs/live/YYYY-MM-DD/*/strategy.jsonl`, 체결 로그는 `trade_logs/YYYY-MM-DD/trade_history.jsonl` 과 `structured_logs/live/YYYY-MM-DD/*/trade.jsonl` 에 함께 기록됩니다. 수시 상태 확인은 텔레그램에서 `/status`, `/pnl`, `/analysis` 로 하고, 며칠 간 로그가 쌓이면 `.venv/bin/python analyze_strategy_logs.py` 로 퍼널 병목과 차단 사유를 보고, `.venv/bin/python analyze_logs.py` 로 코인별 이격도/변동성/거래량 특성을 확인하면 됩니다. 즉 순서는 `항상 수집 -> 텔레그램으로 수시 확인 -> analyze_strategy_logs.py 로 전략 병목 분석 -> analyze_logs.py 로 시장 특성 분석` 으로 보시면 됩니다.
 
 전략 값을 왜 바꿨는지와 어떤 로그를 근거로 조정했는지는 `STRATEGY_DECISIONS.md` 에 계속 누적 기록합니다.
 
 | 수집 항목 | 어디에 쌓이는지 | 이걸로 답하는 질문 | 전략 조정 포인트 |
 | --- | --- | --- | --- |
-| 시장 상태 로그 | `analysis_logs/*.jsonl` | 이 코인이 원래 잔잔한지, 변동성이 큰지, 거래량이 붙는지 | 코인별 이격도, 거래량 기준, 변동성 기준 조정 |
-| 전략 퍼널 로그 | `structured_logs/live/*/strategy.jsonl` | 왜 안 샀는지, 어느 단계에서 가장 많이 막히는지 | 진입 신호 정의, 상위 타임프레임 필터, 쿨다운, 추가매수 조건 조정 |
-| 체결 로그 | `trade_logs/trade_history.jsonl` | 실제로 돈이 되는지, 손절/익절이 적절한지 | 손절률, 익절률, 트레일링, 부분 익절, 브레이크이븐 조정 |
+| 시장 상태 로그 | `analysis_logs/YYYY-MM-DD/*.jsonl` | 이 코인이 원래 잔잔한지, 변동성이 큰지, 거래량이 붙는지 | 코인별 이격도, 거래량 기준, 변동성 기준 조정 |
+| 전략 퍼널 로그 | `structured_logs/live/YYYY-MM-DD/*/strategy.jsonl` | 왜 안 샀는지, 어느 단계에서 가장 많이 막히는지 | 진입 신호 정의, 상위 타임프레임 필터, 쿨다운, 추가매수 조건 조정 |
+| 체결 로그 | `trade_logs/YYYY-MM-DD/trade_history.jsonl` | 실제로 돈이 되는지, 손절/익절이 적절한지 | 손절률, 익절률, 트레일링, 부분 익절, 브레이크이븐 조정 |
 | 거래 품질 지표 | `trade_history.jsonl` 의 `mfe_pct`, `mae_pct`, `holding_seconds`, `trailing_armed_seconds` | 들어간 거래가 얼마나 잘 갔고 왜 못 먹었는지 | 익절 활성화 가격, 트레일링 폭, 손절 간격 조정 |
 | 시간대 성과 | `analyze_strategy_logs.py` 시간대 요약 | 몇 시에 손절이 많고 몇 시에 성과가 좋은지 | 시간대 필터, 거래 시간 제한 검토 |
 | 전략 버전 정보 | 구조화 로그 `metrics.strategy_version`, 체결 로그 `strategy_version` | 어떤 버전이 실제로 더 나은지 | 버전별 A/B 비교, 보수형/중간형/공격형 유지 여부 판단 |
@@ -131,7 +145,7 @@
 ## 분석용 로그 수집
 
 - 실행: `.venv/bin/python analysis_log_collector.py`
-- 저장 위치: `analysis_logs/*.jsonl`
+- 저장 위치: `analysis_logs/YYYY-MM-DD/*.jsonl`
 
 이 수집기는 거래를 하지 않고, 시세/이동평균/신호 상태를 구조화된 JSONL 형식으로 저장합니다.
 나중에 코인별 신호 빈도, 평균 이격도, 변동성, 전략 적합성 분석에 활용할 수 있습니다.
@@ -151,7 +165,7 @@
 - 전체 퍼널 요약: `.venv/bin/python analyze_strategy_logs.py`
 - CSV 저장: `.venv/bin/python analyze_strategy_logs.py --csv reports/strategy_funnel.csv`
 
-이 도구는 `structured_logs/live/*/strategy.jsonl` 과 `trade.jsonl` 을 읽어
+이 도구는 `structured_logs/live/YYYY-MM-DD/*/strategy.jsonl` 과 `trade.jsonl` 을 읽어
 심볼별 `scan -> ready -> requested -> filled` 흐름과 주요 차단 사유를 집계합니다.
 즉 이제는 “왜 안 샀는지 / 왜 샀는지 / 왜 팔렸는지”를 문장 로그가 아니라 코드값과 단계별 숫자로 볼 수 있습니다.
 추가로 체결 로그 기준 평균 보유시간, MFE/MAE, 트레일링 활성화 비율, 시간대별 성과, 필터 기준 부족 폭도 함께 볼 수 있습니다.

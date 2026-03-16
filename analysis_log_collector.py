@@ -32,6 +32,7 @@ from typing import Iterable
 import ccxt
 from dotenv import load_dotenv
 
+from log_path_utils import dated_path
 from strategy_settings import load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
 
@@ -313,7 +314,21 @@ def write_jsonl(path: Path, record: dict):
     """한 줄 JSON 형식으로 기록한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def compact_record(record: dict[str, object]) -> dict[str, object]:
+    """분석 가치가 낮은 빈 필드와 None 값을 제거한다."""
+    compact: dict[str, object] = {}
+    for key, value in record.items():
+        if key == "collected_at_local":
+            continue
+        if value is None:
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        compact[key] = value
+    return compact
 
 
 def build_public_filter_summary(
@@ -429,9 +444,8 @@ def build_snapshot(
         volatility_filter_passed=volatility_filter_passed,
     )
 
-    return {
+    return compact_record({
         "collected_at": datetime.now(timezone.utc).isoformat(),
-        "collected_at_local": datetime.now().astimezone().isoformat(),
         "exchange": exchange_name,
         "symbol": symbol,
         "timeframe": os.getenv("ANALYSIS_TIMEFRAME", "1m"),
@@ -465,9 +479,6 @@ def build_snapshot(
         "configured_take_profit_pct": min_take_profit_pct,
         "configured_stop_loss_pct": stop_loss_pct,
         "signal_is_strong": signal_is_strong,
-        "enable_higher_timeframe_filter": settings["enable_higher_timeframe_filter"],
-        "enable_volume_filter": settings["enable_volume_filter"],
-        "enable_volatility_filter": settings["enable_volatility_filter"],
         "configured_min_volume_ratio": settings["min_volume_ratio"],
         "configured_min_volatility_pct": settings["min_volatility_pct"],
         "configured_max_volatility_pct": settings["max_volatility_pct"],
@@ -492,7 +503,7 @@ def build_snapshot(
         "spread_pct": order_book.get("spread_pct"),
         "bid_ask_size_imbalance": order_book.get("bid_ask_size_imbalance"),
         **public_filter_summary,
-    }
+    })
 
 
 def iter_targets() -> Iterable[tuple[str, str]]:
@@ -591,7 +602,10 @@ def main():
                     strategy=strategy,
                     settings=collector_settings,
                 )
-                log_path = Path("analysis_logs") / f"{exchange_name}__{sanitize_symbol(symbol)}.jsonl"
+                log_path = dated_path(
+                    "analysis_logs",
+                    f"{exchange_name}__{sanitize_symbol(symbol)}.jsonl",
+                )
                 write_jsonl(log_path, snapshot)
                 print(
                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -606,7 +620,7 @@ def main():
                     "symbol": symbol,
                     "error": repr(e),
                 }
-                write_jsonl(Path("analysis_logs/errors.jsonl"), error_record)
+                write_jsonl(dated_path("analysis_logs", "errors.jsonl"), error_record)
                 print(
                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                     f"{exchange_name.upper()} {symbol} 수집 실패: {repr(e)}"

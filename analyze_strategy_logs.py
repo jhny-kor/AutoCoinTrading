@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from log_path_utils import iter_files
+
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     """JSONL 파일을 읽는다."""
@@ -36,6 +38,25 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def find_program_names(base_dir: Path) -> list[str]:
+    """구조화 로그 루트 아래의 프로그램 이름 목록을 찾는다."""
+    names = {
+        path.parent.name
+        for path in iter_files(base_dir, "strategy.jsonl")
+    }
+    return sorted(names)
+
+
+def read_program_records(base_dir: Path, program_name: str, filename: str) -> list[dict[str, Any]]:
+    """날짜별로 흩어진 특정 프로그램 로그를 모두 읽는다."""
+    rows: list[dict[str, Any]] = []
+    for path in iter_files(base_dir, filename):
+        if path.parent.name != program_name:
+            continue
+        rows.extend(read_jsonl(path))
+    return rows
+
+
 def format_ratio(numerator: int, denominator: int) -> str:
     """비율을 문자열로 만든다."""
     if denominator <= 0:
@@ -46,9 +67,9 @@ def format_ratio(numerator: int, denominator: int) -> str:
 def build_summary_rows(base_dir: Path) -> list[dict[str, Any]]:
     """프로그램별 strategy / trade 로그를 읽어 요약 행을 만든다."""
     rows: list[dict[str, Any]] = []
-    for program_dir in sorted(path for path in base_dir.iterdir() if path.is_dir()):
-        strategy_records = read_jsonl(program_dir / "strategy.jsonl")
-        trade_records = read_jsonl(program_dir / "trade.jsonl")
+    for program_name in find_program_names(base_dir):
+        strategy_records = read_program_records(base_dir, program_name, "strategy.jsonl")
+        trade_records = read_program_records(base_dir, program_name, "trade.jsonl")
 
         grouped_strategy: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         grouped_trade: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -112,7 +133,7 @@ def build_summary_rows(base_dir: Path) -> list[dict[str, Any]]:
 
             rows.append(
                 {
-                    "program_name": program_dir.name,
+                    "program_name": program_name,
                     "symbol": symbol,
                     "side": side,
                     "scans": scan_count,
@@ -155,7 +176,12 @@ def _to_float(value: Any) -> float | None:
 
 def read_trade_history(path: Path | None = None) -> list[dict[str, Any]]:
     """통합 체결 이력 JSONL 을 읽는다."""
-    return read_jsonl(path or Path("trade_logs/trade_history.jsonl"))
+    if path is not None:
+        return read_jsonl(path)
+    rows: list[dict[str, Any]] = []
+    for trade_path in iter_files("trade_logs", "trade_history.jsonl"):
+        rows.extend(read_jsonl(trade_path))
+    return rows
 
 
 def build_trade_quality_rows(
@@ -327,15 +353,15 @@ def build_filter_gap_rows(base_dir: Path) -> list[dict[str, Any]]:
     """strategy blocked 로그에서 기준 부족 폭을 요약한다."""
     grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
 
-    for program_dir in sorted(path for path in base_dir.iterdir() if path.is_dir()):
-        for record in read_jsonl(program_dir / "strategy.jsonl"):
+    for program_name in find_program_names(base_dir):
+        for record in read_program_records(base_dir, program_name, "strategy.jsonl"):
             if record.get("result") != "blocked":
                 continue
             gap = extract_threshold_gap(record)
             if gap is None:
                 continue
             reason, _, _, shortfall = gap
-            grouped[(program_dir.name, str(record.get("symbol", "")), reason)].append(
+            grouped[(program_name, str(record.get("symbol", "")), reason)].append(
                 shortfall
             )
 
