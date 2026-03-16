@@ -52,6 +52,7 @@ class StrategySettings:
     volume_lookback: int
     min_volume_ratio: float
     min_volume_ratio_map: dict[str, float]
+    position_ratio_map: dict[str, float]
     enable_volatility_filter: bool
     volatility_lookback: int
     min_volatility_pct: float
@@ -90,6 +91,10 @@ class StrategySettings:
     def get_min_order_amount(self, symbol: str) -> float:
         """심볼별 최소 주문 수량 오버라이드가 있으면 그 값을, 없으면 0을 반환한다."""
         return self.min_order_amount_map.get(symbol, 0.0)
+
+    def get_position_ratio(self, symbol: str, default_ratio: float) -> float:
+        """심볼별 매수 비중 오버라이드가 있으면 그 값을, 없으면 기본 비중을 반환한다."""
+        return self.position_ratio_map.get(symbol, default_ratio)
 
     def uses_partial_take_profit(self, symbol: str) -> bool:
         """심볼이 부분익절 대상인지 반환한다."""
@@ -239,6 +244,9 @@ def load_strategy_settings(
         min_volume_ratio=float(os.getenv("STRATEGY_MIN_VOLUME_RATIO", "1.2")),
         min_volume_ratio_map=parse_symbol_float_map(
             os.getenv("STRATEGY_MIN_VOLUME_RATIO_MAP", "")
+        ),
+        position_ratio_map=parse_symbol_float_map(
+            os.getenv("STRATEGY_POSITION_RATIO_MAP", "")
         ),
         enable_volatility_filter=parse_bool(
             os.getenv("STRATEGY_ENABLE_VOLATILITY_FILTER", "true"),

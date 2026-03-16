@@ -558,7 +558,12 @@ def run_bot():
                         f"[{symbol}] 손절 조건 충족: 현재 수익률 {pnl_pct:.2f}% <= -{stop_loss_pct:.2f}%"
                     )
 
-                krw_to_use = quote_free * config["risk_per_trade"] * strategy.buy_split_ratio
+                position_ratio = strategy.get_position_ratio(
+                    symbol,
+                    config["risk_per_trade"],
+                )
+                log(f"[{symbol}] 적용 매수 비중: {position_ratio:.4f}")
+                krw_to_use = quote_free * position_ratio * strategy.buy_split_ratio
                 estimated_sell_amount = (
                     base_free if stop_loss_triggered else (base_free * strategy.sell_split_ratio)
                 )
@@ -582,6 +587,7 @@ def run_bot():
                     "htf_bearish": htf_bearish,
                     "base_free": base_free,
                     "quote_free": quote_free,
+                    "position_ratio": position_ratio,
                     "has_position": has_position,
                     "position_quote_value": position_quote_value,
                     "entry_count": current_entry_count,

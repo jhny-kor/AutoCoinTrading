@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from strategy_settings import parse_symbol_float_map
+
 
 def parse_bool(raw: str | None, default: bool = False) -> bool:
     """문자열 불리언 값을 파싱한다."""
@@ -48,6 +50,7 @@ class BtcTrendSettings:
     volume_lookback: int
     min_volume_ratio: float
     position_ratio: float
+    position_ratio_map: dict[str, float]
     min_order_amount: float
     min_trade_interval_sec: int
     stop_loss_reentry_cooldown_sec: int
@@ -63,6 +66,10 @@ class BtcTrendSettings:
     swing_lookback: int
     exit_on_bearish_cross: bool
     loop_interval_sec: int
+
+    def get_position_ratio(self, symbol: str) -> float:
+        """심볼별 초기 진입 비중 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.position_ratio_map.get(symbol, self.position_ratio)
 
 
 def load_btc_trend_settings() -> BtcTrendSettings:
@@ -95,6 +102,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         volume_lookback=int(os.getenv("BTC_TREND_VOLUME_LOOKBACK", "20")),
         min_volume_ratio=float(os.getenv("BTC_TREND_MIN_VOLUME_RATIO", "1.05")),
         position_ratio=float(os.getenv("BTC_TREND_POSITION_RATIO", "0.25")),
+        position_ratio_map=parse_symbol_float_map(
+            os.getenv("BTC_TREND_POSITION_RATIO_MAP", "")
+        ),
         min_order_amount=float(os.getenv("BTC_TREND_MIN_ORDER_AMOUNT", "0.00001")),
         min_trade_interval_sec=int(os.getenv("BTC_TREND_MIN_TRADE_INTERVAL_SEC", "300")),
         stop_loss_reentry_cooldown_sec=int(

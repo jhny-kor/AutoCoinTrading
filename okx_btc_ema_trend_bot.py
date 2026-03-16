@@ -451,7 +451,8 @@ def run_bot():
                 and bearish
                 and not trailing_armed
             )
-            order_value = quote_free * config["risk_per_trade"] * settings.position_ratio
+            position_ratio = settings.get_position_ratio(symbol)
+            order_value = quote_free * config["risk_per_trade"] * position_ratio
             add_on_order_value = (
                 quote_free * config["risk_per_trade"] * settings.pyramid_position_ratio
             )
@@ -489,6 +490,7 @@ def run_bot():
                 "confirm_bullish": confirm_bullish,
                 "base_free": base_free,
                 "quote_free": quote_free,
+                "position_ratio": position_ratio,
                 "has_position": has_position,
                 "daily_realized_pnl_quote": daily_realized_pnl_quote,
                 "pnl_pct": pnl_pct,

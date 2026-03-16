@@ -518,7 +518,11 @@ def run_bot():
                     )
 
                 min_gap_pct = strategy.get_crossover_gap_pct(symbol)
-                usdt_to_use = quote_free * config["risk_per_trade"] * strategy.buy_split_ratio
+                position_ratio = strategy.get_position_ratio(
+                    symbol,
+                    config["risk_per_trade"],
+                )
+                usdt_to_use = quote_free * position_ratio * strategy.buy_split_ratio
                 estimated_buy_amount = usdt_to_use / last_close if last_close else 0.0
                 signal_is_strong = gap_pct >= min_gap_pct
                 trend_follow_entry = (
@@ -535,6 +539,7 @@ def run_bot():
                 )
                 entry_signal = bullish or trend_follow_entry
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
+                log(f"[{symbol}] 적용 매수 비중: {position_ratio:.4f}")
                 if min_order_amount > 0:
                     log(f"[{symbol}] 적용 최소 주문 수량: {min_order_amount:.4f} {base}")
                     log(f"[{symbol}] 포지션 인식 최소 수량도 동일하게 {position_threshold:.4f} {base} 로 적용합니다.")
@@ -719,6 +724,7 @@ def run_bot():
                     "htf_bearish": htf_bearish,
                     "base_free": base_free,
                     "quote_free": quote_free,
+                    "position_ratio": position_ratio,
                     "has_position": has_position,
                     "position_threshold": position_threshold,
                     "entry_count": current_entry_count,
