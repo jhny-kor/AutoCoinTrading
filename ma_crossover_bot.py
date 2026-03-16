@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 알트 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
 - 심볼별 부분익절/부분손절 설정을 지원하고 ETH 같은 선택 알트에만 1회 부분청산을 적용하도록 확장
 - OKX 알트 매도 체결 로그에도 왕복 수수료 추정 기반 순손익을 함께 남겨 /pnl 집계가 일관되도록 보강
 - OKX 알트에서 최소 주문 수량 미만 잔량은 내부 포지션 상태도 함께 초기화해 재진입이 막히지 않도록 조정
@@ -968,6 +969,7 @@ def run_bot():
                         log(
                             f"[매수] 시장가 매수 시도: {symbol}, 사용 금액={order_value} {quote}"
                         )
+                        order_request_started_at = time.time()
                         try:
                             order = place_market_order_okx(
                                 exchange,
@@ -999,6 +1001,7 @@ def run_bot():
                                 },
                             )
                             raise
+                        order_response_received_at = time.time()
                         # 시장가 체결가는 응답 시점에 바로 확정되지 않을 수 있어 현재가로 평균 진입가를 추정
                         estimated_bought_amount = order_value / last_close
                         if has_position and avg_entry_price and base_free > 0:
@@ -1080,6 +1083,9 @@ def run_bot():
                             timeframe=timeframe,
                             ma_period=ma_period,
                             strategy_version=strategy.version,
+                            request_started_at=order_request_started_at,
+                            response_received_at=order_response_received_at,
+                            requested_order_value_quote=order_value,
                             raw_order=order,
                             extra={
                                 "strategy_version": strategy.version,
@@ -1124,8 +1130,31 @@ def run_bot():
                     amount = safe_amount_to_precision(
                         exchange, symbol, sell_amount
                     )
+                    full_sell_amount = safe_amount_to_precision(exchange, symbol, base_free)
+                    if (
+                        amount > 0
+                        and min_order_amount > 0
+                        and amount < min_order_amount
+                        and full_sell_amount >= min_order_amount
+                    ):
+                        log(
+                            f"[{symbol}] 부분/분할 매도 수량이 최소 주문 수량보다 작아 전량 청산으로 전환합니다."
+                        )
+                        amount = full_sell_amount
+                        sell_ratio = 1.0
+                        if exit_reason_key == "partial_take_profit":
+                            exit_reason_key = "take_profit"
+                            sell_reason = "익절"
+                        elif exit_reason_key == "partial_stop_loss":
+                            exit_reason_key = "stop_loss"
+                            sell_reason = "손절"
                     if amount <= 0:
                         log(f"[{symbol}] 매도할 {base} 수량이 없습니다.")
+                    elif min_order_amount > 0 and amount < min_order_amount:
+                        log(
+                            f"[{symbol}] 매도 수량 {amount:.8f} {base} 가 거래소 최소 주문 수량 "
+                            f"{min_order_amount:.8f} {base} 보다 작아 매도를 생략합니다."
+                        )
                     else:
                         structured_logger.log_strategy(
                             symbol=symbol,
@@ -1137,6 +1166,7 @@ def run_bot():
                             metrics=common_metrics,
                         )
                         log(f"[매도] 시장가 매도 시도: {symbol}, 수량={amount} {base}")
+                        order_request_started_at = time.time()
                         try:
                             order = place_market_order_okx(
                                 exchange,
@@ -1167,7 +1197,8 @@ def run_bot():
                                     "error": repr(order_error),
                                 },
                             )
-                            raise
+                            continue
+                        order_response_received_at = time.time()
                         last_trade_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.0001:
@@ -1280,6 +1311,9 @@ def run_bot():
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,
                                 mae_pct=mae_pct,
+                                request_started_at=order_request_started_at,
+                                response_received_at=order_response_received_at,
+                                requested_amount=amount,
                                 raw_order=order,
                                 extra={
                                     "strategy_version": strategy.version,
@@ -1352,6 +1386,9 @@ def run_bot():
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,
                                 mae_pct=mae_pct,
+                                request_started_at=order_request_started_at,
+                                response_received_at=order_response_received_at,
+                                requested_amount=amount,
                                 raw_order=order,
                                 extra={
                                     "strategy_version": strategy.version,

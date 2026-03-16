@@ -1,6 +1,7 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- 수수료를 반영해도 순익이 남을 때 추세 약화가 나오면 빠르게 보호 익절하는 설정을 추가했다.
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운 설정을 추가했다.
 - BTC 는 수익 구간에서 1회만 추가매수하는 보수적 피라미딩 설정을 .env 에서 읽도록 확장했다.
 - BTC 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
@@ -44,6 +45,8 @@ class BtcTrendSettings:
     enable_trend_follow_entry: bool
     trend_follow_requires_price_above_fast: bool
     min_ema_spread_pct: float
+    enable_fee_protect_exit: bool
+    fee_protect_min_net_pnl_pct: float
     atr_period: int
     min_atr_pct: float
     max_atr_pct: float
@@ -96,6 +99,13 @@ def load_btc_trend_settings() -> BtcTrendSettings:
             default=True,
         ),
         min_ema_spread_pct=float(os.getenv("BTC_TREND_MIN_EMA_SPREAD_PCT", "0.002")),
+        enable_fee_protect_exit=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_FEE_PROTECT_EXIT", "true"),
+            default=True,
+        ),
+        fee_protect_min_net_pnl_pct=float(
+            os.getenv("BTC_TREND_FEE_PROTECT_MIN_NET_PNL_PCT", "0.12")
+        ),
         atr_period=int(os.getenv("BTC_TREND_ATR_PERIOD", "14")),
         min_atr_pct=float(os.getenv("BTC_TREND_MIN_ATR_PCT", "0.08")),
         max_atr_pct=float(os.getenv("BTC_TREND_MAX_ATR_PCT", "2.50")),

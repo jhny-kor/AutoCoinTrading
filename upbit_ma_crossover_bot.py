@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 알트 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
 - 심볼별 부분익절/부분손절 설정을 지원하고 ETH/XRP 같은 선택 알트에만 1회 부분청산을 적용하도록 확장
 - 업비트 알트 매도 체결 로그도 왕복 수수료 기준 순손익을 함께 남겨 /pnl 집계가 모두 net 기준으로 가능하도록 보강
 - 업비트 알트에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
@@ -842,6 +843,7 @@ def run_bot():
                             metrics=common_metrics,
                         )
                         log(f"[매수] 시장가 매수 시도: {symbol}, 사용 금액={cost_to_spend:.0f} {quote}, 수량={amount}")
+                        order_request_started_at = time.time()
                         try:
                             order = exchange.create_market_buy_order(
                                 symbol,
@@ -878,6 +880,7 @@ def run_bot():
                             },
                         )
                             continue
+                        order_response_received_at = time.time()
                         # 시장가 주문 특성상 실제 체결가 대신 현재가로 평균 진입가를 추정
                         if has_position and avg_entry_price and base_free > 0:
                             total_cost = (avg_entry_price * base_free) + (last_close * amount)
@@ -956,6 +959,9 @@ def run_bot():
                             remaining_base_after_estimate=base_free + amount,
                             timeframe=timeframe,
                             ma_period=ma_period,
+                            request_started_at=order_request_started_at,
+                            response_received_at=order_response_received_at,
+                            requested_order_value_quote=cost_to_spend,
                             raw_order=order,
                             extra={
                                 "strategy_version": strategy.version,
@@ -1039,6 +1045,7 @@ def run_bot():
                             metrics=common_metrics,
                         )
                         log(f"[매도] 시장가 매도 시도: {symbol}, 수량={amount}")
+                        order_request_started_at = time.time()
                         try:
                             order = exchange.create_market_sell_order(symbol, amount)
                         except Exception as order_error:
@@ -1067,6 +1074,7 @@ def run_bot():
                             },
                         )
                             continue
+                        order_response_received_at = time.time()
                         last_trade_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.00000001:
@@ -1179,6 +1187,9 @@ def run_bot():
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,
                                 mae_pct=mae_pct,
+                                request_started_at=order_request_started_at,
+                                response_received_at=order_response_received_at,
+                                requested_amount=amount,
                                 raw_order=order,
                                 extra={
                                     "strategy_version": strategy.version,
@@ -1253,6 +1264,9 @@ def run_bot():
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,
                                 mae_pct=mae_pct,
+                                request_started_at=order_request_started_at,
+                                response_received_at=order_response_received_at,
+                                requested_amount=amount,
                                 raw_order=order,
                                 extra={
                                     "strategy_version": strategy.version,

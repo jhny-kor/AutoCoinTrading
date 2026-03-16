@@ -4,6 +4,7 @@
 - 체결 시 왕복 수수료 추정치를 이용한 순손익 계산 helper 를 함께 제공해 로그 기록 기준을 통일
 - strategy_version 을 최상위 필드로 남겨 버전별 성과 비교가 가능하도록 확장
 - 진입 후 최고가/최저가, MFE/MAE, 트레일링 활성화 소요 시간 같은 거래 품질 필드도 함께 저장하도록 확장
+- 주문 응답에서 주문 ID, 체결 수량, 평균 체결가, 수수료, API 지연 같은 주문 실행 품질 지표를 추출해 함께 저장하도록 확장
 - 매수, 익절 매도, 손절 매도 체결 결과를 JSONL 형식으로 저장한다.
 - 거래소/심볼/수량/금액/손익/원본 주문 응답까지 함께 남겨 나중에 분석하기 쉽게 만든다.
 - 결과는 trade_logs/trade_history.jsonl 파일에 누적된다.
@@ -30,6 +31,178 @@ def to_json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [to_json_safe(item) for item in value]
     return str(value)
+
+
+def _to_float(value: Any) -> float | None:
+    """숫자 후보를 float 으로 안전하게 변환한다."""
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_first_value(candidates: list[dict[str, Any]], keys: tuple[str, ...]) -> Any:
+    """후보 딕셔너리들에서 첫 번째 유효 값을 찾는다."""
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in keys:
+            if candidate.get(key) not in (None, ""):
+                return candidate.get(key)
+    return None
+
+
+def _collect_order_candidates(raw_order: Any) -> list[dict[str, Any]]:
+    """주문 응답 안의 주요 후보 딕셔너리를 평탄화한다."""
+    candidates: list[dict[str, Any]] = []
+    if isinstance(raw_order, dict):
+        candidates.append(raw_order)
+        info = raw_order.get("info")
+        if isinstance(info, dict):
+            candidates.append(info)
+        data = raw_order.get("data")
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    candidates.append(item)
+    return candidates
+
+
+def _normalize_timestamp_to_iso(value: Any) -> str | None:
+    """초 또는 밀리초 단위 타임스탬프를 ISO 문자열로 바꾼다."""
+    ts = _to_float(value)
+    if ts is None:
+        return None
+    if ts > 10_000_000_000:
+        ts /= 1000.0
+    try:
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def extract_execution_quality(
+    *,
+    raw_order: Any,
+    side: str,
+    reference_price: float | None = None,
+    requested_amount: float | None = None,
+    requested_order_value_quote: float | None = None,
+    request_started_at: float | None = None,
+    response_received_at: float | None = None,
+) -> dict[str, Any]:
+    """주문 응답에서 실행 품질 지표를 추출한다."""
+    candidates = _collect_order_candidates(raw_order)
+    fee_info = _extract_first_value(candidates, ("fee",))
+    fee_cost_actual = None
+    fee_currency = None
+    if isinstance(fee_info, dict):
+        fee_cost_actual = _to_float(fee_info.get("cost"))
+        fee_currency = fee_info.get("currency")
+    elif fee_info is None:
+        fees_info = _extract_first_value(candidates, ("fees",))
+        if isinstance(fees_info, list) and fees_info:
+            first_fee = fees_info[0]
+            if isinstance(first_fee, dict):
+                fee_cost_actual = _to_float(first_fee.get("cost"))
+                fee_currency = first_fee.get("currency")
+
+    exchange_order_id = _extract_first_value(candidates, ("id", "orderId", "ordId"))
+    exchange_order_status = _extract_first_value(
+        candidates,
+        ("status", "state", "ordStatus"),
+    )
+    exchange_order_timestamp = _normalize_timestamp_to_iso(
+        _extract_first_value(candidates, ("timestamp", "ts", "cTime", "uTime", "transactTime"))
+    )
+    exchange_last_trade_timestamp = _normalize_timestamp_to_iso(
+        _extract_first_value(candidates, ("lastTradeTimestamp", "fillTime", "fillTimeMs"))
+    )
+
+    filled_amount_reported = _to_float(
+        _extract_first_value(candidates, ("filled", "accFillSz", "executedQty", "volume"))
+    )
+    remaining_amount_reported = _to_float(
+        _extract_first_value(candidates, ("remaining", "remain", "leavesQty"))
+    )
+    average_fill_price = _to_float(
+        _extract_first_value(candidates, ("average", "avgPx", "avgPrice"))
+    )
+    order_cost_reported = _to_float(
+        _extract_first_value(candidates, ("cost", "filledNotional", "accFillCcyAmt"))
+    )
+
+    if average_fill_price is None and order_cost_reported and filled_amount_reported:
+        if filled_amount_reported > 0:
+            average_fill_price = order_cost_reported / filled_amount_reported
+
+    fill_ratio = None
+    if requested_amount and requested_amount > 0 and filled_amount_reported is not None:
+        fill_ratio = filled_amount_reported / requested_amount
+    elif (
+        side.lower() == "buy"
+        and requested_order_value_quote
+        and requested_order_value_quote > 0
+        and order_cost_reported is not None
+    ):
+        fill_ratio = order_cost_reported / requested_order_value_quote
+
+    api_latency_ms = None
+    request_started_at_iso = None
+    response_received_at_iso = None
+    if request_started_at is not None:
+        request_started_at_iso = datetime.fromtimestamp(
+            request_started_at,
+            timezone.utc,
+        ).isoformat()
+    if response_received_at is not None:
+        response_received_at_iso = datetime.fromtimestamp(
+            response_received_at,
+            timezone.utc,
+        ).isoformat()
+    if request_started_at is not None and response_received_at is not None:
+        api_latency_ms = max(0.0, (response_received_at - request_started_at) * 1000)
+
+    exchange_ack_latency_ms = None
+    if request_started_at is not None and exchange_order_timestamp is not None:
+        try:
+            exchange_ack_ts = datetime.fromisoformat(exchange_order_timestamp).timestamp()
+            exchange_ack_latency_ms = max(0.0, (exchange_ack_ts - request_started_at) * 1000)
+        except ValueError:
+            exchange_ack_latency_ms = None
+
+    slippage_pct = None
+    slippage_bps = None
+    if average_fill_price and reference_price and reference_price > 0:
+        if side.lower() == "buy":
+            slippage_pct = ((average_fill_price - reference_price) / reference_price) * 100
+        else:
+            slippage_pct = ((reference_price - average_fill_price) / reference_price) * 100
+        slippage_bps = slippage_pct * 100
+
+    return {
+        "request_started_at": request_started_at_iso,
+        "response_received_at": response_received_at_iso,
+        "api_latency_ms": api_latency_ms,
+        "exchange_ack_latency_ms": exchange_ack_latency_ms,
+        "exchange_order_id": exchange_order_id,
+        "exchange_order_status": exchange_order_status,
+        "exchange_order_timestamp": exchange_order_timestamp,
+        "exchange_last_trade_timestamp": exchange_last_trade_timestamp,
+        "requested_amount": requested_amount,
+        "requested_order_value_quote": requested_order_value_quote,
+        "filled_amount_reported": filled_amount_reported,
+        "remaining_amount_reported": remaining_amount_reported,
+        "fill_ratio": fill_ratio,
+        "average_fill_price": average_fill_price,
+        "order_cost_reported": order_cost_reported,
+        "fee_cost_actual": fee_cost_actual,
+        "fee_currency": fee_currency,
+        "slippage_pct": slippage_pct,
+        "slippage_bps": slippage_bps,
+    }
 
 
 def estimate_round_trip_net_pnl(
@@ -128,10 +301,30 @@ class TradeHistoryLogger:
         trailing_activation_price: float | None = None,
         trailing_armed_seconds: float | None = None,
         activation_to_exit_seconds: float | None = None,
+        request_started_at: float | None = None,
+        response_received_at: float | None = None,
+        requested_amount: float | None = None,
+        requested_order_value_quote: float | None = None,
         raw_order: Any = None,
         extra: dict[str, Any] | None = None,
     ):
         """체결 결과 1건을 JSONL 형식으로 기록한다."""
+        normalized_requested_amount = requested_amount
+        normalized_requested_order_value_quote = requested_order_value_quote
+        if normalized_requested_amount is None and side.lower() == "sell":
+            normalized_requested_amount = amount
+        if normalized_requested_order_value_quote is None and side.lower() == "buy":
+            normalized_requested_order_value_quote = order_value_quote
+
+        execution_quality = extract_execution_quality(
+            raw_order=raw_order,
+            side=side,
+            reference_price=reference_price,
+            requested_amount=normalized_requested_amount,
+            requested_order_value_quote=normalized_requested_order_value_quote,
+            request_started_at=request_started_at,
+            response_received_at=response_received_at,
+        )
         record = {
             "recorded_at": datetime.now(timezone.utc).isoformat(),
             "recorded_at_local": datetime.now().astimezone().isoformat(),
@@ -174,6 +367,7 @@ class TradeHistoryLogger:
             "trailing_activation_price": trailing_activation_price,
             "trailing_armed_seconds": trailing_armed_seconds,
             "activation_to_exit_seconds": activation_to_exit_seconds,
+            **execution_quality,
             "raw_order": to_json_safe(raw_order),
             "extra": to_json_safe(extra or {}),
         }

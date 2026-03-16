@@ -1,5 +1,6 @@
 """
 수정 요약
+- 주문 실행 품질 평균값(API 지연, 슬리피지, 체결 비율)도 거래 품질 요약에 함께 집계하도록 확장
 - MFE/MAE, 트레일링 활성화 소요 시간, 시간대 성과, 필터 기준 부족 폭까지 함께 집계하도록 확장
 - 구조화된 strategy / trade 로그를 읽어 퍼널 병목과 차단 사유를 집계하는 분석 스크립트 추가
 - 심볼별 scan / ready / requested / filled / top_block_reason 을 표처럼 빠르게 확인하도록 추가
@@ -189,26 +190,32 @@ def build_trade_quality_rows(
 ) -> list[dict[str, Any]]:
     """체결 이력 기준으로 거래 품질 요약 행을 만든다."""
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped_execution: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in read_trade_history(trade_history_path):
-        if record.get("side") != "sell":
-            continue
         key = (
             str(record.get("program_name", "")),
             str(record.get("symbol", "")),
             str(record.get("quote_currency", "")),
         )
+        grouped_execution[key].append(record)
+        if record.get("side") != "sell":
+            continue
         grouped[key].append(record)
 
     rows: list[dict[str, Any]] = []
     for key in sorted(grouped):
         program_name, symbol, quote_currency = key
         records = grouped[key]
+        execution_records = grouped_execution.get(key, [])
         pnl_values: list[float] = []
         holding_values: list[float] = []
         mfe_values: list[float] = []
         mae_values: list[float] = []
         arm_values: list[float] = []
         active_values: list[float] = []
+        api_latency_values: list[float] = []
+        slippage_values: list[float] = []
+        fill_ratio_values: list[float] = []
         exit_reasons = Counter(str(record.get("reason", "")) for record in records)
         trailing_count = 0
 
@@ -241,6 +248,19 @@ def build_trade_quality_rows(
 
             if record.get("trailing_armed") or record.get("trailing_armed_at"):
                 trailing_count += 1
+
+        for record in execution_records:
+            api_latency = _to_float(record.get("api_latency_ms"))
+            if api_latency is not None:
+                api_latency_values.append(api_latency)
+
+            slippage_bps = _to_float(record.get("slippage_bps"))
+            if slippage_bps is not None:
+                slippage_values.append(slippage_bps)
+
+            fill_ratio = _to_float(record.get("fill_ratio"))
+            if fill_ratio is not None:
+                fill_ratio_values.append(fill_ratio * 100)
 
         rows.append(
             {
@@ -275,6 +295,22 @@ def build_trade_quality_rows(
                     if active_values
                     else "-"
                 ),
+                "avg_api_latency_ms": (
+                    f"{sum(api_latency_values) / len(api_latency_values):.1f}"
+                    if api_latency_values
+                    else "-"
+                ),
+                "avg_slippage_bps": (
+                    f"{sum(slippage_values) / len(slippage_values):.2f}"
+                    if slippage_values
+                    else "-"
+                ),
+                "avg_fill_ratio_pct": (
+                    f"{sum(fill_ratio_values) / len(fill_ratio_values):.1f}"
+                    if fill_ratio_values
+                    else "-"
+                ),
+                "execution_samples": len(execution_records),
                 "top_exit_reason": exit_reasons.most_common(1)[0][0]
                 if exit_reasons
                 else "-",

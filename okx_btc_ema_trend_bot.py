@@ -1,5 +1,7 @@
 """
 수정 요약
+- 수수료를 제하고도 순익이 남는 상태에서 추세가 꺾이면 빠르게 익절하는 순익 보호 청산 규칙을 추가
+- OKX BTC 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
 - OKX BTC 매도 체결 로그에도 왕복 수수료를 반영한 순손익을 함께 저장해 /pnl 집계가 net 기준으로 가능하도록 보강
 - OKX BTC 에서 최소 주문 수량 미만 잔량은 포지션으로 보지 않아 잔량 보유 중에도 재진입할 수 있게 조정
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
@@ -372,6 +374,16 @@ def run_bot():
                     settings=settings,
                 )
                 pnl_pct = (last_close - entry_price) / entry_price * 100
+                (
+                    current_fee_quote_estimate,
+                    current_net_realized_pnl_quote,
+                    current_net_realized_pnl_pct,
+                ) = estimate_round_trip_net_pnl(
+                    entry_price=entry_price,
+                    exit_price=last_close,
+                    amount=base_free,
+                    fee_rate_pct=config["fee_rate_pct"],
+                )
                 if (not trailing_armed) and take_profit_price is not None and last_close >= take_profit_price:
                     trailing_armed = True
                     trailing_armed_at = time.time()
@@ -413,10 +425,18 @@ def run_bot():
                     f"최고가: {highest_price_since_entry:.2f}, "
                     f"최고가 대비 되돌림: {0.0 if drawdown_from_high_pct is None else drawdown_from_high_pct:.2f}%"
                 )
+                if current_net_realized_pnl_pct is not None:
+                    log(
+                        f"[{symbol}] 수수료 반영 예상 순익률: {current_net_realized_pnl_pct:.2f}% "
+                        f"(보호 익절 기준 {settings.fee_protect_min_net_pnl_pct:.2f}%)"
+                    )
             else:
                 stop_price = None
                 take_profit_price = None
                 pnl_pct = None
+                current_fee_quote_estimate = None
+                current_net_realized_pnl_quote = None
+                current_net_realized_pnl_pct = None
                 drawdown_from_high_pct = None
                 mfe_pct = None
                 mae_pct = None
@@ -445,11 +465,20 @@ def run_bot():
                 and drawdown_from_high_pct is not None
                 and drawdown_from_high_pct >= settings.trailing_drawdown_pct
             )
+            profit_protect_triggered = (
+                has_position
+                and settings.enable_fee_protect_exit
+                and current_net_realized_pnl_pct is not None
+                and current_net_realized_pnl_pct >= settings.fee_protect_min_net_pnl_pct
+                and (bearish or (not ema_aligned) or (not price_above_fast))
+                and not trailing_stop_triggered
+            )
             trend_exit_triggered = (
                 has_position
                 and settings.exit_on_bearish_cross
                 and bearish
                 and not trailing_armed
+                and not profit_protect_triggered
             )
             position_ratio = settings.get_position_ratio(symbol)
             order_value = quote_free * config["risk_per_trade"] * position_ratio
@@ -494,6 +523,8 @@ def run_bot():
                 "has_position": has_position,
                 "daily_realized_pnl_quote": daily_realized_pnl_quote,
                 "pnl_pct": pnl_pct,
+                "net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
                 "min_order_amount": settings.min_order_amount,
                 "position_id": position_id,
                 "highest_price_since_entry": highest_price_since_entry,
@@ -507,6 +538,7 @@ def run_bot():
                 "pyramid_add_on_enabled": settings.enable_pyramid_add_on,
                 "pyramid_trigger_profit_pct": settings.pyramid_trigger_profit_pct,
                 "pyramid_max_add_ons": settings.pyramid_max_add_ons,
+                "profit_protect_triggered": profit_protect_triggered,
             }
 
             entry_steps = [
@@ -750,10 +782,16 @@ def run_bot():
                 ),
                 FunnelStep(
                     stage="exit_trigger",
-                    passed=(stop_triggered or trailing_stop_triggered or trend_exit_triggered),
+                    passed=(
+                        stop_triggered
+                        or profit_protect_triggered
+                        or trailing_stop_triggered
+                        or trend_exit_triggered
+                    ),
                     reason="no_exit_signal",
                     actual={
                         "stop_triggered": stop_triggered,
+                        "profit_protect_triggered": profit_protect_triggered,
                         "trailing_stop_triggered": trailing_stop_triggered,
                         "trend_exit_triggered": trend_exit_triggered,
                     },
@@ -776,6 +814,8 @@ def run_bot():
                 ready_reason=(
                     "stop_loss_triggered"
                     if stop_triggered
+                    else "profit_protect_triggered"
+                    if profit_protect_triggered
                     else "trailing_stop_triggered"
                     if trailing_stop_triggered
                     else "trend_exit_triggered"
@@ -801,6 +841,7 @@ def run_bot():
                         actual={"order_value_quote": order_value},
                         metrics=common_metrics,
                     )
+                    order_request_started_at = time.time()
                     try:
                         order = place_market_order_okx(
                             exchange,
@@ -835,6 +876,7 @@ def run_bot():
                             },
                         )
                         raise
+                    order_response_received_at = time.time()
                     estimated_amount = estimated_entry_amount
                     entry_price = last_close
                     entry_opened_at = time.time()
@@ -900,6 +942,9 @@ def run_bot():
                         position_id=position_id,
                         leg_index=0,
                         is_final_exit=False,
+                        request_started_at=order_request_started_at,
+                        response_received_at=order_response_received_at,
+                        requested_order_value_quote=order_value,
                         raw_order=order,
                         extra={
                             "strategy_version": settings.version,
@@ -924,6 +969,7 @@ def run_bot():
                     actual={"order_value_quote": add_on_order_value},
                     metrics={**common_metrics, "entry_type": "add_on_winner"},
                 )
+                order_request_started_at = time.time()
                 try:
                     order = place_market_order_okx(
                         exchange,
@@ -958,6 +1004,7 @@ def run_bot():
                         },
                     )
                     raise
+                order_response_received_at = time.time()
 
                 previous_amount = base_free
                 added_amount = estimated_add_on_amount
@@ -1040,6 +1087,9 @@ def run_bot():
                     position_id=position_id,
                     leg_index=add_on_count,
                     is_final_exit=False,
+                    request_started_at=order_request_started_at,
+                    response_received_at=order_response_received_at,
+                    requested_order_value_quote=add_on_order_value,
                     raw_order=order,
                     extra={
                         "strategy_version": settings.version,
@@ -1062,6 +1112,10 @@ def run_bot():
                         sell_reason = "stop_loss"
                         notify_fn = notifier.notify_stop_loss_fill
                         title = "BTC EMA 전략 손절 체결"
+                    elif profit_protect_triggered:
+                        sell_reason = "profit_protect_take_profit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = "BTC EMA 전략 순익 보호 익절 체결"
                     elif trailing_stop_triggered:
                         sell_reason = "trailing_take_profit"
                         notify_fn = notifier.notify_sell_fill
@@ -1080,6 +1134,7 @@ def run_bot():
                         actual={"sell_amount": amount},
                         metrics=common_metrics,
                     )
+                    order_request_started_at = time.time()
                     try:
                         order = place_market_order_okx(
                             exchange,
@@ -1114,6 +1169,7 @@ def run_bot():
                             },
                         )
                         raise
+                    order_response_received_at = time.time()
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
                     fee_quote_estimate = None
@@ -1227,6 +1283,9 @@ def run_bot():
                         trailing_activation_price=trailing_activation_price,
                         trailing_armed_seconds=trailing_armed_seconds,
                         activation_to_exit_seconds=activation_to_exit_seconds,
+                        request_started_at=order_request_started_at,
+                        response_received_at=order_response_received_at,
+                        requested_amount=amount,
                         raw_order=order,
                         extra={
                             "strategy_version": settings.version,
@@ -1237,6 +1296,9 @@ def run_bot():
                             "confirm_bullish": confirm_bullish,
                             "stop_price": stop_price,
                             "take_profit_price": take_profit_price,
+                            "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                            "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
+                            "profit_protect_triggered": profit_protect_triggered,
                             "highest_price_since_entry": highest_price_since_entry,
                             "trailing_armed": trailing_armed,
                             "drawdown_from_high_pct": drawdown_from_high_pct,

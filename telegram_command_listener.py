@@ -1,5 +1,7 @@
 """
 수정 요약
+- /analysis 와 /weekly 에 순익 보호 익절 발생 건수와 순손익을 바로 확인할 수 있는 전용 요약 섹션을 추가
+- /analysis 와 주간 리포트의 거래 품질 섹션에 API 지연, 슬리피지, 체결 비율 같은 주문 실행 품질 요약도 함께 표시하도록 확장
 - /pnl 이 과거 체결도 가능한 범위에서 순손익으로 재추정해 통화별 손순익 집계가 최대한 완전하게 보이도록 보강
 - /analysis 와 정기 리포트에 거래 품질 요약, 필터 기준 부족 폭, 시간대 성과 요약까지 함께 넣도록 확장
 - 텔레그램 명령 리스너 자체의 런타임 예외도 즉시 텔레그램으로 알리도록 보강
@@ -864,6 +866,7 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_market_analysis_text(settings),
         build_strategy_funnel_text(),
         build_trade_quality_text(),
+        build_profit_protect_text(),
         build_filter_gap_text(),
         build_time_of_day_text(),
         build_volume_candidate_text(settings),
@@ -892,14 +895,16 @@ def iter_recent_trade_records(days: int) -> list[dict]:
 def build_weekly_trade_quality_text(days: int = 7, limit: int = 8) -> str:
     """최근 N일 기준 체결 품질 요약을 만든다."""
     grouped: dict[tuple[str, str, str], list[dict]] = {}
+    grouped_execution: dict[tuple[str, str, str], list[dict]] = {}
     for record in iter_recent_trade_records(days):
-        if record.get("side") != "sell":
-            continue
         key = (
             str(record.get("program_name", "")),
             str(record.get("symbol", "")),
             str(record.get("quote_currency", "")),
         )
+        grouped_execution.setdefault(key, []).append(record)
+        if record.get("side") != "sell":
+            continue
         grouped.setdefault(key, []).append(record)
 
     if not grouped:
@@ -911,9 +916,13 @@ def build_weekly_trade_quality_text(days: int = 7, limit: int = 8) -> str:
         key=lambda item: (-len(item[1]), item[0][0], item[0][1]),
     )
     for (program_name, symbol, quote_currency), records in sorted_groups[:limit]:
+        execution_records = grouped_execution.get((program_name, symbol, quote_currency), [])
         pnl_values: list[float] = []
         mfe_values: list[float] = []
         mae_values: list[float] = []
+        api_latency_values: list[float] = []
+        slippage_values: list[float] = []
+        fill_ratio_values: list[float] = []
         win_count = 0
         exit_reasons: dict[str, int] = {}
         net_quote_total = 0.0
@@ -944,18 +953,125 @@ def build_weekly_trade_quality_text(days: int = 7, limit: int = 8) -> str:
             reason = str(record.get("reason", "")).strip() or "-"
             exit_reasons[reason] = exit_reasons.get(reason, 0) + 1
 
+        for record in execution_records:
+            api_latency = safe_float(record.get("api_latency_ms"))
+            if api_latency is not None:
+                api_latency_values.append(api_latency)
+
+            slippage_bps = safe_float(record.get("slippage_bps"))
+            if slippage_bps is not None:
+                slippage_values.append(slippage_bps)
+
+            fill_ratio = safe_float(record.get("fill_ratio"))
+            if fill_ratio is not None:
+                fill_ratio_values.append(fill_ratio * 100)
+
         avg_pnl = f"{(sum(pnl_values) / len(pnl_values)):.3f}" if pnl_values else "-"
         avg_mfe = f"{(sum(mfe_values) / len(mfe_values)):.3f}" if mfe_values else "-"
         avg_mae = f"{(sum(mae_values) / len(mae_values)):.3f}" if mae_values else "-"
+        avg_api_latency = (
+            f"{(sum(api_latency_values) / len(api_latency_values)):.1f}"
+            if api_latency_values
+            else "-"
+        )
+        avg_slippage = (
+            f"{(sum(slippage_values) / len(slippage_values)):.2f}"
+            if slippage_values
+            else "-"
+        )
+        avg_fill_ratio = (
+            f"{(sum(fill_ratio_values) / len(fill_ratio_values)):.1f}"
+            if fill_ratio_values
+            else "-"
+        )
         win_rate = f"{(win_count / len(records)) * 100:.1f}%" if records else "-"
         top_exit_reason = sorted(exit_reasons.items(), key=lambda item: (-item[1], item[0]))[0][0]
         decimals = 0 if quote_currency == "KRW" else 4
         lines.append(
             f"- {program_name} | {symbol} | 거래 {len(records)}건 | 승률 {win_rate} | "
             f"평균 손익 {avg_pnl}% | 총 순손익 {format_number(net_quote_total, decimals)} {quote_currency} | "
-            f"MFE {avg_mfe}% / MAE {avg_mae}% | 대표 청산 {top_exit_reason}"
+            f"MFE {avg_mfe}% / MAE {avg_mae}% | "
+            f"API {avg_api_latency}ms | 슬리피지 {avg_slippage}bp | 체결비율 {avg_fill_ratio}% | "
+            f"대표 청산 {top_exit_reason}"
         )
     return "\n".join(lines)
+
+
+def _build_profit_protect_section(records: list[dict], title: str, limit: int = 6) -> str:
+    """순익 보호 익절 체결 요약 문구를 만든다."""
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    for record in records:
+        if record.get("side") != "sell":
+            continue
+        if str(record.get("reason", "")).strip() != "profit_protect_take_profit":
+            continue
+        key = (
+            str(record.get("program_name", "")),
+            str(record.get("symbol", "")),
+            str(record.get("quote_currency", "")),
+        )
+        grouped.setdefault(key, []).append(record)
+
+    if not grouped:
+        return f"{title}\n- 아직 순익 보호 익절 체결이 없습니다."
+
+    lines = [title]
+    rows = sorted(
+        grouped.items(),
+        key=lambda item: (-len(item[1]), item[0][0], item[0][1]),
+    )
+    for (program_name, symbol, quote_currency), items in rows[:limit]:
+        net_pnl_values: list[float] = []
+        net_quote_total = 0.0
+        for record in items:
+            net_pct = safe_float(record.get("net_realized_pnl_pct"))
+            if net_pct is None:
+                net_pct = safe_float(record.get("realized_pnl_pct"))
+            if net_pct is not None:
+                net_pnl_values.append(net_pct)
+
+            net_quote = safe_float(record.get("net_realized_pnl_quote"))
+            if net_quote is None:
+                net_quote = safe_float(record.get("realized_pnl_quote"))
+            if net_quote is not None:
+                net_quote_total += net_quote
+
+        avg_net_pnl = (
+            f"{(sum(net_pnl_values) / len(net_pnl_values)):.3f}"
+            if net_pnl_values
+            else "-"
+        )
+        decimals = 0 if quote_currency == "KRW" else 4
+        lines.append(
+            f"- {program_name} | {symbol} | {len(items)}건 | "
+            f"평균 순손익 {avg_net_pnl}% | "
+            f"총 순손익 {format_number(net_quote_total, decimals)} {quote_currency}"
+        )
+    return "\n".join(lines)
+
+
+def build_profit_protect_text(limit: int = 6) -> str:
+    """전체 누적 기준 순익 보호 익절 요약을 만든다."""
+    records: list[dict] = []
+    for path in iter_files("trade_logs", "trade_history.jsonl"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                records.append(json.loads(stripped))
+            except (ValueError, json.JSONDecodeError):
+                continue
+    return _build_profit_protect_section(records, "순익 보호 익절 요약", limit=limit)
+
+
+def build_weekly_profit_protect_text(days: int = 7, limit: int = 6) -> str:
+    """최근 N일 기준 순익 보호 익절 요약을 만든다."""
+    return _build_profit_protect_section(
+        iter_recent_trade_records(days),
+        f"최근 {days}일 순익 보호 익절 요약",
+        limit=limit,
+    )
 
 
 def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
@@ -1053,6 +1169,7 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
             f"집계 구간: {start} ~ {end}",
             build_period_pnl_text(7, title="최근 7일 누적 실현 손익"),
             build_weekly_trade_quality_text(7),
+            build_weekly_profit_protect_text(7),
             build_weekly_funnel_text(7),
             build_weekly_time_of_day_text(7),
             build_volume_candidate_text(settings),
@@ -1262,7 +1379,10 @@ def build_trade_quality_text(limit: int = 8) -> str:
             f"평균 손익 {row['avg_net_pnl_pct']}% | "
             f"MFE {row['avg_mfe_pct']}% / MAE {row['avg_mae_pct']}% | "
             f"보유 {row['avg_holding_seconds']}초 | "
-            f"트레일링 활성 {row['trailing_arm_rate']}"
+            f"트레일링 활성 {row['trailing_arm_rate']} | "
+            f"API {row['avg_api_latency_ms']}ms | "
+            f"슬리피지 {row['avg_slippage_bps']}bp | "
+            f"체결비율 {row['avg_fill_ratio_pct']}%"
         )
     return "\n".join(lines)
 
