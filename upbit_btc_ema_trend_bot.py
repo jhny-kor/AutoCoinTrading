@@ -44,6 +44,7 @@ from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 from upbit_ma_crossover_bot import (
     create_upbit_client,
     fetch_ohlcv,
+    fetch_best_bid,
     get_spot_balances,
     load_config,
     safe_amount_to_precision,
@@ -290,6 +291,8 @@ def run_bot():
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
             base_free, quote_free = get_spot_balances(exchange, base, quote)
+            best_bid = fetch_best_bid(exchange, symbol) if base_free > 0 else None
+            sell_price_reference = best_bid if best_bid and best_bid > 0 else last_close
             position_quote_value = base_free * last_close
             # 업비트는 최소 주문 금액 기준으로 다시 팔 수 없는 잔량은 포지션에서 제외한다.
             has_position = position_quote_value >= min_buy_order_value
@@ -818,7 +821,7 @@ def run_bot():
                                 "error": repr(order_error),
                             },
                         )
-                        raise
+                        continue
                     entry_price = last_close
                     entry_opened_at = time.time()
                     position_id = f"{symbol}:{int(entry_opened_at)}"
@@ -946,7 +949,7 @@ def run_bot():
                             "error": repr(order_error),
                         },
                     )
-                    raise
+                    continue
 
                 previous_amount = base_free
                 added_amount = amount
@@ -1046,7 +1049,7 @@ def run_bot():
 
             elif exit_ready:
                 amount = safe_amount_to_precision(exchange, symbol, base_free)
-                sell_order_value_quote = amount * last_close
+                sell_order_value_quote = amount * sell_price_reference
                 if amount <= 0:
                     pass
                 elif sell_order_value_quote <= min_buy_order_value:
@@ -1103,7 +1106,7 @@ def run_bot():
                                 "error": repr(order_error),
                             },
                         )
-                        raise
+                        continue
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
                     holding_seconds = None

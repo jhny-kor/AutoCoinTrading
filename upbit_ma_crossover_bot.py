@@ -147,6 +147,21 @@ def safe_amount_to_precision(exchange: ccxt.upbit, symbol: str, amount: float) -
         return float(f"{amount:.8f}")
 
 
+def fetch_best_bid(exchange: ccxt.upbit, symbol: str) -> float | None:
+    """업비트 시장가 매도 최소금액 판정에 쓰는 매수 1호가를 가져온다."""
+    try:
+        order_book = exchange.fetch_order_book(symbol, limit=1)
+    except Exception:
+        return None
+    bids = order_book.get("bids") or []
+    if not bids:
+        return None
+    try:
+        return float(bids[0][0])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def calc_volume_ratio(ohlcv, lookback: int) -> float | None:
     """직전 마감 봉 거래량이 그 이전 평균 거래량의 몇 배인지 계산한다."""
     if len(ohlcv) < 3:
@@ -346,6 +361,8 @@ def run_bot():
                 log("잔고 조회 중...")
                 base_free, quote_free = get_spot_balances(exchange, base, quote)
                 log(f"현물 잔고 - {base}: {base_free}, {quote}: {quote_free}")
+                best_bid = fetch_best_bid(exchange, symbol) if base_free > 0 else None
+                sell_price_reference = best_bid if best_bid and best_bid > 0 else last_close
 
                 position_quote_value = base_free * last_close
                 # 업비트는 최소 주문 금액 기준이므로 현재 평가금액이 기준보다 작으면 먼지잔고로 본다.
@@ -570,6 +587,7 @@ def run_bot():
                 estimated_sell_amount = safe_amount_to_precision(
                     exchange, symbol, estimated_sell_amount
                 )
+                estimated_sell_order_value_quote = estimated_sell_amount * sell_price_reference
 
                 common_metrics = {
                     "strategy_name": "upbit_alt_ma_crossover",
@@ -590,6 +608,7 @@ def run_bot():
                     "position_ratio": position_ratio,
                     "has_position": has_position,
                     "position_quote_value": position_quote_value,
+                    "best_bid": best_bid,
                     "entry_count": current_entry_count,
                     "pnl_pct": pnl_pct,
                     "daily_realized_pnl_quote": daily_realized_pnl_quote,
@@ -779,9 +798,11 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="order_value",
-                        passed=(estimated_sell_amount * last_close) > strategy.min_buy_order_value,
+                        passed=estimated_sell_order_value_quote > strategy.min_buy_order_value,
                         reason="sell_order_value_too_small",
-                        actual={"sell_order_value_quote": estimated_sell_amount * last_close},
+                        actual={
+                            "sell_order_value_quote": estimated_sell_order_value_quote
+                        },
                         required={"min_sell_order_value": strategy.min_buy_order_value},
                     ),
                 ]
@@ -849,14 +870,14 @@ def run_bot():
                                 event="order_failed",
                                 message="매수 주문 요청이 실패했습니다.",
                                 symbol=symbol,
-                                context={
-                                    "side": "buy",
-                                    "order_value_quote": cost_to_spend,
-                                    "amount": amount,
-                                    "error": repr(order_error),
-                                },
-                            )
-                            raise
+                            context={
+                                "side": "buy",
+                                "order_value_quote": cost_to_spend,
+                                "amount": amount,
+                                "error": repr(order_error),
+                            },
+                        )
+                            continue
                         # 시장가 주문 특성상 실제 체결가 대신 현재가로 평균 진입가를 추정
                         if has_position and avg_entry_price and base_free > 0:
                             total_cost = (avg_entry_price * base_free) + (last_close * amount)
@@ -981,7 +1002,26 @@ def run_bot():
                     amount = safe_amount_to_precision(
                         exchange, symbol, sell_amount
                     )
-                    sell_order_value_quote = amount * last_close
+                    sell_order_value_quote = amount * sell_price_reference
+                    full_sell_amount = safe_amount_to_precision(exchange, symbol, base_free)
+                    full_sell_order_value_quote = full_sell_amount * sell_price_reference
+                    if (
+                        amount > 0
+                        and sell_order_value_quote <= strategy.min_buy_order_value
+                        and full_sell_order_value_quote > strategy.min_buy_order_value
+                    ):
+                        log(
+                            f"[{symbol}] 부분/분할 매도 금액이 최소 주문 금액보다 작아 전량 청산으로 전환합니다."
+                        )
+                        amount = full_sell_amount
+                        sell_order_value_quote = full_sell_order_value_quote
+                        sell_ratio = 1.0
+                        if exit_reason_key == "partial_take_profit":
+                            exit_reason_key = "take_profit"
+                            sell_reason = "익절"
+                        elif exit_reason_key == "partial_stop_loss":
+                            exit_reason_key = "stop_loss"
+                            sell_reason = "손절"
                     if amount <= 0:
                         log(f"[{symbol}] 매도할 {base} 수량이 없습니다.")
                     elif sell_order_value_quote <= strategy.min_buy_order_value:
@@ -1020,13 +1060,13 @@ def run_bot():
                                 event="order_failed",
                                 message="매도 주문 요청이 실패했습니다.",
                                 symbol=symbol,
-                                context={
-                                    "side": "sell",
-                                    "sell_amount": amount,
-                                    "error": repr(order_error),
-                                },
-                            )
-                            raise
+                            context={
+                                "side": "sell",
+                                "sell_amount": amount,
+                                "error": repr(order_error),
+                            },
+                        )
+                            continue
                         last_trade_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.00000001:
