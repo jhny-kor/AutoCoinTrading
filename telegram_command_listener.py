@@ -16,13 +16,14 @@
 
 텔레그램 명령 리스너
 
-- 텔레그램에서 /status, /positions, /pnl, /analysis, /last 명령을 받아 응답한다.
+- 텔레그램에서 /status, /positions, /pnl, /analysis, /weekly, /last 명령을 받아 응답한다.
 - 상태 조회는 bot_manager 의 관리 대상 상태 문자열을 재사용한다.
 - 포지션 조회는 각 거래소 API 를 호출해 현재 잔고와 대략적인 평가 금액을 보여준다.
 - 분석 조회는 analyze_logs 의 요약 함수를 재사용한다.
 - 최근 로그 조회는 프로그램별 로그 파일 끝부분을 짧게 묶어서 보여준다.
 - /test 명령과 즉시 테스트 전송 옵션으로 텔레그램 연결 상태를 점검할 수 있다.
 - 아침 8시, 오후 12시, 저녁 6시, 밤 9시에 일일 리포트를 자동 전송할 수 있다.
+- 매주 월요일 오전 9시에 최근 7일 기준 주간 리포트를 자동 전송할 수 있다.
 - 일일 리포트에 최근 체결 내역과 오늘 스킵 사유 요약을 함께 포함한다.
 - 시장 로그 분석과 전략 퍼널 분석을 함께 요약해 한눈에 보기 쉽게 정리한다.
 - 거래소 조회 실패를 timeout, 권한 부족, 인증 실패 단계로 나눠 바로 원인 추정이 가능하게 개선했다.
@@ -36,6 +37,7 @@
 - /positions
 - /pnl
 - /analysis
+- /weekly
 - /last
 
 가능한 실행 명령
@@ -54,7 +56,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import ccxt
@@ -120,6 +122,15 @@ UPBIT_TICKER_ALL_URL = "https://api.upbit.com/v1/ticker/all?quote_currencies=KRW
 UPBIT_CANDLES_URL = "https://api.upbit.com/v1/candles/days?market={market}&count=7"
 VOLUME_CANDIDATE_COUNT = 3
 STABLE_BASES = {"USDT", "USDC", "USDC.e", "USDD", "DAI"}
+WEEKDAY_NAME_TO_INDEX = {
+    "MON": 0,
+    "TUE": 1,
+    "WED": 2,
+    "THU": 3,
+    "FRI": 4,
+    "SAT": 5,
+    "SUN": 6,
+}
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,9 @@ class ListenerSettings:
     noon_report_hour: int
     evening_report_hour: int
     night_report_hour: int
+    weekly_report_enabled: bool
+    weekly_report_weekday: int
+    weekly_report_hour: int
 
 
 def parse_bool(raw: str | None, default: bool = False) -> bool:
@@ -170,6 +184,15 @@ def load_listener_settings() -> ListenerSettings:
         noon_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_NOON_HOUR", "12")),
         evening_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_EVENING_HOUR", "18")),
         night_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_NIGHT_HOUR", "21")),
+        weekly_report_enabled=parse_bool(
+            os.getenv("TELEGRAM_WEEKLY_REPORT_ENABLED", "true"),
+            default=True,
+        ),
+        weekly_report_weekday=WEEKDAY_NAME_TO_INDEX.get(
+            os.getenv("TELEGRAM_WEEKLY_REPORT_WEEKDAY", "MON").strip().upper(),
+            0,
+        ),
+        weekly_report_hour=int(os.getenv("TELEGRAM_WEEKLY_REPORT_HOUR", "9")),
     )
 
 
@@ -349,6 +372,16 @@ def format_number(value: float, decimals: int = 4) -> str:
     return f"{value:,.{decimals}f}"
 
 
+def safe_float(value) -> float | None:
+    """None 이나 빈 값을 제외하고 안전하게 float 로 변환한다."""
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def classify_exchange_error(exc: Exception) -> tuple[str, str]:
     """거래소 예외를 분류하고 점검 포인트를 반환한다."""
     raw_message = str(exc).strip() or repr(exc)
@@ -403,9 +436,33 @@ def build_help_text() -> str:
         "- /positions : 현재 잔고와 포지션 요약\n"
         "- /pnl : 오늘 누적 실현 손익 요약\n"
         "- /analysis : 최근 분석 로그 요약\n"
+        "- /weekly : 최근 7일 기준 주간 리포트\n"
         "- /last : 최근 운영 로그 확인\n"
         "- /help : 도움말"
     )
+
+
+def parse_local_timestamp(raw: str) -> datetime | None:
+    """로컬 시각 문자열을 datetime 으로 안전하게 변환한다."""
+    try:
+        if not raw:
+            return None
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except ValueError:
+        return None
+
+
+def is_in_recent_days(raw: str, days: int, *, now: datetime | None = None) -> bool:
+    """지정된 최근 일수 범위 안의 시각인지 확인한다."""
+    parsed = parse_local_timestamp(raw)
+    if parsed is None:
+        return False
+    current = now or datetime.now()
+    lower_bound = current - timedelta(days=days)
+    return lower_bound <= parsed <= current
 
 
 def build_positions_text(settings: ListenerSettings) -> str:
@@ -692,6 +749,115 @@ def build_pnl_text() -> str:
     return "\n".join(lines)
 
 
+def build_period_pnl_text(days: int, *, title: str) -> str:
+    """최근 N일 기준 누적 실현 손익 요약을 만든다."""
+    trade_paths = iter_files("trade_logs", "trade_history.jsonl")
+    if not trade_paths:
+        return f"{title}\n- 체결 이력이 아직 없습니다."
+
+    now = datetime.now()
+    totals: dict[str, float] = {}
+    trade_counts: dict[str, int] = {}
+    estimated_counts: dict[str, int] = {}
+    gross_fallback_counts: dict[str, int] = {}
+
+    for path in trade_paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except (ValueError, json.JSONDecodeError):
+                continue
+
+            recorded_local = str(record.get("recorded_at_local", ""))
+            if not is_in_recent_days(recorded_local, days, now=now):
+                continue
+            if str(record.get("side", "")).lower() != "sell":
+                continue
+
+            quote = str(record.get("quote_currency", "")).strip().upper()
+            if not quote:
+                continue
+
+            net_value = record.get("net_realized_pnl_quote")
+            gross_value = record.get("realized_pnl_quote")
+            used_estimated_net = False
+            used_gross_fallback = False
+            exchange_name = str(record.get("exchange", "")).strip().upper()
+
+            try:
+                if net_value not in (None, ""):
+                    pnl_value = float(net_value)
+                    if exchange_name == "OKX":
+                        okx_fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
+                        estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
+                            entry_price=record.get("estimated_entry_price"),
+                            exit_price=record.get("reference_price"),
+                            amount=record.get("amount"),
+                            fee_rate_pct=okx_fee_rate_pct,
+                            realized_pnl_quote=gross_value,
+                        )
+                        if estimated_fee is not None and estimated_net is not None:
+                            pnl_value = float(estimated_net)
+                            used_estimated_net = True
+                elif gross_value not in (None, ""):
+                    fee_rate_pct = record.get("fee_rate_pct")
+                    if fee_rate_pct in (None, ""):
+                        if exchange_name == "UPBIT":
+                            fee_rate_pct = os.getenv("UPBIT_FEE_RATE_PCT", "0.05")
+                        elif exchange_name == "OKX":
+                            fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "0.1")
+
+                    estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
+                        entry_price=record.get("estimated_entry_price"),
+                        exit_price=record.get("reference_price"),
+                        amount=record.get("amount"),
+                        fee_rate_pct=fee_rate_pct,
+                        realized_pnl_quote=gross_value,
+                    )
+                    if estimated_fee is not None and estimated_net is not None:
+                        pnl_value = float(estimated_net)
+                        used_estimated_net = True
+                    else:
+                        pnl_value = float(gross_value)
+                        used_gross_fallback = True
+                else:
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+            totals[quote] = totals.get(quote, 0.0) + pnl_value
+            trade_counts[quote] = trade_counts.get(quote, 0) + 1
+            if used_estimated_net:
+                estimated_counts[quote] = estimated_counts.get(quote, 0) + 1
+            if used_gross_fallback:
+                gross_fallback_counts[quote] = gross_fallback_counts.get(quote, 0) + 1
+
+    if not totals:
+        return f"{title}\n- 최근 {days}일 기준 실현 손익 체결이 아직 없습니다."
+
+    lines = [title]
+    for quote in sorted(totals):
+        decimals = 0 if quote == "KRW" else 4
+        lines.append(
+            f"- {quote}: {format_number(totals[quote], decimals)} "
+            f"({trade_counts.get(quote, 0)}건)"
+        )
+        estimated_count = estimated_counts.get(quote, 0)
+        if estimated_count:
+            lines.append(
+                f"  참고: {estimated_count}건은 왕복 수수료를 적용해 순손익으로 재계산했습니다."
+            )
+        gross_fallback_count = gross_fallback_counts.get(quote, 0)
+        if gross_fallback_count:
+            lines.append(
+                f"  참고: {gross_fallback_count}건은 순손익 추정 정보가 부족해 실현 손익 기준으로 합산했습니다."
+            )
+    return "\n".join(lines)
+
+
 def build_analysis_text(settings: ListenerSettings) -> str:
     """시장 로그 분석과 전략 퍼널 분석을 함께 요약한 문구를 만든다."""
     sections = [
@@ -703,6 +869,195 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_volume_candidate_text(settings),
     ]
     return "\n\n".join(section for section in sections if section)
+
+
+def iter_recent_trade_records(days: int) -> list[dict]:
+    """최근 N일 기준 체결 이력 레코드를 반환한다."""
+    now = datetime.now()
+    rows: list[dict] = []
+    for path in iter_files("trade_logs", "trade_history.jsonl"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            if is_in_recent_days(str(record.get("recorded_at_local", "")), days, now=now):
+                rows.append(record)
+    return rows
+
+
+def build_weekly_trade_quality_text(days: int = 7, limit: int = 8) -> str:
+    """최근 N일 기준 체결 품질 요약을 만든다."""
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    for record in iter_recent_trade_records(days):
+        if record.get("side") != "sell":
+            continue
+        key = (
+            str(record.get("program_name", "")),
+            str(record.get("symbol", "")),
+            str(record.get("quote_currency", "")),
+        )
+        grouped.setdefault(key, []).append(record)
+
+    if not grouped:
+        return f"최근 {days}일 거래 품질 요약\n- 아직 최근 {days}일 체결 데이터가 없습니다."
+
+    lines = [f"최근 {days}일 거래 품질 요약"]
+    sorted_groups = sorted(
+        grouped.items(),
+        key=lambda item: (-len(item[1]), item[0][0], item[0][1]),
+    )
+    for (program_name, symbol, quote_currency), records in sorted_groups[:limit]:
+        pnl_values: list[float] = []
+        mfe_values: list[float] = []
+        mae_values: list[float] = []
+        win_count = 0
+        exit_reasons: dict[str, int] = {}
+        net_quote_total = 0.0
+
+        for record in records:
+            pnl_value = safe_float(record.get("net_realized_pnl_pct"))
+            if pnl_value is None:
+                pnl_value = safe_float(record.get("realized_pnl_pct"))
+            if pnl_value is not None:
+                pnl_values.append(pnl_value)
+                if pnl_value > 0:
+                    win_count += 1
+
+            mfe_value = safe_float(record.get("mfe_pct"))
+            if mfe_value is not None:
+                mfe_values.append(mfe_value)
+
+            mae_value = safe_float(record.get("mae_pct"))
+            if mae_value is not None:
+                mae_values.append(mae_value)
+
+            net_quote = safe_float(record.get("net_realized_pnl_quote"))
+            if net_quote is None:
+                net_quote = safe_float(record.get("realized_pnl_quote"))
+            if net_quote is not None:
+                net_quote_total += net_quote
+
+            reason = str(record.get("reason", "")).strip() or "-"
+            exit_reasons[reason] = exit_reasons.get(reason, 0) + 1
+
+        avg_pnl = f"{(sum(pnl_values) / len(pnl_values)):.3f}" if pnl_values else "-"
+        avg_mfe = f"{(sum(mfe_values) / len(mfe_values)):.3f}" if mfe_values else "-"
+        avg_mae = f"{(sum(mae_values) / len(mae_values)):.3f}" if mae_values else "-"
+        win_rate = f"{(win_count / len(records)) * 100:.1f}%" if records else "-"
+        top_exit_reason = sorted(exit_reasons.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        decimals = 0 if quote_currency == "KRW" else 4
+        lines.append(
+            f"- {program_name} | {symbol} | 거래 {len(records)}건 | 승률 {win_rate} | "
+            f"평균 손익 {avg_pnl}% | 총 순손익 {format_number(net_quote_total, decimals)} {quote_currency} | "
+            f"MFE {avg_mfe}% / MAE {avg_mae}% | 대표 청산 {top_exit_reason}"
+        )
+    return "\n".join(lines)
+
+
+def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
+    """최근 N일 기준 전략 퍼널 요약을 만든다."""
+    base_dir = Path("structured_logs/live")
+    if not base_dir.exists():
+        return f"최근 {days}일 전략 퍼널 요약\n- 구조화 전략 로그가 아직 없습니다."
+
+    now = datetime.now()
+    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+    for program_name in analyze_strategy_logs.find_program_names(base_dir):
+        for record in analyze_strategy_logs.read_program_records(base_dir, program_name, "strategy.jsonl"):
+            if not is_in_recent_days(str(record.get("recorded_at_local", "")), days, now=now):
+                continue
+            key = (program_name, str(record.get("symbol", "")), str(record.get("side", "")))
+            bucket = grouped.setdefault(
+                key,
+                {
+                    "scans": 0,
+                    "ready": 0,
+                    "filled": 0,
+                    "block_reasons": {},
+                },
+            )
+            if record.get("stage") == "scan" and record.get("result") == "seen":
+                bucket["scans"] = int(bucket["scans"]) + 1
+            if record.get("result") == "ready" and record.get("stage") in {"buy_ready", "sell_ready"}:
+                bucket["ready"] = int(bucket["ready"]) + 1
+            if record.get("stage") == "filled" and record.get("result") == "filled":
+                bucket["filled"] = int(bucket["filled"]) + 1
+            if record.get("result") == "blocked":
+                reason = str(record.get("reason", "")).strip() or "-"
+                block_reasons = bucket["block_reasons"]
+                if isinstance(block_reasons, dict):
+                    block_reasons[reason] = int(block_reasons.get(reason, 0)) + 1
+
+    if not grouped:
+        return f"최근 {days}일 전략 퍼널 요약\n- 아직 최근 {days}일 전략 로그가 없습니다."
+
+    lines = [f"최근 {days}일 전략 퍼널 요약"]
+    rows = sorted(
+        grouped.items(),
+        key=lambda item: (-int(item[1]["scans"]), item[0][0], item[0][1], item[0][2]),
+    )
+    for (program_name, symbol, side), bucket in rows[:limit]:
+        block_reasons = bucket["block_reasons"] if isinstance(bucket["block_reasons"], dict) else {}
+        top_block_reason = "-"
+        if block_reasons:
+            top_block_reason = sorted(block_reasons.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        lines.append(
+            f"- {program_name} | {symbol} {side} | "
+            f"scan {bucket['scans']} -> ready {bucket['ready']} -> filled {bucket['filled']} | "
+            f"주요 병목 {top_block_reason}"
+        )
+    return "\n".join(lines)
+
+
+def build_weekly_time_of_day_text(days: int = 7, limit: int = 6) -> str:
+    """최근 N일 기준 시간대 성과 요약을 만든다."""
+    grouped: dict[int, list[float]] = {}
+    for record in iter_recent_trade_records(days):
+        if record.get("side") != "sell":
+            continue
+        parsed = parse_local_timestamp(str(record.get("recorded_at_local", "")))
+        if parsed is None:
+            continue
+        pnl_value = safe_float(record.get("net_realized_pnl_pct"))
+        if pnl_value is None:
+            pnl_value = safe_float(record.get("realized_pnl_pct"))
+        if pnl_value is None:
+            continue
+        grouped.setdefault(parsed.hour, []).append(pnl_value)
+
+    if not grouped:
+        return f"최근 {days}일 시간대 성과 요약\n- 아직 최근 {days}일 시간대별 체결 데이터가 없습니다."
+
+    rows = sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0]))
+    lines = [f"최근 {days}일 시간대 성과 요약"]
+    for hour, values in rows[:limit]:
+        avg_pnl = sum(values) / len(values)
+        lines.append(
+            f"- {hour:02d}시 | 거래 {len(values)}건 | 평균 손익 {avg_pnl:.3f}%"
+        )
+    return "\n".join(lines)
+
+
+def build_weekly_report_text(settings: ListenerSettings) -> str:
+    """최근 7일 기준 주간 리포트 문구를 만든다."""
+    now = datetime.now()
+    start = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    end = now.strftime("%Y-%m-%d %H:%M:%S")
+    return "\n\n".join(
+        [
+            "주간 리포트",
+            f"집계 구간: {start} ~ {end}",
+            build_period_pnl_text(7, title="최근 7일 누적 실현 손익"),
+            build_weekly_trade_quality_text(7),
+            build_weekly_funnel_text(7),
+            build_weekly_time_of_day_text(7),
+            build_volume_candidate_text(settings),
+        ]
+    )
 
 
 def build_market_analysis_text(settings: ListenerSettings) -> str:
@@ -1391,6 +1746,8 @@ def build_response_text(command: str, settings: ListenerSettings) -> str:
         return build_pnl_text()
     if command == "/analysis":
         return build_analysis_text(settings)
+    if command == "/weekly":
+        return build_weekly_report_text(settings)
     if command == "/last":
         return build_last_logs_text(settings)
     if command in {"/start", "/help"}:
@@ -1462,6 +1819,26 @@ def maybe_send_scheduled_reports(
         if sent:
             report_state[state_key] = today
             save_report_state(settings.report_state_path, report_state)
+
+    if not settings.weekly_report_enabled:
+        return
+
+    if now.weekday() != settings.weekly_report_weekday:
+        return
+    if now.hour != settings.weekly_report_hour:
+        return
+
+    week_key = now.strftime("%G-W%V")
+    if report_state.get("weekly_date") == week_key:
+        return
+
+    text = build_weekly_report_text(settings)
+    sent, error = send_text_in_chunks(notifier, text)
+    result_text = "성공" if sent else f"실패 ({error})"
+    logger.log(f"주간 리포트 전송 결과: {result_text}")
+    if sent:
+        report_state["weekly_date"] = week_key
+        save_report_state(settings.report_state_path, report_state)
 
 
 def send_test_message() -> int:

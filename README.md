@@ -117,6 +117,7 @@
 - 텔레그램에서 `/status`
 - 텔레그램에서 `/pnl`
 - 텔레그램에서 `/analysis`
+- 텔레그램에서 `/weekly`
 - 필요할 때 `.venv/bin/python bot_manager.py status`
 
 ### 정기 분석
@@ -129,7 +130,7 @@
 
 ## 로그 수집, 분석, 확인 프로세스
 
-평소에는 `.venv/bin/python bot_manager.py start all` 로 매매 봇 4개, 시장 분석 수집기, 텔레그램 리스너를 항상 켜두고 로그를 계속 쌓습니다. 이렇게 하면 운영용 텍스트 로그는 `logs/YYYY-MM-DD/*.log`, 시장 상태 로그는 `analysis_logs/YYYY-MM-DD/*.jsonl`, 전략 판단 로그는 `structured_logs/live/YYYY-MM-DD/*/strategy.jsonl`, 체결 로그는 `trade_logs/YYYY-MM-DD/trade_history.jsonl` 과 `structured_logs/live/YYYY-MM-DD/*/trade.jsonl` 에 함께 기록됩니다. 수시 상태 확인은 텔레그램에서 `/status`, `/pnl`, `/analysis` 로 하고, 며칠 간 로그가 쌓이면 `.venv/bin/python analyze_strategy_logs.py` 로 퍼널 병목과 차단 사유를 보고, `.venv/bin/python analyze_logs.py` 로 코인별 이격도/변동성/거래량 특성을 확인하면 됩니다. 즉 순서는 `항상 수집 -> 텔레그램으로 수시 확인 -> analyze_strategy_logs.py 로 전략 병목 분석 -> analyze_logs.py 로 시장 특성 분석` 으로 보시면 됩니다.
+평소에는 `.venv/bin/python bot_manager.py start all` 로 매매 봇 4개, 시장 분석 수집기, 텔레그램 리스너를 항상 켜두고 로그를 계속 쌓습니다. 이렇게 하면 운영용 텍스트 로그는 `logs/YYYY-MM-DD/*.log`, 시장 상태 로그는 `analysis_logs/YYYY-MM-DD/*.jsonl`, 전략 판단 로그는 `structured_logs/live/YYYY-MM-DD/*/strategy.jsonl`, 체결 로그는 `trade_logs/YYYY-MM-DD/trade_history.jsonl` 과 `structured_logs/live/YYYY-MM-DD/*/trade.jsonl` 에 함께 기록됩니다. 수시 상태 확인은 텔레그램에서 `/status`, `/pnl`, `/analysis`, `/weekly` 로 하고, 며칠 간 로그가 쌓이면 `.venv/bin/python analyze_strategy_logs.py` 로 퍼널 병목과 차단 사유를 보고, `.venv/bin/python analyze_logs.py` 로 코인별 이격도/변동성/거래량 특성을 확인하면 됩니다. 즉 순서는 `항상 수집 -> 텔레그램으로 수시 확인 -> analyze_strategy_logs.py 로 전략 병목 분석 -> analyze_logs.py 로 시장 특성 분석` 으로 보시면 됩니다.
 
 전략 값을 왜 바꿨는지와 어떤 로그를 근거로 조정했는지는 `STRATEGY_DECISIONS.md` 에 계속 누적 기록합니다.
 
@@ -202,6 +203,7 @@
 - `/positions`: 현재 거래소 잔고와 보유 포지션 평가 금액 요약
 - `/pnl`: 오늘 누적 실현 손익 요약
 - `/analysis`: 최근 분석 로그 요약
+- `/weekly`: 최근 7일 기준 주간 리포트
 - `/last`: 최근 운영 로그 끝부분 확인
 - `/help`: 명령 도움말
 
@@ -233,6 +235,22 @@
 - 최근 1주 거래량 기준 신규 후보 코인 3개씩
 - 최근 체결 내역
 - 오늘 스킵 사유 요약
+
+## 텔레그램 주간 리포트
+
+텔레그램 명령 리스너가 실행 중이면 `.env` 설정에 따라 최근 7일 기준 주간 리포트도 자동으로 전송됩니다.
+
+- 사용 여부: `TELEGRAM_WEEKLY_REPORT_ENABLED=true`
+- 기본 전송 요일: `TELEGRAM_WEEKLY_REPORT_WEEKDAY=MON`
+- 기본 전송 시각: `TELEGRAM_WEEKLY_REPORT_HOUR=9`
+
+현재 주간 리포트에는 아래 내용이 함께 들어갑니다.
+
+- 최근 7일 누적 실현 손익
+- 최근 7일 거래 품질 요약
+- 최근 7일 전략 퍼널 요약
+- 최근 7일 시간대 성과 요약
+- 최근 1주 거래량 기준 신규 후보 코인
 
 ## 현재 운영 방향
 
