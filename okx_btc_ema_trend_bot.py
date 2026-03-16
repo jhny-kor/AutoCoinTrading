@@ -1,5 +1,7 @@
 """
 수정 요약
+- OKX BTC 매도 체결 로그에도 왕복 수수료를 반영한 순손익을 함께 저장해 /pnl 집계가 net 기준으로 가능하도록 보강
+- OKX BTC 에서 최소 주문 수량 미만 잔량은 포지션으로 보지 않아 잔량 보유 중에도 재진입할 수 있게 조정
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
 - BTC 전략 버전 이름(strategy_version)을 구조화 로그와 체결 이력에 함께 남겨 버전별 비교가 가능하도록 확장
 - BTC 거래 품질 분석용으로 최저가, MFE/MAE, 트레일링 활성화 소요 시간까지 체결 로그에 함께 남기도록 확장
@@ -44,7 +46,7 @@ from ma_crossover_bot import (
 )
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
 from telegram_notifier import load_telegram_notifier
-from trade_history_logger import TradeHistoryLogger
+from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 
 
 def calc_ema_series(prices: list[float], period: int) -> list[float]:
@@ -287,7 +289,8 @@ def run_bot():
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
             base_free, quote_free = get_spot_balances(exchange, base, quote)
-            has_position = base_free > 0.00001
+            # 최소 주문 수량보다 작은 잔량은 즉시 정리할 수 없으므로 포지션에서 제외한다.
+            has_position = base_free >= settings.min_order_amount
             if has_position and entry_price is None:
                 entry_price = last_close
                 entry_opened_at = entry_opened_at or time.time()
@@ -822,6 +825,9 @@ def run_bot():
                         raise
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
+                    fee_quote_estimate = None
+                    net_realized_pnl_quote = None
+                    net_realized_pnl_pct = None
                     holding_seconds = None
                     trailing_armed_seconds = None
                     activation_to_exit_seconds = None
@@ -839,6 +845,17 @@ def run_bot():
                     if entry_price:
                         realized_pnl_pct = (last_close - entry_price) / entry_price * 100
                         realized_pnl_quote = (last_close - entry_price) * amount
+                        (
+                            fee_quote_estimate,
+                            net_realized_pnl_quote,
+                            net_realized_pnl_pct,
+                        ) = estimate_round_trip_net_pnl(
+                            entry_price=entry_price,
+                            exit_price=last_close,
+                            amount=amount,
+                            fee_rate_pct=config["fee_rate_pct"],
+                            realized_pnl_quote=realized_pnl_quote,
+                        )
                         daily_realized_pnl_quote += realized_pnl_quote
                     if stop_triggered:
                         last_stop_loss_at = time.time()
@@ -905,6 +922,10 @@ def run_bot():
                         leg_index=1,
                         is_final_exit=True,
                         holding_seconds=holding_seconds,
+                        fee_rate_pct=config["fee_rate_pct"],
+                        fee_quote_estimate=fee_quote_estimate,
+                        net_realized_pnl_quote=net_realized_pnl_quote,
+                        net_realized_pnl_pct=net_realized_pnl_pct,
                         highest_price_since_entry=highest_price_since_entry,
                         lowest_price_since_entry=lowest_price_since_entry,
                         mfe_pct=mfe_pct,

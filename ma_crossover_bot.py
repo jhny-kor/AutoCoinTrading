@@ -1,5 +1,7 @@
 """
 수정 요약
+- OKX 알트 매도 체결 로그에도 왕복 수수료 추정 기반 순손익을 함께 남겨 /pnl 집계가 일관되도록 보강
+- OKX 알트에서 최소 주문 수량 미만 잔량은 내부 포지션 상태도 함께 초기화해 재진입이 막히지 않도록 조정
 - 알트 포지션의 최고가/최저가, MFE/MAE, 보유시간을 체결 로그에 함께 남겨 거래 품질 분석이 가능하도록 확장
 - 알트 보수형 trend_follow_entry 를 추가해 연속 MA 상단 유지와 상승 확인 시 제한적으로 신규 진입을 허용
 - 심볼별 거래량 기준을 읽어 PI 와 다른 알트 코인의 진입 품질 기준을 분리할 수 있게 개선
@@ -41,7 +43,7 @@ from bot_logger import BLUE, RED, BotLogger
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
-from trade_history_logger import TradeHistoryLogger
+from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 
 def load_config() -> dict:
     """환경 변수와 기본 설정 로드."""
@@ -478,6 +480,21 @@ def run_bot():
                         symbol=symbol,
                         context={"bootstrap_entry_price": last_close},
                     )
+                elif not has_position:
+                    # 최소 주문 수량 미만 잔량은 신규 포지션으로 다시 진입할 수 있도록 내부 상태를 비운다.
+                    if (
+                        symbol in entry_price
+                        or symbol in entry_count
+                        or symbol in entry_opened_at
+                    ):
+                        entry_price.pop(symbol, None)
+                        entry_count.pop(symbol, None)
+                        entry_opened_at.pop(symbol, None)
+                        highest_price_since_entry.pop(symbol, None)
+                        lowest_price_since_entry.pop(symbol, None)
+                        log(
+                            f"[{symbol}] 최소 주문 수량 미만 잔량은 포지션에서 제외하고 재진입 가능 상태로 초기화합니다."
+                        )
 
                 current_entry_count = entry_count.get(symbol, 0)
                 last_trade_ts = last_trade_at.get(symbol, 0.0)
@@ -1124,6 +1141,17 @@ def run_bot():
                         if entry:
                             realized_pnl_pct = (last_close - entry) / entry * 100
                             realized_pnl_quote = (last_close - entry) * amount
+                            (
+                                fee_quote_estimate,
+                                net_realized_pnl_quote,
+                                net_realized_pnl_pct,
+                            ) = estimate_round_trip_net_pnl(
+                                entry_price=entry,
+                                exit_price=last_close,
+                                amount=amount,
+                                fee_rate_pct=config["fee_rate_pct"],
+                                realized_pnl_quote=realized_pnl_quote,
+                            )
                             daily_realized_pnl_quote += realized_pnl_quote
                             holding_seconds = None
                             if symbol in entry_opened_at:
@@ -1210,6 +1238,10 @@ def run_bot():
                                 timeframe=timeframe,
                                 ma_period=ma_period,
                                 strategy_version=strategy.version,
+                                fee_rate_pct=config["fee_rate_pct"],
+                                fee_quote_estimate=fee_quote_estimate,
+                                net_realized_pnl_quote=net_realized_pnl_quote,
+                                net_realized_pnl_pct=net_realized_pnl_pct,
                                 highest_price_since_entry=highest_price_since_entry.get(symbol),
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,

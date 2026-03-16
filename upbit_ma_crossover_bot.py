@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 알트 매도 체결 로그도 왕복 수수료 기준 순손익을 함께 남겨 /pnl 집계가 모두 net 기준으로 가능하도록 보강
 - 업비트 알트에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
 - 업비트 알트에서 최소 주문 금액 미만 잔량은 내부 포지션 상태도 함께 초기화해 재진입이 막히지 않도록 조정
 - 공통 전략 버전 이름(strategy_version)을 구조화 로그와 체결 이력에 함께 남겨 버전별 비교가 가능하도록 확장
@@ -45,7 +46,7 @@ from bot_logger import BLUE, RED, BotLogger
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
-from trade_history_logger import TradeHistoryLogger
+from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 
 def load_config() -> dict:
     """환경 변수와 기본 설정 로드 (업비트용)."""
@@ -999,6 +1000,17 @@ def run_bot():
                         if entry:
                             realized_pnl_pct = (last_close - entry) / entry * 100
                             realized_pnl_quote = (last_close - entry) * amount
+                            (
+                                fee_quote_estimate,
+                                net_realized_pnl_quote,
+                                net_realized_pnl_pct,
+                            ) = estimate_round_trip_net_pnl(
+                                entry_price=entry,
+                                exit_price=last_close,
+                                amount=amount,
+                                fee_rate_pct=config["fee_rate_pct"],
+                                realized_pnl_quote=realized_pnl_quote,
+                            )
                             daily_realized_pnl_quote += realized_pnl_quote
                             holding_seconds = None
                             if symbol in entry_opened_at:
@@ -1085,6 +1097,10 @@ def run_bot():
                                 remaining_base_after_estimate=remaining_base,
                                 timeframe=timeframe,
                                 ma_period=ma_period,
+                                fee_rate_pct=config["fee_rate_pct"],
+                                fee_quote_estimate=fee_quote_estimate,
+                                net_realized_pnl_quote=net_realized_pnl_quote,
+                                net_realized_pnl_pct=net_realized_pnl_pct,
                                 highest_price_since_entry=highest_price_since_entry.get(symbol),
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,

@@ -1,5 +1,6 @@
 """
 수정 요약
+- /pnl 이 과거 체결도 가능한 범위에서 순손익으로 재추정해 통화별 손순익 집계가 최대한 완전하게 보이도록 보강
 - /analysis 와 정기 리포트에 거래 품질 요약, 필터 기준 부족 폭, 시간대 성과 요약까지 함께 넣도록 확장
 - 텔레그램 명령 리스너 자체의 런타임 예외도 즉시 텔레그램으로 알리도록 보강
 - /pnl 이 프로그램별 최신 문구가 아니라 KRW, USDT 기준 오늘 누적 손익을 체결 이력에서 다시 합산해 보여주도록 개선
@@ -71,6 +72,7 @@ from ma_crossover_bot import (
 )
 from telegram_notifier import load_telegram_notifier
 from telegram_notifier import format_telegram_request_error
+from trade_history_logger import estimate_round_trip_net_pnl
 from strategy_settings import load_alt_symbols, load_managed_symbols
 from upbit_ma_crossover_bot import (
     create_upbit_client,
@@ -529,7 +531,8 @@ def build_pnl_text() -> str:
     today_prefix = datetime.now().strftime("%Y-%m-%d")
     totals: dict[str, float] = {}
     trade_counts: dict[str, int] = {}
-    fallback_counts: dict[str, int] = {}
+    estimated_counts: dict[str, int] = {}
+    gross_fallback_counts: dict[str, int] = {}
 
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
@@ -552,14 +555,34 @@ def build_pnl_text() -> str:
 
         net_value = record.get("net_realized_pnl_quote")
         gross_value = record.get("realized_pnl_quote")
-        used_fallback = False
+        used_estimated_net = False
+        used_gross_fallback = False
 
         try:
             if net_value not in (None, ""):
                 pnl_value = float(net_value)
             elif gross_value not in (None, ""):
-                pnl_value = float(gross_value)
-                used_fallback = True
+                fee_rate_pct = record.get("fee_rate_pct")
+                if fee_rate_pct in (None, ""):
+                    exchange_name = str(record.get("exchange", "")).strip().upper()
+                    if exchange_name == "UPBIT":
+                        fee_rate_pct = os.getenv("UPBIT_FEE_RATE_PCT", "0.05")
+                    elif exchange_name == "OKX":
+                        fee_rate_pct = os.getenv("OKX_FEE_RATE_PCT", "1.0")
+
+                estimated_fee, estimated_net, _ = estimate_round_trip_net_pnl(
+                    entry_price=record.get("estimated_entry_price"),
+                    exit_price=record.get("reference_price"),
+                    amount=record.get("amount"),
+                    fee_rate_pct=fee_rate_pct,
+                    realized_pnl_quote=gross_value,
+                )
+                if estimated_fee is not None and estimated_net is not None:
+                    pnl_value = float(estimated_net)
+                    used_estimated_net = True
+                else:
+                    pnl_value = float(gross_value)
+                    used_gross_fallback = True
             else:
                 continue
         except (TypeError, ValueError):
@@ -567,8 +590,10 @@ def build_pnl_text() -> str:
 
         totals[quote] = totals.get(quote, 0.0) + pnl_value
         trade_counts[quote] = trade_counts.get(quote, 0) + 1
-        if used_fallback:
-            fallback_counts[quote] = fallback_counts.get(quote, 0) + 1
+        if used_estimated_net:
+            estimated_counts[quote] = estimated_counts.get(quote, 0) + 1
+        if used_gross_fallback:
+            gross_fallback_counts[quote] = gross_fallback_counts.get(quote, 0) + 1
 
     if not totals:
         return "오늘 누적 실현 손익\n- 오늘 집계된 실현 손익 체결이 아직 없습니다."
@@ -580,10 +605,15 @@ def build_pnl_text() -> str:
             f"- {quote}: {format_number(totals[quote], decimals)} "
             f"({trade_counts.get(quote, 0)}건)"
         )
-        fallback_count = fallback_counts.get(quote, 0)
-        if fallback_count:
+        estimated_count = estimated_counts.get(quote, 0)
+        if estimated_count:
             lines.append(
-                f"  참고: {fallback_count}건은 순손익 값이 없어 실현 손익 기준으로 합산했습니다."
+                f"  참고: {estimated_count}건은 왕복 수수료를 적용해 순손익으로 재계산했습니다."
+            )
+        gross_fallback_count = gross_fallback_counts.get(quote, 0)
+        if gross_fallback_count:
+            lines.append(
+                f"  참고: {gross_fallback_count}건은 순손익 추정 정보가 부족해 실현 손익 기준으로 합산했습니다."
             )
     return "\n".join(lines)
 

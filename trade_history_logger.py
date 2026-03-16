@@ -1,6 +1,7 @@
 """
 체결 결과 구조화 로거
 
+- 체결 시 왕복 수수료 추정치를 이용한 순손익 계산 helper 를 함께 제공해 로그 기록 기준을 통일
 - strategy_version 을 최상위 필드로 남겨 버전별 성과 비교가 가능하도록 확장
 - 진입 후 최고가/최저가, MFE/MAE, 트레일링 활성화 소요 시간 같은 거래 품질 필드도 함께 저장하도록 확장
 - 매수, 익절 매도, 손절 매도 체결 결과를 JSONL 형식으로 저장한다.
@@ -27,6 +28,52 @@ def to_json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [to_json_safe(item) for item in value]
     return str(value)
+
+
+def estimate_round_trip_net_pnl(
+    *,
+    entry_price: float | None,
+    exit_price: float | None,
+    amount: float | None,
+    fee_rate_pct: float | None,
+    realized_pnl_quote: float | None = None,
+) -> tuple[float | None, float | None, float | None]:
+    """왕복 수수료를 추정해 순손익 금액과 비율을 계산한다."""
+    if (
+        entry_price in (None, 0)
+        or exit_price in (None, 0)
+        or amount in (None, 0)
+        or fee_rate_pct in (None, "")
+    ):
+        return None, None, None
+
+    try:
+        entry_price_float = float(entry_price)
+        exit_price_float = float(exit_price)
+        amount_float = float(amount)
+        fee_rate_pct_float = float(fee_rate_pct)
+    except (TypeError, ValueError):
+        return None, None, None
+
+    if entry_price_float <= 0 or exit_price_float <= 0 or amount_float <= 0:
+        return None, None, None
+
+    gross_quote = (
+        float(realized_pnl_quote)
+        if realized_pnl_quote not in (None, "")
+        else (exit_price_float - entry_price_float) * amount_float
+    )
+    fee_rate = fee_rate_pct_float / 100.0
+    fee_quote_estimate = (
+        entry_price_float * amount_float * fee_rate
+        + exit_price_float * amount_float * fee_rate
+    )
+    net_realized_pnl_quote = gross_quote - fee_quote_estimate
+    entry_notional = entry_price_float * amount_float
+    net_realized_pnl_pct = (
+        (net_realized_pnl_quote / entry_notional) * 100 if entry_notional > 0 else None
+    )
+    return fee_quote_estimate, net_realized_pnl_quote, net_realized_pnl_pct
 
 
 class TradeHistoryLogger:

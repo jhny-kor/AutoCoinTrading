@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 BTC 순손익 계산을 매도 수수료만이 아니라 왕복 수수료 기준으로 통일해 /pnl 집계가 더 정확해지도록 보강
 - 업비트 BTC 에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
 - 업비트 BTC 에서 최소 주문 금액 미만 잔량은 포지션으로 보지 않아 잔량 보유 중에도 재진입할 수 있게 조정
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
@@ -38,7 +39,7 @@ from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
 from telegram_notifier import load_telegram_notifier
-from trade_history_logger import TradeHistoryLogger
+from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 from upbit_ma_crossover_bot import (
     create_upbit_client,
     fetch_ohlcv,
@@ -830,9 +831,9 @@ def run_bot():
                     )
                     trailing_armed_seconds = None
                     activation_to_exit_seconds = None
-                    fee_quote_estimate = 0.0
-                    net_realized_pnl_quote = realized_pnl_quote
-                    net_realized_pnl_pct = realized_pnl_pct
+                    fee_quote_estimate = None
+                    net_realized_pnl_quote = None
+                    net_realized_pnl_pct = None
                     if entry_opened_at is not None:
                         holding_seconds = max(0.0, time.time() - entry_opened_at)
                     if entry_opened_at is not None and trailing_armed_at is not None:
@@ -843,12 +844,16 @@ def run_bot():
                         realized_pnl_pct = (last_close - entry_price) / entry_price * 100
                         realized_pnl_quote = (last_close - entry_price) * amount
                         daily_realized_pnl_quote += realized_pnl_quote
-                        fee_quote_estimate = (amount * last_close) * (config["fee_rate_pct"] / 100)
-                        net_realized_pnl_quote = realized_pnl_quote - fee_quote_estimate
-                        net_realized_pnl_pct = (
-                            (net_realized_pnl_quote / (entry_price * amount)) * 100
-                            if entry_price and amount
-                            else realized_pnl_pct
+                        (
+                            fee_quote_estimate,
+                            net_realized_pnl_quote,
+                            net_realized_pnl_pct,
+                        ) = estimate_round_trip_net_pnl(
+                            entry_price=entry_price,
+                            exit_price=last_close,
+                            amount=amount,
+                            fee_rate_pct=config["fee_rate_pct"],
+                            realized_pnl_quote=realized_pnl_quote,
                         )
                     if stop_triggered:
                         last_stop_loss_at = time.time()
