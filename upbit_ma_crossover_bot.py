@@ -1,5 +1,6 @@
 """
 수정 요약
+- 심볼별 부분익절/부분손절 설정을 지원하고 ETH/XRP 같은 선택 알트에만 1회 부분청산을 적용하도록 확장
 - 업비트 알트 매도 체결 로그도 왕복 수수료 기준 순손익을 함께 남겨 /pnl 집계가 모두 net 기준으로 가능하도록 보강
 - 업비트 알트에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
 - 업비트 알트에서 최소 주문 금액 미만 잔량은 내부 포지션 상태도 함께 초기화해 재진입이 막히지 않도록 조정
@@ -209,6 +210,9 @@ def run_bot():
     # 심볼별 진입 후 최고가/최저가 저장 (MFE/MAE 분석용)
     highest_price_since_entry = {}
     lowest_price_since_entry = {}
+    # 심볼별 부분익절/부분손절 1회 실행 여부 저장
+    partial_take_profit_done = {}
+    partial_stop_loss_done = {}
     # 심볼별 분할 진입 횟수 저장
     entry_count = {}
     # 심볼별 마지막 거래 시각 저장
@@ -377,6 +381,8 @@ def run_bot():
                         entry_opened_at.pop(symbol, None)
                         highest_price_since_entry.pop(symbol, None)
                         lowest_price_since_entry.pop(symbol, None)
+                        partial_take_profit_done.pop(symbol, None)
+                        partial_stop_loss_done.pop(symbol, None)
                         log(
                             f"[{symbol}] 최소 주문 금액 미만 잔량은 포지션에서 제외하고 재진입 가능 상태로 초기화합니다."
                         )
@@ -490,6 +496,16 @@ def run_bot():
                 fee_round_trip_pct = config["fee_rate_pct"] * 2
                 take_profit_pct = strategy.get_take_profit_pct(symbol)
                 stop_loss_pct = strategy.get_stop_loss_pct(symbol)
+                partial_take_profit_enabled = strategy.uses_partial_take_profit(symbol)
+                partial_stop_loss_enabled = strategy.uses_partial_stop_loss(symbol)
+                partial_take_profit_pending = (
+                    partial_take_profit_enabled
+                    and not partial_take_profit_done.get(symbol, False)
+                )
+                partial_stop_loss_pending = (
+                    partial_stop_loss_enabled
+                    and not partial_stop_loss_done.get(symbol, False)
+                )
                 effective_min_take_profit_pct = max(
                     take_profit_pct,
                     fee_round_trip_pct * 1.1,
@@ -572,6 +588,8 @@ def run_bot():
                     "pnl_pct": pnl_pct,
                     "daily_realized_pnl_quote": daily_realized_pnl_quote,
                     "fee_round_trip_pct": fee_round_trip_pct,
+                    "partial_take_profit_pending": partial_take_profit_pending,
+                    "partial_stop_loss_pending": partial_stop_loss_pending,
                 }
 
                 entry_steps = [
@@ -936,9 +954,24 @@ def run_bot():
 
                 # 매도 신호 발생 시, 분할 청산 + 최소 익절률 조건을 만족하면 청산
                 elif exit_ready:
-                    sell_amount = base_free if stop_loss_triggered else (
-                        base_free * strategy.sell_split_ratio
-                    )
+                    sell_ratio = strategy.sell_split_ratio
+                    exit_reason_key = "take_profit"
+                    sell_reason = "익절"
+                    if stop_loss_triggered:
+                        if partial_stop_loss_pending:
+                            sell_ratio = strategy.partial_stop_loss_ratio
+                            exit_reason_key = "partial_stop_loss"
+                            sell_reason = "부분손절"
+                        else:
+                            sell_ratio = 1.0
+                            exit_reason_key = "stop_loss"
+                            sell_reason = "손절"
+                    elif partial_take_profit_pending:
+                        sell_ratio = strategy.partial_take_profit_ratio
+                        exit_reason_key = "partial_take_profit"
+                        sell_reason = "부분익절"
+
+                    sell_amount = base_free * sell_ratio
                     amount = safe_amount_to_precision(
                         exchange, symbol, sell_amount
                     )
@@ -950,7 +983,6 @@ def run_bot():
                             f"[{symbol}] 예상 매도 금액이 {strategy.min_buy_order_value} {quote} 이하라 매도 주문을 생략합니다."
                         )
                     else:
-                        sell_reason = "손절" if stop_loss_triggered else "익절"
                         structured_logger.log_strategy(
                             symbol=symbol,
                             side="exit",
@@ -1022,9 +1054,7 @@ def run_bot():
                                 side="exit",
                                 stage="filled",
                                 result="filled",
-                                reason="stop_loss_filled"
-                                if stop_loss_triggered
-                                else "take_profit_filled",
+                                reason=f"{exit_reason_key}_filled",
                                 actual={
                                     "filled_amount": amount,
                                     "realized_pnl_pct": realized_pnl_pct,
@@ -1038,9 +1068,7 @@ def run_bot():
                             structured_logger.log_trade_event(
                                 symbol=symbol,
                                 side="sell",
-                                reason="stop_loss"
-                                if stop_loss_triggered
-                                else "take_profit",
+                                reason=exit_reason_key,
                                 result="filled",
                                 actual={
                                     "filled_amount": amount,
@@ -1081,7 +1109,7 @@ def run_bot():
                                 strategy_version=strategy.version,
                                 symbol=symbol,
                                 side="sell",
-                                reason="stop_loss" if stop_loss_triggered else "take_profit",
+                                reason=exit_reason_key,
                                 base_currency=base,
                                 quote_currency=quote,
                                 amount=amount,
@@ -1108,6 +1136,7 @@ def run_bot():
                                 raw_order=order,
                                 extra={
                                     "strategy_version": strategy.version,
+                                    "sell_ratio": sell_ratio,
                                     "bearish_signal": bearish,
                                     "signal_is_strong": signal_is_strong,
                                     "gap_pct": gap_pct,
@@ -1120,12 +1149,18 @@ def run_bot():
                                     "holding_seconds": holding_seconds,
                                 },
                             )
+                            if exit_reason_key == "partial_take_profit" and remaining_base > 0.00000001:
+                                partial_take_profit_done[symbol] = True
+                            if exit_reason_key == "partial_stop_loss" and remaining_base > 0.00000001:
+                                partial_stop_loss_done[symbol] = True
                             # 포지션 청산 후 진입가 제거
                             if remaining_base <= 0.00000001:
                                 entry_price.pop(symbol, None)
                                 entry_opened_at.pop(symbol, None)
                                 highest_price_since_entry.pop(symbol, None)
                                 lowest_price_since_entry.pop(symbol, None)
+                                partial_take_profit_done.pop(symbol, None)
+                                partial_stop_loss_done.pop(symbol, None)
                         else:
                             structured_logger.log_strategy(
                                 symbol=symbol,
@@ -1155,7 +1190,7 @@ def run_bot():
                                 strategy_version=strategy.version,
                                 symbol=symbol,
                                 side="sell",
-                                reason="stop_loss" if stop_loss_triggered else "take_profit",
+                                reason=exit_reason_key,
                                 base_currency=base,
                                 quote_currency=quote,
                                 amount=amount,
@@ -1175,6 +1210,7 @@ def run_bot():
                                 raw_order=order,
                                 extra={
                                     "strategy_version": strategy.version,
+                                    "sell_ratio": sell_ratio,
                                     "bearish_signal": bearish,
                                     "signal_is_strong": signal_is_strong,
                                     "gap_pct": gap_pct,
@@ -1184,6 +1220,8 @@ def run_bot():
                             )
                             if remaining_base <= 0.00000001:
                                 entry_opened_at.pop(symbol, None)
+                                partial_take_profit_done.pop(symbol, None)
+                                partial_stop_loss_done.pop(symbol, None)
                         log(
                             f"[{symbol}] 분할 매도 후 남은 진입 카운트: {entry_count.get(symbol, 0)}"
                         )

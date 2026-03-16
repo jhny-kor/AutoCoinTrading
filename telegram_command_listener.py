@@ -280,6 +280,69 @@ def normalize_command(text: str) -> str:
     return first
 
 
+def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
+    """텔레그램 최대 길이를 넘지 않도록 문단 중심으로 메시지를 나눈다."""
+    normalized = text.strip()
+    if not normalized:
+        return [""]
+    if len(normalized) <= limit:
+        return [normalized]
+
+    chunks: list[str] = []
+    current = ""
+
+    for paragraph in normalized.split("\n\n"):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+
+        candidate = paragraph if not current else f"{current}\n\n{paragraph}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(paragraph) <= limit:
+            current = paragraph
+            continue
+
+        for line in paragraph.splitlines():
+            line = line.rstrip()
+            candidate = line if not current else f"{current}\n{line}"
+            if len(candidate) <= limit:
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(current)
+                current = ""
+
+            while len(line) > limit:
+                chunks.append(line[:limit])
+                line = line[limit:]
+            current = line
+
+    if current:
+        chunks.append(current)
+    return chunks or [normalized[:limit]]
+
+
+def send_text_in_chunks(notifier, text: str, limit: int = 3900) -> tuple[bool, str | None]:
+    """긴 텔레그램 메시지를 여러 조각으로 나눠 순서대로 전송한다."""
+    last_error: str | None = None
+    sent_any = False
+    for chunk in split_telegram_text(text, limit=limit):
+        sent, error = notifier.send_message_detailed(chunk)
+        if not sent:
+            return False, error
+        sent_any = True
+        last_error = error
+    return sent_any, last_error
+
+
 def format_number(value: float, decimals: int = 4) -> str:
     """지정 소수점 자리수와 천 단위 쉼표를 적용한 숫자 문자열을 만든다."""
     return f"{value:,.{decimals}f}"
@@ -1378,7 +1441,7 @@ def maybe_send_scheduled_reports(
             continue
 
         text = build_daily_report_text(settings, label)
-        sent, error = notifier.send_message_detailed(text[:3900])
+        sent, error = send_text_in_chunks(notifier, text)
         result_text = "성공" if sent else f"실패 ({error})"
         logger.log(f"{label} 일일 리포트 전송 결과: {result_text}")
         if sent:
@@ -1457,7 +1520,7 @@ def run_listener():
                 command = normalize_command(text)
                 log(f"명령 수신: {command}")
                 response_text = build_response_text(command, settings)
-                sent, error = notifier.send_message_detailed(response_text[:3900])
+                sent, error = send_text_in_chunks(notifier, response_text)
                 result_text = "성공" if sent else f"실패 ({error})"
                 log(f"응답 전송 결과: {result_text}")
         except Exception as e:

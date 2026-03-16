@@ -1,5 +1,6 @@
 """
 수정 요약
+- 알트 전략에서 심볼별 부분익절/부분손절 대상과 비율을 .env 에서 읽도록 확장
 - 공통 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
 - 알트 봇에 보수형 trend_follow_entry 설정을 추가해 골든크로스가 아니어도 제한적으로 추세 유지 진입을 허용할 수 있게 개선
 - 연속 MA 상단 유지와 직전 대비 상승 조건을 .env 에서 제어할 수 있도록 확장
@@ -65,6 +66,10 @@ class StrategySettings:
     min_take_profit_pct_map: dict[str, float]
     stop_loss_pct_map: dict[str, float]
     min_order_amount_map: dict[str, float]
+    partial_take_profit_symbols: tuple[str, ...]
+    partial_stop_loss_symbols: tuple[str, ...]
+    partial_take_profit_ratio: float
+    partial_stop_loss_ratio: float
 
     def get_crossover_gap_pct(self, symbol: str) -> float:
         """심볼별 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
@@ -85,6 +90,14 @@ class StrategySettings:
     def get_min_order_amount(self, symbol: str) -> float:
         """심볼별 최소 주문 수량 오버라이드가 있으면 그 값을, 없으면 0을 반환한다."""
         return self.min_order_amount_map.get(symbol, 0.0)
+
+    def uses_partial_take_profit(self, symbol: str) -> bool:
+        """심볼이 부분익절 대상인지 반환한다."""
+        return symbol in self.partial_take_profit_symbols
+
+    def uses_partial_stop_loss(self, symbol: str) -> bool:
+        """심볼이 부분손절 대상인지 반환한다."""
+        return symbol in self.partial_stop_loss_symbols
 
 
 def parse_symbol_list(raw: str | None, default: list[str] | None = None) -> list[str]:
@@ -265,5 +278,17 @@ def load_strategy_settings(
         ),
         min_order_amount_map=parse_symbol_float_map(
             os.getenv("STRATEGY_MIN_ORDER_AMOUNT_MAP", "")
+        ),
+        partial_take_profit_symbols=tuple(
+            parse_symbol_list(os.getenv("STRATEGY_PARTIAL_TAKE_PROFIT_SYMBOLS"), [])
+        ),
+        partial_stop_loss_symbols=tuple(
+            parse_symbol_list(os.getenv("STRATEGY_PARTIAL_STOP_LOSS_SYMBOLS"), [])
+        ),
+        partial_take_profit_ratio=float(
+            os.getenv("STRATEGY_PARTIAL_TP_RATIO", "0.5")
+        ),
+        partial_stop_loss_ratio=float(
+            os.getenv("STRATEGY_PARTIAL_SL_RATIO", "0.5")
         ),
     )
