@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 알트에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
+- 업비트 알트에서 최소 주문 금액 미만 잔량은 내부 포지션 상태도 함께 초기화해 재진입이 막히지 않도록 조정
 - 공통 전략 버전 이름(strategy_version)을 구조화 로그와 체결 이력에 함께 남겨 버전별 비교가 가능하도록 확장
 - 알트 포지션의 최고가/최저가, MFE/MAE, 보유시간을 체결 로그에 함께 남겨 거래 품질 분석이 가능하도록 확장
 - 알트 보수형 trend_follow_entry 를 추가해 연속 MA 상단 유지와 상승 확인 시 제한적으로 신규 진입을 허용
@@ -362,6 +364,21 @@ def run_bot():
                         symbol=symbol,
                         context={"bootstrap_entry_price": last_close},
                     )
+                elif not has_position:
+                    # 최소 주문 금액 미만 잔량은 신규 포지션으로 다시 진입할 수 있도록 내부 상태를 비운다.
+                    if (
+                        symbol in entry_price
+                        or symbol in entry_count
+                        or symbol in entry_opened_at
+                    ):
+                        entry_price.pop(symbol, None)
+                        entry_count.pop(symbol, None)
+                        entry_opened_at.pop(symbol, None)
+                        highest_price_since_entry.pop(symbol, None)
+                        lowest_price_since_entry.pop(symbol, None)
+                        log(
+                            f"[{symbol}] 최소 주문 금액 미만 잔량은 포지션에서 제외하고 재진입 가능 상태로 초기화합니다."
+                        )
 
                 current_entry_count = entry_count.get(symbol, 0)
                 last_trade_ts = last_trade_at.get(symbol, 0.0)
@@ -735,6 +752,13 @@ def run_bot():
                         actual={"sell_amount": estimated_sell_amount},
                         required={"sell_amount_gt": 0},
                     ),
+                    FunnelStep(
+                        stage="order_value",
+                        passed=(estimated_sell_amount * last_close) > strategy.min_buy_order_value,
+                        reason="sell_order_value_too_small",
+                        actual={"sell_order_value_quote": estimated_sell_amount * last_close},
+                        required={"min_sell_order_value": strategy.min_buy_order_value},
+                    ),
                 ]
                 exit_ready, _ = structured_logger.run_funnel(
                     symbol=symbol,
@@ -917,8 +941,13 @@ def run_bot():
                     amount = safe_amount_to_precision(
                         exchange, symbol, sell_amount
                     )
+                    sell_order_value_quote = amount * last_close
                     if amount <= 0:
                         log(f"[{symbol}] 매도할 {base} 수량이 없습니다.")
+                    elif sell_order_value_quote <= strategy.min_buy_order_value:
+                        log(
+                            f"[{symbol}] 예상 매도 금액이 {strategy.min_buy_order_value} {quote} 이하라 매도 주문을 생략합니다."
+                        )
                     else:
                         sell_reason = "손절" if stop_loss_triggered else "익절"
                         structured_logger.log_strategy(

@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 BTC 에서 예상 매도 금액이 최소 주문 금액 5,000 KRW 미만이면 매도 주문을 선차단하도록 추가
+- 업비트 BTC 에서 최소 주문 금액 미만 잔량은 포지션으로 보지 않아 잔량 보유 중에도 재진입할 수 있게 조정
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
 - BTC 전략 버전 이름(strategy_version)을 구조화 로그와 체결 이력에 함께 남겨 버전별 비교가 가능하도록 확장
 - BTC 거래 품질 분석용으로 최저가, MFE/MAE, 트레일링 활성화 소요 시간까지 체결 로그에 함께 남기도록 확장
@@ -285,7 +287,9 @@ def run_bot():
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
             base_free, quote_free = get_spot_balances(exchange, base, quote)
-            has_position = base_free > 0.00000001
+            position_quote_value = base_free * last_close
+            # 업비트는 최소 주문 금액 기준으로 다시 팔 수 없는 잔량은 포지션에서 제외한다.
+            has_position = position_quote_value >= min_buy_order_value
             if has_position and entry_price is None:
                 entry_price = last_close
                 entry_opened_at = entry_opened_at or time.time()
@@ -600,6 +604,17 @@ def run_bot():
                     actual={"sell_amount": base_free},
                     required={"sell_amount_gt": 0},
                 ),
+                FunnelStep(
+                    stage="order_value",
+                    passed=(safe_amount_to_precision(exchange, symbol, base_free) * last_close)
+                    > min_buy_order_value,
+                    reason="sell_order_value_too_small",
+                    actual={
+                        "sell_order_value_quote": safe_amount_to_precision(exchange, symbol, base_free)
+                        * last_close
+                    },
+                    required={"min_sell_order_value": min_buy_order_value},
+                ),
             ]
             exit_ready, _ = structured_logger.run_funnel(
                 symbol=symbol,
@@ -747,7 +762,14 @@ def run_bot():
 
             elif exit_ready:
                 amount = safe_amount_to_precision(exchange, symbol, base_free)
-                if amount > 0:
+                sell_order_value_quote = amount * last_close
+                if amount <= 0:
+                    pass
+                elif sell_order_value_quote <= min_buy_order_value:
+                    log(
+                        f"[{symbol}] 예상 매도 금액이 {min_buy_order_value:.0f} {quote} 이하라 매도 주문을 생략합니다."
+                    )
+                else:
                     if stop_triggered:
                         sell_reason = "stop_loss"
                         notify_fn = notifier.notify_stop_loss_fill
