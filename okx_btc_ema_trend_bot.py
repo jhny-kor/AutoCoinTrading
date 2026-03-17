@@ -1,5 +1,6 @@
 """
 수정 요약
+- 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 BTC 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
 - 수수료를 제하고도 순익이 남는 상태에서 추세가 꺾이면 빠르게 익절하는 순익 보호 청산 규칙을 추가
 - OKX BTC 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
 - OKX BTC 매도 체결 로그에도 왕복 수수료를 반영한 순손익을 함께 저장해 /pnl 집계가 net 기준으로 가능하도록 보강
@@ -47,7 +48,9 @@ from ma_crossover_bot import (
     place_market_order_okx,
     safe_amount_to_precision,
 )
+from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
+from strategy_settings import load_managed_symbols
 from telegram_notifier import load_telegram_notifier
 from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 
@@ -182,6 +185,11 @@ def run_bot():
     symbol = "BTC/USDT"
     base = "BTC"
     quote = "USDT"
+    portfolio_allocator = PortfolioAllocator(
+        exchange_name="OKX",
+        quote_currency=quote,
+        tracked_symbols=load_managed_symbols("okx"),
+    )
     entry_price: float | None = None
     entry_opened_at: float | None = None
     position_id: str | None = None
@@ -481,10 +489,38 @@ def run_bot():
                 and not profit_protect_triggered
             )
             position_ratio = settings.get_position_ratio(symbol)
-            order_value = quote_free * config["risk_per_trade"] * position_ratio
-            add_on_order_value = (
+            requested_order_value = quote_free * config["risk_per_trade"] * position_ratio
+            requested_add_on_order_value = (
                 quote_free * config["risk_per_trade"] * settings.pyramid_position_ratio
             )
+            dynamic_bonus_eligible = (
+                portfolio_allocator.settings.enable_dynamic_overweight
+                and entry_signal
+                and ema_aligned
+                and price_above_fast
+                and (
+                    volume_ratio is not None
+                    and volume_ratio >= portfolio_allocator.settings.dynamic_volume_ratio_threshold
+                )
+                and (
+                    not portfolio_allocator.settings.dynamic_require_trend_ok
+                    or confirm_bullish
+                )
+            )
+            allocation_decision = portfolio_allocator.build_buy_decision(
+                exchange=exchange,
+                symbol=symbol,
+                requested_order_value_quote=requested_order_value,
+                dynamic_bonus_eligible=dynamic_bonus_eligible,
+            )
+            add_on_allocation_decision = portfolio_allocator.build_buy_decision(
+                exchange=exchange,
+                symbol=symbol,
+                requested_order_value_quote=requested_add_on_order_value,
+                dynamic_bonus_eligible=dynamic_bonus_eligible,
+            )
+            order_value = allocation_decision.approved_order_value_quote
+            add_on_order_value = add_on_allocation_decision.approved_order_value_quote
             estimated_entry_amount = safe_amount_to_precision(
                 exchange,
                 symbol,
@@ -522,6 +558,13 @@ def run_bot():
                 "position_ratio": position_ratio,
                 "has_position": has_position,
                 "daily_realized_pnl_quote": daily_realized_pnl_quote,
+                "portfolio_base_target_pct": allocation_decision.base_target_pct * 100,
+                "portfolio_effective_target_pct": allocation_decision.effective_target_pct * 100,
+                "portfolio_dynamic_bonus_pct": allocation_decision.dynamic_bonus_pct * 100,
+                "portfolio_dynamic_bonus_applied": allocation_decision.dynamic_bonus_applied,
+                "portfolio_total_budget_quote": allocation_decision.total_portfolio_quote,
+                "portfolio_current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                "portfolio_remaining_budget_quote": allocation_decision.remaining_budget_quote,
                 "pnl_pct": pnl_pct,
                 "net_pnl_pct_estimate": current_net_realized_pnl_pct,
                 "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
@@ -540,6 +583,17 @@ def run_bot():
                 "pyramid_max_add_ons": settings.pyramid_max_add_ons,
                 "profit_protect_triggered": profit_protect_triggered,
             }
+            log(
+                f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
+                f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
+                f"누적 투입 {allocation_decision.current_cost_basis_quote:.4f} {quote} | "
+                f"남은 예산 {allocation_decision.remaining_budget_quote:.4f} {quote}"
+            )
+            if allocation_decision.dynamic_bonus_applied:
+                log(
+                    f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
+                    f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
+                )
 
             entry_steps = [
                 FunnelStep(
@@ -617,6 +671,18 @@ def run_bot():
                     actual={"daily_realized_pnl_quote": daily_realized_pnl_quote},
                     required={
                         "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
+                    },
+                ),
+                FunnelStep(
+                    stage="portfolio_budget",
+                    passed=allocation_decision.remaining_budget_quote > 0,
+                    reason="portfolio_budget_exhausted",
+                    actual={
+                        "current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                        "remaining_budget_quote": allocation_decision.remaining_budget_quote,
+                    },
+                    required={
+                        "portfolio_target_budget_quote": allocation_decision.target_budget_quote,
                     },
                 ),
                 FunnelStep(
@@ -749,6 +815,18 @@ def run_bot():
                             },
                             required={
                                 "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_portfolio_budget",
+                            passed=add_on_allocation_decision.remaining_budget_quote > 0,
+                            reason="portfolio_budget_exhausted",
+                            actual={
+                                "current_cost_basis_quote": add_on_allocation_decision.current_cost_basis_quote,
+                                "remaining_budget_quote": add_on_allocation_decision.remaining_budget_quote,
+                            },
+                            required={
+                                "portfolio_target_budget_quote": add_on_allocation_decision.target_budget_quote,
                             },
                         ),
                         FunnelStep(

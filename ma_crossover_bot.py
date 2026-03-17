@@ -1,5 +1,6 @@
 """
 수정 요약
+- 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 알트 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
 - 알트가 수수료를 제하고도 순익인 상태에서 메인 추세가 꺾이면 즉시 전량 익절하는 순익 보호 청산 규칙을 추가
 - OKX 알트 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
 - 심볼별 부분익절/부분손절 설정을 지원하고 ETH 같은 선택 알트에만 1회 부분청산을 적용하도록 확장
@@ -43,8 +44,9 @@ import ccxt
 from dotenv import load_dotenv
 
 from bot_logger import BLUE, RED, BotLogger
+from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
-from strategy_settings import load_alt_markets, load_strategy_settings
+from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
 from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
 
@@ -332,6 +334,11 @@ def run_bot():
     structured_logger = StructuredLogManager("ma_crossover_bot")
     notifier = load_telegram_notifier()
     trade_history = TradeHistoryLogger()
+    portfolio_allocator = PortfolioAllocator(
+        exchange_name="OKX",
+        quote_currency="USDT",
+        tracked_symbols=load_managed_symbols("okx"),
+    )
     daily_limit_notified = False
 
     # BTC 는 전용 EMA 봇으로 분리했으므로 기존 OKX 봇은 알트만 담당한다.
@@ -524,8 +531,6 @@ def run_bot():
                     symbol,
                     config["risk_per_trade"],
                 )
-                usdt_to_use = quote_free * position_ratio * strategy.buy_split_ratio
-                estimated_buy_amount = usdt_to_use / last_close if last_close else 0.0
                 signal_is_strong = gap_pct >= min_gap_pct
                 trend_follow_entry = (
                     strategy.enable_trend_follow_entry
@@ -540,8 +545,46 @@ def run_bot():
                     )
                 )
                 entry_signal = bullish or trend_follow_entry
+                dynamic_bonus_eligible = (
+                    not has_position
+                    and bullish
+                    and (
+                        not portfolio_allocator.settings.dynamic_require_strong_signal
+                        or signal_is_strong
+                    )
+                    and (
+                        volume_ratio is not None
+                        and volume_ratio >= portfolio_allocator.settings.dynamic_volume_ratio_threshold
+                    )
+                    and (
+                        not portfolio_allocator.settings.dynamic_require_trend_ok
+                        or htf_bullish
+                    )
+                )
+                requested_order_value = (
+                    quote_free * position_ratio * strategy.buy_split_ratio
+                )
+                allocation_decision = portfolio_allocator.build_buy_decision(
+                    exchange=exchange,
+                    symbol=symbol,
+                    requested_order_value_quote=requested_order_value,
+                    dynamic_bonus_eligible=dynamic_bonus_eligible,
+                )
+                usdt_to_use = allocation_decision.approved_order_value_quote
+                estimated_buy_amount = usdt_to_use / last_close if last_close else 0.0
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
                 log(f"[{symbol}] 적용 매수 비중: {position_ratio:.4f}")
+                log(
+                    f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
+                    f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
+                    f"누적 투입 {allocation_decision.current_cost_basis_quote:.4f} {quote} | "
+                    f"남은 예산 {allocation_decision.remaining_budget_quote:.4f} {quote}"
+                )
+                if allocation_decision.dynamic_bonus_applied:
+                    log(
+                        f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
+                        f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
+                    )
                 if min_order_amount > 0:
                     log(f"[{symbol}] 적용 최소 주문 수량: {min_order_amount:.4f} {base}")
                     log(f"[{symbol}] 포지션 인식 최소 수량도 동일하게 {position_threshold:.4f} {base} 로 적용합니다.")
@@ -765,6 +808,13 @@ def run_bot():
                     "position_threshold": position_threshold,
                     "entry_count": current_entry_count,
                     "pnl_pct": pnl_pct,
+                    "portfolio_base_target_pct": allocation_decision.base_target_pct * 100,
+                    "portfolio_effective_target_pct": allocation_decision.effective_target_pct * 100,
+                    "portfolio_dynamic_bonus_pct": allocation_decision.dynamic_bonus_pct * 100,
+                    "portfolio_dynamic_bonus_applied": allocation_decision.dynamic_bonus_applied,
+                    "portfolio_total_budget_quote": allocation_decision.total_portfolio_quote,
+                    "portfolio_current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                    "portfolio_remaining_budget_quote": allocation_decision.remaining_budget_quote,
                     "net_pnl_pct_estimate": current_net_realized_pnl_pct,
                     "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
                     "daily_realized_pnl_quote": daily_realized_pnl_quote,
@@ -868,6 +918,18 @@ def run_bot():
                         },
                         required={
                             "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
+                        },
+                    ),
+                    FunnelStep(
+                        stage="portfolio_budget",
+                        passed=allocation_decision.remaining_budget_quote > 0,
+                        reason="portfolio_budget_exhausted",
+                        actual={
+                            "current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                            "remaining_budget_quote": allocation_decision.remaining_budget_quote,
+                        },
+                        required={
+                            "portfolio_target_budget_quote": allocation_decision.target_budget_quote,
                         },
                     ),
                     FunnelStep(
