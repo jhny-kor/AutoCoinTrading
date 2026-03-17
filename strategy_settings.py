@@ -1,5 +1,6 @@
 """
 수정 요약
+- 수수료를 제하고도 순익이 남는 상태에서 메인 추세가 꺾이면 빠르게 전량 익절하는 공통 알트 청산 설정을 추가
 - 알트 전략에서 심볼별 부분익절/부분손절 대상과 비율을 .env 에서 읽도록 확장
 - 공통 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
 - 알트 봇에 보수형 trend_follow_entry 설정을 추가해 골든크로스가 아니어도 제한적으로 추세 유지 진입을 허용할 수 있게 개선
@@ -61,6 +62,8 @@ class StrategySettings:
     averaging_down_gap_pct: float
     min_take_profit_pct: float
     stop_loss_pct: float
+    enable_fee_protect_exit: bool
+    fee_protect_min_net_pnl_pct: float
     min_buy_order_value: float
     loop_interval_sec: int
     min_crossover_gap_pct_map: dict[str, float]
@@ -270,6 +273,13 @@ def load_strategy_settings(
         ),
         stop_loss_pct=float(
             os.getenv("STRATEGY_STOP_LOSS_PCT", "1.5")
+        ),
+        enable_fee_protect_exit=parse_bool(
+            os.getenv("STRATEGY_ENABLE_FEE_PROTECT_EXIT", "true"),
+            default=True,
+        ),
+        fee_protect_min_net_pnl_pct=float(
+            os.getenv("STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT", "0.20")
         ),
         min_buy_order_value=float(
             os.getenv(min_buy_order_env_key, str(default_min_buy_order_value))

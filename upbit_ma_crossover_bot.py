@@ -1,5 +1,6 @@
 """
 수정 요약
+- 알트가 수수료를 제하고도 순익인 상태에서 메인 추세가 꺾이면 즉시 전량 익절하는 순익 보호 청산 규칙을 추가
 - 업비트 알트 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
 - 심볼별 부분익절/부분손절 설정을 지원하고 ETH/XRP 같은 선택 알트에만 1회 부분청산을 적용하도록 확장
 - 업비트 알트 매도 체결 로그도 왕복 수수료 기준 순손익을 함께 남겨 /pnl 집계가 모두 net 기준으로 가능하도록 보강
@@ -551,6 +552,24 @@ def run_bot():
                             f"손실 제한: -{config['max_daily_loss_quote']:.2f} {quote}",
                         )
                         daily_limit_notified = True
+                current_net_realized_pnl_quote = None
+                current_net_realized_pnl_pct = None
+                if has_position and avg_entry_price:
+                    (
+                        _current_fee_quote_estimate,
+                        current_net_realized_pnl_quote,
+                        current_net_realized_pnl_pct,
+                    ) = estimate_round_trip_net_pnl(
+                        entry_price=avg_entry_price,
+                        exit_price=last_close,
+                        amount=base_free,
+                        fee_rate_pct=config["fee_rate_pct"],
+                    )
+                    if current_net_realized_pnl_pct is not None:
+                        log(
+                            f"[{symbol}] 수수료 반영 예상 순익률: {current_net_realized_pnl_pct:.2f}% "
+                            f"(보호 익절 기준 {strategy.fee_protect_min_net_pnl_pct:.2f}%)"
+                        )
                 take_profit_ready = (
                     pnl_pct is not None
                     and pnl_pct >= effective_min_take_profit_pct
@@ -559,17 +578,31 @@ def run_bot():
                     pnl_pct is not None
                     and pnl_pct <= -stop_loss_pct
                 )
+                profit_protect_triggered = (
+                    has_position
+                    and strategy.enable_fee_protect_exit
+                    and current_net_realized_pnl_pct is not None
+                    and current_net_realized_pnl_pct >= strategy.fee_protect_min_net_pnl_pct
+                    and bearish
+                    and not stop_loss_triggered
+                )
                 if (
                     bearish
                     and has_position
                     and pnl_pct is not None
                     and not take_profit_ready
+                    and not profit_protect_triggered
                     and not stop_loss_triggered
                 ):
                     log(
                         f"[{symbol}] 최소 익절률({effective_min_take_profit_pct}%) "
                         f"(전략값 {take_profit_pct}%, 왕복 수수료 {fee_round_trip_pct}%) "
                         f"미달로 매도를 보류합니다."
+                    )
+                if has_position and profit_protect_triggered:
+                    log(
+                        f"[{symbol}] 순익 보호 익절 조건 충족: 수수료 반영 순익률 "
+                        f"{current_net_realized_pnl_pct:.2f}% >= {strategy.fee_protect_min_net_pnl_pct:.2f}%"
                     )
                 if has_position and stop_loss_triggered:
                     log(
@@ -583,7 +616,9 @@ def run_bot():
                 log(f"[{symbol}] 적용 매수 비중: {position_ratio:.4f}")
                 krw_to_use = quote_free * position_ratio * strategy.buy_split_ratio
                 estimated_sell_amount = (
-                    base_free if stop_loss_triggered else (base_free * strategy.sell_split_ratio)
+                    base_free
+                    if (stop_loss_triggered or profit_protect_triggered)
+                    else (base_free * strategy.sell_split_ratio)
                 )
                 estimated_sell_amount = safe_amount_to_precision(
                     exchange, symbol, estimated_sell_amount
@@ -612,8 +647,11 @@ def run_bot():
                     "best_bid": best_bid,
                     "entry_count": current_entry_count,
                     "pnl_pct": pnl_pct,
+                    "net_pnl_pct_estimate": current_net_realized_pnl_pct,
                     "daily_realized_pnl_quote": daily_realized_pnl_quote,
                     "fee_round_trip_pct": fee_round_trip_pct,
+                    "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                    "profit_protect_triggered": profit_protect_triggered,
                     "partial_take_profit_pending": partial_take_profit_pending,
                     "partial_stop_loss_pending": partial_stop_loss_pending,
                 }
@@ -744,19 +782,20 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="exit_trigger",
-                        passed=(stop_loss_triggered or bearish),
+                        passed=(stop_loss_triggered or profit_protect_triggered or bearish),
                         reason="no_exit_signal",
                         actual={
                             "stop_loss_triggered": stop_loss_triggered,
+                            "profit_protect_triggered": profit_protect_triggered,
                             "bearish_signal": bearish,
                         },
                         required={
-                            "stop_loss_triggered_or_bearish_signal": True
+                            "stop_loss_triggered_or_profit_protect_or_bearish_signal": True
                         },
                     ),
                     FunnelStep(
                         stage="cooldown",
-                        passed=(stop_loss_triggered or not in_cooldown),
+                        passed=(stop_loss_triggered or profit_protect_triggered or not in_cooldown),
                         reason="cooldown_active",
                         actual={"seconds_since_last_trade": seconds_since_last_trade},
                         required={
@@ -765,7 +804,7 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="distance",
-                        passed=(stop_loss_triggered or signal_is_strong),
+                        passed=(stop_loss_triggered or profit_protect_triggered or signal_is_strong),
                         reason="distance_too_small",
                         actual={"gap_pct": gap_pct},
                         required={"min_gap_pct": min_gap_pct},
@@ -774,6 +813,7 @@ def run_bot():
                         stage="higher_timeframe",
                         passed=(
                             stop_loss_triggered
+                            or profit_protect_triggered
                             or not strategy.enable_higher_timeframe_filter
                             or htf_bearish
                         ),
@@ -783,11 +823,15 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="take_profit",
-                        passed=(stop_loss_triggered or take_profit_ready),
+                        passed=(stop_loss_triggered or profit_protect_triggered or take_profit_ready),
                         reason="take_profit_not_reached",
-                        actual={"pnl_pct": pnl_pct},
+                        actual={
+                            "pnl_pct": pnl_pct,
+                            "net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                        },
                         required={
-                            "min_take_profit_pct": effective_min_take_profit_pct
+                            "min_take_profit_pct": effective_min_take_profit_pct,
+                            "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
                         },
                     ),
                     FunnelStep(
@@ -816,6 +860,8 @@ def run_bot():
                     ready_reason=(
                         "stop_loss_triggered"
                         if stop_loss_triggered
+                        else "profit_protect_triggered"
+                        if profit_protect_triggered
                         else "take_profit_conditions_met"
                     ),
                 )
@@ -999,6 +1045,10 @@ def run_bot():
                             sell_ratio = 1.0
                             exit_reason_key = "stop_loss"
                             sell_reason = "손절"
+                    elif profit_protect_triggered:
+                        sell_ratio = 1.0
+                        exit_reason_key = "profit_protect_take_profit"
+                        sell_reason = "순익보호익절"
                     elif partial_take_profit_pending:
                         sell_ratio = strategy.partial_take_profit_ratio
                         exit_reason_key = "partial_take_profit"
@@ -1201,6 +1251,9 @@ def run_bot():
                                     "configured_take_profit_pct": take_profit_pct,
                                     "stop_loss_pct": stop_loss_pct,
                                     "fee_round_trip_pct": fee_round_trip_pct,
+                                    "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                                    "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                                    "profit_protect_triggered": profit_protect_triggered,
                                     "pnl_pct_at_decision": pnl_pct,
                                     "htf_bearish": htf_bearish,
                                     "holding_seconds": holding_seconds,
@@ -1274,6 +1327,9 @@ def run_bot():
                                     "bearish_signal": bearish,
                                     "signal_is_strong": signal_is_strong,
                                     "gap_pct": gap_pct,
+                                    "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                                    "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                                    "profit_protect_triggered": profit_protect_triggered,
                                     "entry_price_unknown": True,
                                     "htf_bearish": htf_bearish,
                                 },
