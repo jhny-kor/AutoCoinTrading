@@ -1,5 +1,6 @@
 """
 수정 요약
+- 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운 설정을 공통 알트 전략에 추가
 - 수수료를 제하고도 순익이 남는 상태에서 메인 추세가 꺾이면 빠르게 전량 익절하는 공통 알트 청산 설정을 추가
 - 알트 전략에서 심볼별 부분익절/부분손절 대상과 비율을 .env 에서 읽도록 확장
 - 공통 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
@@ -74,6 +75,7 @@ class StrategySettings:
     partial_stop_loss_symbols: tuple[str, ...]
     partial_take_profit_ratio: float
     partial_stop_loss_ratio: float
+    partial_take_profit_reentry_cooldown_sec: int
 
     def get_crossover_gap_pct(self, symbol: str) -> float:
         """심볼별 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
@@ -308,5 +310,8 @@ def load_strategy_settings(
         ),
         partial_stop_loss_ratio=float(
             os.getenv("STRATEGY_PARTIAL_SL_RATIO", "0.5")
+        ),
+        partial_take_profit_reentry_cooldown_sec=int(
+            os.getenv("STRATEGY_PARTIAL_TP_REENTRY_COOLDOWN_SEC", "900")
         ),
     )

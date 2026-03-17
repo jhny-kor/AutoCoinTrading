@@ -1,5 +1,6 @@
 """
 수정 요약
+- 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운을 추가
 - 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 알트 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
 - 알트가 수수료를 제하고도 순익인 상태에서 메인 추세가 꺾이면 즉시 전량 익절하는 순익 보호 청산 규칙을 추가
 - 업비트 알트 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
@@ -232,6 +233,7 @@ def run_bot():
     # 심볼별 부분익절/부분손절 1회 실행 여부 저장
     partial_take_profit_done = {}
     partial_stop_loss_done = {}
+    partial_take_profit_last_at = {}
     # 심볼별 분할 진입 횟수 저장
     entry_count = {}
     # 심볼별 마지막 거래 시각 저장
@@ -419,6 +421,15 @@ def run_bot():
                 in_cooldown = (
                     seconds_since_last_trade < strategy.min_trade_interval_sec
                 )
+                partial_take_profit_last_ts = partial_take_profit_last_at.get(symbol, 0.0)
+                partial_take_profit_cooldown_remaining = max(
+                    0.0,
+                    strategy.partial_take_profit_reentry_cooldown_sec
+                    - (time.time() - partial_take_profit_last_ts),
+                ) if partial_take_profit_last_ts > 0 else 0.0
+                partial_take_profit_cooldown_active = (
+                    partial_take_profit_cooldown_remaining > 0
+                )
 
                 if in_cooldown:
                     remain_sec = int(
@@ -426,6 +437,11 @@ def run_bot():
                     )
                     log(
                         f"[{symbol}] 최근 거래 후 쿨다운 중입니다. 남은 시간: {remain_sec}초"
+                    )
+                if partial_take_profit_cooldown_active:
+                    log(
+                        f"[{symbol}] 부분 익절 후 재진입/추가매수 쿨다운 중입니다. "
+                        f"남은 시간: {int(partial_take_profit_cooldown_remaining)}초"
                     )
 
                 min_gap_pct = strategy.get_crossover_gap_pct(symbol)
@@ -700,6 +716,8 @@ def run_bot():
                     "fee_round_trip_pct": fee_round_trip_pct,
                     "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
                     "profit_protect_triggered": profit_protect_triggered,
+                    "partial_take_profit_cooldown_active": partial_take_profit_cooldown_active,
+                    "partial_take_profit_cooldown_remaining_sec": partial_take_profit_cooldown_remaining,
                     "partial_take_profit_pending": partial_take_profit_pending,
                     "partial_stop_loss_pending": partial_stop_loss_pending,
                 }
@@ -756,6 +774,15 @@ def run_bot():
                             "min_volatility_pct": strategy.min_volatility_pct,
                             "max_volatility_pct": strategy.max_volatility_pct,
                         },
+                    ),
+                    FunnelStep(
+                        stage="partial_take_profit_cooldown",
+                        passed=not partial_take_profit_cooldown_active,
+                        reason="partial_take_profit_cooldown_active",
+                        actual={
+                            "cooldown_remaining_sec": partial_take_profit_cooldown_remaining
+                        },
+                        required={"cooldown_inactive": True},
                     ),
                     FunnelStep(
                         stage="cooldown",
@@ -1321,6 +1348,7 @@ def run_bot():
                             )
                             if exit_reason_key == "partial_take_profit" and remaining_base > 0.00000001:
                                 partial_take_profit_done[symbol] = True
+                                partial_take_profit_last_at[symbol] = time.time()
                             if exit_reason_key == "partial_stop_loss" and remaining_base > 0.00000001:
                                 partial_stop_loss_done[symbol] = True
                             # 포지션 청산 후 진입가 제거

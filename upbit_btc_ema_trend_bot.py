@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC 수익성 청산 직후 재진입과 추가매수를 잠시 막는 전용 쿨다운을 추가
 - 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 BTC 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
 - 수수료를 제하고도 순익이 남는 상태에서 추세가 꺾이면 빠르게 익절하는 순익 보호 청산 규칙을 추가
 - 업비트 BTC 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
@@ -202,6 +203,7 @@ def run_bot():
     add_on_count = 0
     last_trade_at = 0.0
     last_stop_loss_at = 0.0
+    last_profit_exit_at = 0.0
     daily_realized_pnl_quote = 0.0
     daily_pnl_date = datetime.now().date()
     daily_limit_notified = False
@@ -333,7 +335,15 @@ def run_bot():
                 0.0,
                 settings.stop_loss_reentry_cooldown_sec - (now_ts - last_stop_loss_at),
             )
-            cooldown_remaining = max(base_cooldown_remaining, stop_loss_cooldown_remaining)
+            profit_exit_cooldown_remaining = max(
+                0.0,
+                settings.profit_exit_reentry_cooldown_sec - (now_ts - last_profit_exit_at),
+            )
+            cooldown_remaining = max(
+                base_cooldown_remaining,
+                stop_loss_cooldown_remaining,
+                profit_exit_cooldown_remaining,
+            )
             in_cooldown = cooldown_remaining > 0
             volume_filter_passed = volume_ratio is not None and volume_ratio >= settings.min_volume_ratio
             atr_filter_passed = settings.min_atr_pct <= atr_pct <= settings.max_atr_pct
@@ -573,6 +583,7 @@ def run_bot():
                 "pyramid_trigger_profit_pct": settings.pyramid_trigger_profit_pct,
                 "pyramid_max_add_ons": settings.pyramid_max_add_ons,
                 "profit_protect_triggered": profit_protect_triggered,
+                "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
             }
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
@@ -618,10 +629,12 @@ def run_bot():
                         "cooldown_remaining_sec": cooldown_remaining,
                         "base_cooldown_remaining_sec": base_cooldown_remaining,
                         "stop_loss_cooldown_remaining_sec": stop_loss_cooldown_remaining,
+                        "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
                     },
                     required={
                         "base_min_trade_interval_sec": settings.min_trade_interval_sec,
                         "stop_loss_reentry_cooldown_sec": settings.stop_loss_reentry_cooldown_sec,
+                        "profit_exit_reentry_cooldown_sec": settings.profit_exit_reentry_cooldown_sec,
                         "cooldown_inactive": True,
                     },
                 ),
@@ -752,7 +765,10 @@ def run_bot():
                             stage="add_on_cooldown",
                             passed=not in_cooldown,
                             reason="cooldown_active",
-                            actual={"cooldown_remaining_sec": cooldown_remaining},
+                            actual={
+                                "cooldown_remaining_sec": cooldown_remaining,
+                                "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
+                            },
                             required={"cooldown_inactive": True},
                         ),
                         FunnelStep(
@@ -1277,6 +1293,8 @@ def run_bot():
                         )
                     if stop_triggered:
                         last_stop_loss_at = time.time()
+                    elif sell_reason in {"trailing_take_profit", "profit_protect_take_profit"}:
+                        last_profit_exit_at = time.time()
                     last_trade_at = time.time()
                     structured_logger.log_strategy(
                         symbol=symbol,
