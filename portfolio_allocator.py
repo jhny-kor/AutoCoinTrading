@@ -1,5 +1,6 @@
 """
 수정 요약
+- 목표 자산은 기존 분할 진입 주문금액이 아니라 남아 있는 목표 예산 자체를 주문금액으로 쓰도록 조정
 - 목표 비중과 남아 있는 누적 투입 원가를 기준으로 신규 매수 허용 금액을 계산하는 포트폴리오 배분 모듈을 추가
 - 거래량과 추세 품질이 강한 코인만 목표 비중을 보수적으로 +5% 확대하는 동적 오버웨이트를 지원하도록 추가
 - 거래소별 잔고 조회와 체결 이력 기반 원가 추적을 함께 처리해 BTC/ETH/XRP 목표 비중을 공통 규칙으로 맞추도록 구성
@@ -301,9 +302,8 @@ class PortfolioAllocator:
         target_budget_quote = total_portfolio_quote * effective_target_pct
         remaining_budget_quote = max(0.0, target_budget_quote - current_cost_basis_quote)
         approved_order_value_quote = min(
-            max(0.0, requested_order_value_quote),
             quote_free,
-            remaining_budget_quote,
+            max(0.0, remaining_budget_quote),
         )
 
         reason = "ok"
@@ -313,6 +313,11 @@ class PortfolioAllocator:
             reason = "target_budget_exhausted"
         elif approved_order_value_quote <= 0:
             reason = "quote_free_unavailable"
+        elif (
+            requested_order_value_quote > 0
+            and approved_order_value_quote > requested_order_value_quote
+        ):
+            reason = "target_budget_driven_order"
 
         return AllocationDecision(
             base_asset=base_asset,
