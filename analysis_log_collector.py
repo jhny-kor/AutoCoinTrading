@@ -1,5 +1,6 @@
 """
 수정 요약
+- 호가창 상위 구간 누적 잔량, 누적 호가 금액, 깊이 비대칭, 가벼운 체결 압력 지표까지 함께 저장하도록 확장
 - 분석 수집기 메인 루프 예외도 텔레그램으로 즉시 알리도록 보강
 - 분석용 JSONL 에 거래량 배수, 변동성, RSI, 최근 범위 위치 같은 추가 지표를 함께 저장하도록 확장
 - 상위 타임프레임 종가/이동평균/이격도와 공개 기준 필터 통과 여부를 함께 저장하도록 확장
@@ -244,39 +245,116 @@ def fetch_upbit_ohlcv(
     return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
 
+def choose_order_book_sweep_quote_target(symbol: str) -> float:
+    """심볼의 호가 통화에 맞는 미시구조 체결 가정 금액을 고른다."""
+    quote = symbol.split("/", 1)[1] if "/" in symbol else ""
+    if quote == "KRW":
+        return 100_000.0
+    return 100.0
+
+
 def fetch_okx_order_book(exchange: ccxt.okx, symbol: str) -> dict[str, float | None]:
-    """OKX 공개 호가창에서 최우선 호가 정보를 가져온다."""
+    """OKX 공개 호가창에서 상위 호가 정보를 가져온다."""
     try:
         inst_id = symbol.replace("/", "-")
-        response = exchange.publicGetMarketBooks({"instId": inst_id, "sz": "1"})
+        response = exchange.publicGetMarketBooks({"instId": inst_id, "sz": "5"})
         data = response.get("data", []) if isinstance(response, dict) else response
         if not data:
             return {}
         first = data[0]
         bids = first.get("bids", [])
         asks = first.get("asks", [])
-        return normalize_order_book_levels(bids=bids, asks=asks)
+        return normalize_order_book_levels(
+            bids=bids,
+            asks=asks,
+            sweep_quote_target=choose_order_book_sweep_quote_target(symbol),
+        )
     except Exception:
         return {}
 
 
 def fetch_upbit_order_book(exchange: ccxt.upbit, symbol: str) -> dict[str, float | None]:
-    """업비트 공개 호가창에서 최우선 호가 정보를 가져온다."""
+    """업비트 공개 호가창에서 상위 호가 정보를 가져온다."""
     try:
-        order_book = exchange.fetch_order_book(symbol, limit=1)
+        order_book = exchange.fetch_order_book(symbol, limit=5)
         bids = order_book.get("bids", [])
         asks = order_book.get("asks", [])
-        normalized_bids = [[bid["price"], bid["amount"]] for bid in bids[:1]]
-        normalized_asks = [[ask["price"], ask["amount"]] for ask in asks[:1]]
-        return normalize_order_book_levels(bids=normalized_bids, asks=normalized_asks)
+        normalized_bids = [[bid["price"], bid["amount"]] for bid in bids[:5]]
+        normalized_asks = [[ask["price"], ask["amount"]] for ask in asks[:5]]
+        return normalize_order_book_levels(
+            bids=normalized_bids,
+            asks=normalized_asks,
+            sweep_quote_target=choose_order_book_sweep_quote_target(symbol),
+        )
     except Exception:
         return {}
 
 
+def _safe_price_size(level: list[float]) -> tuple[float | None, float | None]:
+    """호가 레벨에서 가격과 수량을 안전하게 꺼낸다."""
+    if len(level) < 2:
+        return None, None
+    try:
+        return float(level[0]), float(level[1])
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _sum_depth_size(levels: list[list[float]], depth: int) -> float | None:
+    """상위 depth 개 호가의 누적 수량을 계산한다."""
+    total = 0.0
+    count = 0
+    for level in levels[:depth]:
+        _, size = _safe_price_size(level)
+        if size is None:
+            continue
+        total += size
+        count += 1
+    return total if count > 0 else None
+
+
+def _sum_depth_notional(levels: list[list[float]], depth: int) -> float | None:
+    """상위 depth 개 호가의 누적 금액을 계산한다."""
+    total = 0.0
+    count = 0
+    for level in levels[:depth]:
+        price, size = _safe_price_size(level)
+        if price is None or size is None:
+            continue
+        total += price * size
+        count += 1
+    return total if count > 0 else None
+
+
+def _estimate_sweep_price(levels: list[list[float]], target_quote: float) -> float | None:
+    """상위 호가를 순서대로 먹는다고 가정한 예상 평균 체결가를 계산한다."""
+    if target_quote <= 0:
+        return None
+    remaining_quote = target_quote
+    acquired_base = 0.0
+    spent_quote = 0.0
+    for level in levels:
+        price, size = _safe_price_size(level)
+        if price is None or size is None or price <= 0 or size <= 0:
+            continue
+        level_quote = price * size
+        use_quote = min(remaining_quote, level_quote)
+        if use_quote <= 0:
+            continue
+        acquired_base += use_quote / price
+        spent_quote += use_quote
+        remaining_quote -= use_quote
+        if remaining_quote <= 0:
+            break
+    if acquired_base <= 0:
+        return None
+    return spent_quote / acquired_base
+
+
 def normalize_order_book_levels(
-    bids: list[list[float]], asks: list[list[float]]
+    bids: list[list[float]], asks: list[list[float]], sweep_quote_target: float
 ) -> dict[str, float | None]:
-    """호가창 최우선 매수/매도호가를 공통 형식으로 정리한다."""
+    """호가창 상위 매수/매도호가를 공통 형식으로 정리한다."""
     best_bid = float(bids[0][0]) if bids else None
     best_bid_size = float(bids[0][1]) if bids else None
     best_ask = float(asks[0][0]) if asks else None
@@ -294,6 +372,32 @@ def normalize_order_book_levels(
     if best_bid_size is not None and best_ask_size is not None and best_ask_size > 0:
         bid_ask_size_imbalance = best_bid_size / best_ask_size
 
+    bid_depth_size_3 = _sum_depth_size(bids, 3)
+    ask_depth_size_3 = _sum_depth_size(asks, 3)
+    bid_depth_size_5 = _sum_depth_size(bids, 5)
+    ask_depth_size_5 = _sum_depth_size(asks, 5)
+    bid_depth_notional_3 = _sum_depth_notional(bids, 3)
+    ask_depth_notional_3 = _sum_depth_notional(asks, 3)
+    bid_depth_notional_5 = _sum_depth_notional(bids, 5)
+    ask_depth_notional_5 = _sum_depth_notional(asks, 5)
+
+    depth_size_imbalance_3 = None
+    if bid_depth_size_3 is not None and ask_depth_size_3 not in (None, 0):
+        depth_size_imbalance_3 = bid_depth_size_3 / ask_depth_size_3
+
+    depth_size_imbalance_5 = None
+    if bid_depth_size_5 is not None and ask_depth_size_5 not in (None, 0):
+        depth_size_imbalance_5 = bid_depth_size_5 / ask_depth_size_5
+
+    buy_sweep_quote = _estimate_sweep_price(asks, sweep_quote_target)
+    sell_sweep_quote = _estimate_sweep_price(bids, sweep_quote_target)
+    buy_sweep_slippage_bps = None
+    if buy_sweep_quote is not None and best_ask is not None and best_ask > 0:
+        buy_sweep_slippage_bps = ((buy_sweep_quote - best_ask) / best_ask) * 10000
+    sell_sweep_slippage_bps = None
+    if sell_sweep_quote is not None and best_bid is not None and best_bid > 0:
+        sell_sweep_slippage_bps = ((best_bid - sell_sweep_quote) / best_bid) * 10000
+
     return {
         "best_bid": best_bid,
         "best_bid_size": best_bid_size,
@@ -302,6 +406,21 @@ def normalize_order_book_levels(
         "spread": spread,
         "spread_pct": spread_pct,
         "bid_ask_size_imbalance": bid_ask_size_imbalance,
+        "bid_depth_size_3": bid_depth_size_3,
+        "ask_depth_size_3": ask_depth_size_3,
+        "bid_depth_size_5": bid_depth_size_5,
+        "ask_depth_size_5": ask_depth_size_5,
+        "bid_depth_notional_3": bid_depth_notional_3,
+        "ask_depth_notional_3": ask_depth_notional_3,
+        "bid_depth_notional_5": bid_depth_notional_5,
+        "ask_depth_notional_5": ask_depth_notional_5,
+        "depth_size_imbalance_3": depth_size_imbalance_3,
+        "depth_size_imbalance_5": depth_size_imbalance_5,
+        "sweep_quote_target": sweep_quote_target,
+        "buy_sweep_avg_price": buy_sweep_quote,
+        "sell_sweep_avg_price": sell_sweep_quote,
+        "buy_sweep_slippage_bps": buy_sweep_slippage_bps,
+        "sell_sweep_slippage_bps": sell_sweep_slippage_bps,
     }
 
 
@@ -502,6 +621,20 @@ def build_snapshot(
         "spread": order_book.get("spread"),
         "spread_pct": order_book.get("spread_pct"),
         "bid_ask_size_imbalance": order_book.get("bid_ask_size_imbalance"),
+        "bid_depth_size_3": order_book.get("bid_depth_size_3"),
+        "ask_depth_size_3": order_book.get("ask_depth_size_3"),
+        "bid_depth_size_5": order_book.get("bid_depth_size_5"),
+        "ask_depth_size_5": order_book.get("ask_depth_size_5"),
+        "bid_depth_notional_3": order_book.get("bid_depth_notional_3"),
+        "ask_depth_notional_3": order_book.get("ask_depth_notional_3"),
+        "bid_depth_notional_5": order_book.get("bid_depth_notional_5"),
+        "ask_depth_notional_5": order_book.get("ask_depth_notional_5"),
+        "depth_size_imbalance_3": order_book.get("depth_size_imbalance_3"),
+        "depth_size_imbalance_5": order_book.get("depth_size_imbalance_5"),
+        "buy_sweep_avg_price_quote_100": order_book.get("buy_sweep_avg_price_quote_100"),
+        "sell_sweep_avg_price_quote_100": order_book.get("sell_sweep_avg_price_quote_100"),
+        "buy_sweep_slippage_bps_quote_100": order_book.get("buy_sweep_slippage_bps_quote_100"),
+        "sell_sweep_slippage_bps_quote_100": order_book.get("sell_sweep_slippage_bps_quote_100"),
         **public_filter_summary,
     })
 
