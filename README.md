@@ -2,9 +2,9 @@
 
 이 저장소는 OKX와 업비트에서 각각 현물 자동매매를 테스트하기 위한 초기 버전 프로젝트입니다.
 전략 값을 바꿔가며 테스트할 수 있도록, 구조화 로그와 `trade_history.jsonl`에는 `strategy_version`도 함께 남기도록 구성했습니다.
-
+<div align="center">
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>
-
+</div>
 ## 문서 역할
 
 - `README.md`: 현재 운영 기준과 현재 구조를 설명합니다.
