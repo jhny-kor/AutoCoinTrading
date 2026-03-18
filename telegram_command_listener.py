@@ -1,5 +1,6 @@
 """
 수정 요약
+- 에러 알림 메시지에 붙는 승인형 버튼(재기동/상세 보기/수정 요청/무시)을 처리하는 텔레그램 callback 흐름을 추가
 - /analysis 와 /weekly 에 순익 보호 익절 발생 건수와 순손익을 바로 확인할 수 있는 전용 요약 섹션을 추가
 - /analysis 와 주간 리포트의 거래 품질 섹션에 API 지연, 슬리피지, 체결 비율 같은 주문 실행 품질 요약도 함께 표시하도록 확장
 - /pnl 이 과거 체결도 가능한 범위에서 순손익으로 재추정해 통화별 손순익 집계가 최대한 완전하게 보이도록 보강
@@ -53,6 +54,8 @@ import argparse
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -67,6 +70,7 @@ from dotenv import load_dotenv
 import analyze_logs
 import analyze_strategy_logs
 import bot_manager
+from incident_manager import find_incident, update_incident_status
 from bot_logger import BotLogger
 from log_path_utils import iter_files, latest_file, read_all_lines
 from ma_crossover_bot import (
@@ -1889,6 +1893,184 @@ def extract_message(update: dict) -> tuple[str | None, str | None]:
     return str(chat_id), text
 
 
+def extract_callback_query(
+    update: dict,
+) -> tuple[str | None, str | None, str | None]:
+    """업데이트에서 callback query 정보를 추출한다."""
+    callback = update.get("callback_query")
+    if not isinstance(callback, dict):
+        return None, None, None
+    callback_id = callback.get("id")
+    data = callback.get("data")
+    message = callback.get("message") or {}
+    chat = message.get("chat", {})
+    chat_id = chat.get("id")
+    if callback_id is None or data is None or chat_id is None:
+        return None, None, None
+    return str(chat_id), str(callback_id), str(data)
+
+
+def answer_callback_query(bot_token: str, callback_id: str, text: str) -> None:
+    """callback query 응답 팝업을 보낸다."""
+    telegram_api_request(
+        bot_token,
+        "answerCallbackQuery",
+        payload={"callback_query_id": callback_id, "text": text},
+        timeout=10,
+    )
+
+
+def send_direct_text(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+) -> tuple[bool, str | None]:
+    """텔레그램 Bot API 로 즉시 텍스트를 전송한다."""
+    result, error = telegram_api_request(
+        bot_token,
+        "sendMessage",
+        payload={"chat_id": chat_id, "text": text},
+        timeout=15,
+    )
+    return (result is not None), error
+
+
+def map_incident_exchange_to_program(exchange_name: str) -> str | None:
+    """인시던트 거래소 라벨을 bot_manager 대상 이름으로 바꾼다."""
+    normalized = exchange_name.strip().upper()
+    mapping = {
+        "OKX": "okx",
+        "UPBIT": "upbit",
+        "OKX-BTC": "okx_btc",
+        "UPBIT-BTC": "upbit_btc",
+        "TELEGRAM-LISTENER": "telegram",
+        "COLLECTOR": "collector",
+    }
+    return mapping.get(normalized)
+
+
+def restart_managed_program(target: str) -> tuple[bool, str]:
+    """관리 대상 프로그램을 stop/start 순서로 재기동한다."""
+    cmd_prefix = [sys.executable, "bot_manager.py"]
+    workdir = Path(__file__).resolve().parent
+    stop_result = subprocess.run(
+        [*cmd_prefix, "stop", target],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+    )
+    start_result = subprocess.run(
+        [*cmd_prefix, "start", target],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+    )
+    ok = stop_result.returncode == 0 and start_result.returncode == 0
+    detail = (
+        f"stop={stop_result.returncode}, start={start_result.returncode}\n"
+        f"{start_result.stdout.strip() or start_result.stderr.strip() or '출력 없음'}"
+    )
+    return ok, detail
+
+
+def handle_incident_callback(
+    notifier,
+    chat_id: str,
+    callback_id: str,
+    callback_data: str,
+    logger: BotLogger,
+) -> None:
+    """인시던트 승인형 버튼 callback 을 처리한다."""
+    log = logger.log
+    parts = callback_data.split(":", 2)
+    if len(parts) != 3 or parts[0] != "inc":
+        answer_callback_query(notifier.bot_token, callback_id, "알 수 없는 버튼입니다.")
+        return
+
+    action, incident_id = parts[1], parts[2]
+    incident = find_incident(incident_id)
+    if incident is None:
+        answer_callback_query(notifier.bot_token, callback_id, "인시던트를 찾지 못했습니다.")
+        return
+
+    if action == "detail":
+        answer_callback_query(notifier.bot_token, callback_id, "상세 정보를 전송합니다.")
+        _, error = send_direct_text(
+            notifier.bot_token,
+            chat_id,
+            (
+                f"[인시던트 상세]\n"
+                f"ID: {incident['id']}\n"
+                f"거래소: {incident['exchange_name']}\n"
+                f"심볼: {incident['symbol']}\n"
+                f"상태: {incident.get('status', '-')}\n"
+                f"발생 횟수: {incident.get('count', 1)}\n"
+                f"처음 발생: {incident.get('created_at', '-')}\n"
+                f"마지막 발생: {incident.get('last_seen_at', '-')}\n"
+                f"내용: {incident.get('detail', '-')}"
+            ),
+        )
+        if error:
+            log(f"인시던트 상세 전송 실패: {error}")
+        return
+
+    if action == "ignore":
+        update_incident_status(incident_id, status="ignored", action="ignore")
+        answer_callback_query(notifier.bot_token, callback_id, "무시 처리했습니다.")
+        return
+
+    if action == "fix":
+        update_incident_status(incident_id, status="fix_requested", action="fix")
+        answer_callback_query(notifier.bot_token, callback_id, "수정 요청으로 기록했습니다.")
+        _, error = send_direct_text(
+            notifier.bot_token,
+            chat_id,
+            (
+                f"[수정 요청 접수]\n"
+                f"ID: {incident['id']}\n"
+                f"거래소: {incident['exchange_name']}\n"
+                f"심볼: {incident['symbol']}\n"
+                f"내용: {incident.get('detail', '-')}\n"
+                f"현재 구현 범위에서는 요청만 기록하고, 실제 코드 패치는 수동/Codex 세션에서 진행합니다."
+            ),
+        )
+        if error:
+            log(f"수정 요청 메시지 전송 실패: {error}")
+        return
+
+    if action == "restart":
+        target = map_incident_exchange_to_program(str(incident.get("exchange_name", "")))
+        if not target:
+            answer_callback_query(notifier.bot_token, callback_id, "재기동 대상 매핑에 실패했습니다.")
+            return
+        ok, detail = restart_managed_program(target)
+        update_incident_status(
+            incident_id,
+            status="restart_requested" if ok else "restart_failed",
+            action="restart",
+        )
+        answer_callback_query(
+            notifier.bot_token,
+            callback_id,
+            "재기동 완료" if ok else "재기동 실패",
+        )
+        _, error = send_direct_text(
+            notifier.bot_token,
+            chat_id,
+            (
+                f"[재기동 {'완료' if ok else '실패'}]\n"
+                f"ID: {incident['id']}\n"
+                f"대상: {target}\n"
+                f"{detail}"
+            ),
+        )
+        if error:
+            log(f"재기동 결과 메시지 전송 실패: {error}")
+        return
+
+    answer_callback_query(notifier.bot_token, callback_id, "지원하지 않는 버튼입니다.")
+
+
 def load_report_state(path: Path) -> dict[str, str]:
     """일일 리포트 전송 상태를 읽는다."""
     if not path.exists():
@@ -2021,6 +2203,21 @@ def run_listener():
             for update in updates:
                 offset = max(offset, int(update["update_id"]) + 1)
                 save_offset(settings.offset_path, offset)
+
+                callback_chat_id, callback_id, callback_data = extract_callback_query(update)
+                if callback_chat_id is not None and callback_id is not None and callback_data is not None:
+                    if callback_chat_id != notifier.chat_id:
+                        log(f"허용되지 않은 chat_id({callback_chat_id}) callback 은 무시합니다.")
+                        continue
+                    log(f"callback 수신: {callback_data}")
+                    handle_incident_callback(
+                        notifier,
+                        callback_chat_id,
+                        callback_id,
+                        callback_data,
+                        logger,
+                    )
+                    continue
 
                 chat_id, text = extract_message(update)
                 if chat_id is None or text is None:
