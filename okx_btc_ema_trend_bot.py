@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 구조를 추가
 - BTC 수익성 청산 직후 재진입과 추가매수를 잠시 막는 전용 쿨다운을 추가
 - 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 BTC 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
 - 수수료를 제하고도 순익이 남는 상태에서 추세가 꺾이면 빠르게 익절하는 순익 보호 청산 규칙을 추가
@@ -199,6 +200,7 @@ def run_bot():
     trailing_armed = False
     trailing_armed_at: float | None = None
     trailing_activation_price: float | None = None
+    partial_take_profit_done = False
     add_on_count = 0
     last_trade_at = 0.0
     last_stop_loss_at = 0.0
@@ -402,7 +404,19 @@ def run_bot():
                     amount=base_free,
                     fee_rate_pct=config["fee_rate_pct"],
                 )
-                if (not trailing_armed) and take_profit_price is not None and last_close >= take_profit_price:
+                partial_take_profit_triggered = (
+                    has_position
+                    and settings.enable_partial_take_profit
+                    and not partial_take_profit_done
+                    and take_profit_price is not None
+                    and last_close >= take_profit_price
+                )
+                if (
+                    not partial_take_profit_triggered
+                    and (not trailing_armed)
+                    and take_profit_price is not None
+                    and last_close >= take_profit_price
+                ):
                     trailing_armed = True
                     trailing_armed_at = time.time()
                     trailing_activation_price = last_close
@@ -455,6 +469,7 @@ def run_bot():
                 current_fee_quote_estimate = None
                 current_net_realized_pnl_quote = None
                 current_net_realized_pnl_pct = None
+                partial_take_profit_triggered = False
                 drawdown_from_high_pct = None
                 mfe_pct = None
                 mae_pct = None
@@ -464,6 +479,7 @@ def run_bot():
                     trailing_armed = False
                     trailing_armed_at = None
                     trailing_activation_price = None
+                    partial_take_profit_done = False
                     add_on_count = 0
 
             if daily_loss_limit_reached:
@@ -583,6 +599,8 @@ def run_bot():
                 "highest_price_since_entry": highest_price_since_entry,
                 "lowest_price_since_entry": lowest_price_since_entry,
                 "trailing_armed": trailing_armed,
+                "partial_take_profit_done": partial_take_profit_done,
+                "partial_take_profit_triggered": partial_take_profit_triggered,
                 "drawdown_from_high_pct": drawdown_from_high_pct,
                 "trailing_activation_price": trailing_activation_price,
                 "mfe_pct": mfe_pct,
@@ -878,6 +896,7 @@ def run_bot():
                     stage="exit_trigger",
                     passed=(
                         stop_triggered
+                        or partial_take_profit_triggered
                         or profit_protect_triggered
                         or trailing_stop_triggered
                         or trend_exit_triggered
@@ -885,6 +904,7 @@ def run_bot():
                     reason="no_exit_signal",
                     actual={
                         "stop_triggered": stop_triggered,
+                        "partial_take_profit_triggered": partial_take_profit_triggered,
                         "profit_protect_triggered": profit_protect_triggered,
                         "trailing_stop_triggered": trailing_stop_triggered,
                         "trend_exit_triggered": trend_exit_triggered,
@@ -908,6 +928,8 @@ def run_bot():
                 ready_reason=(
                     "stop_loss_triggered"
                     if stop_triggered
+                    else "partial_take_profit_triggered"
+                    if partial_take_profit_triggered
                     else "profit_protect_triggered"
                     if profit_protect_triggered
                     else "trailing_stop_triggered"
@@ -1200,12 +1222,37 @@ def run_bot():
                 )
 
             elif exit_ready:
-                amount = estimated_exit_amount
+                partial_take_profit_full_exit = False
+                if partial_take_profit_triggered:
+                    partial_amount = safe_amount_to_precision(
+                        exchange,
+                        symbol,
+                        base_free * settings.partial_take_profit_ratio,
+                    )
+                    remaining_after_partial = max(base_free - partial_amount, 0.0)
+                    if (
+                        partial_amount < settings.min_order_amount
+                        or remaining_after_partial < settings.min_order_amount
+                    ):
+                        partial_take_profit_full_exit = True
+                        amount = estimated_exit_amount
+                    else:
+                        amount = partial_amount
+                else:
+                    amount = estimated_exit_amount
                 if amount >= settings.min_order_amount:
                     if stop_triggered:
                         sell_reason = "stop_loss"
                         notify_fn = notifier.notify_stop_loss_fill
                         title = "BTC EMA 전략 손절 체결"
+                    elif partial_take_profit_triggered:
+                        sell_reason = "partial_take_profit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = (
+                            "BTC EMA 전략 부분 익절 체결"
+                            if not partial_take_profit_full_exit
+                            else "BTC EMA 전략 전량 익절 체결"
+                        )
                     elif profit_protect_triggered:
                         sell_reason = "profit_protect_take_profit"
                         notify_fn = notifier.notify_sell_fill
@@ -1300,9 +1347,19 @@ def run_bot():
                         daily_realized_pnl_quote += realized_pnl_quote
                     if stop_triggered:
                         last_stop_loss_at = time.time()
-                    elif sell_reason in {"trailing_take_profit", "profit_protect_take_profit"}:
+                    elif sell_reason in {
+                        "trailing_take_profit",
+                        "profit_protect_take_profit",
+                        "partial_take_profit",
+                    }:
                         last_profit_exit_at = time.time()
                     last_trade_at = time.time()
+                    if sell_reason == "partial_take_profit" and not partial_take_profit_full_exit:
+                        partial_take_profit_done = True
+                        if not trailing_armed:
+                            trailing_armed = True
+                            trailing_armed_at = time.time()
+                            trailing_activation_price = highest_price_since_entry or last_close
                     structured_logger.log_strategy(
                         symbol=symbol,
                         side="exit",
@@ -1363,7 +1420,7 @@ def run_bot():
                         ma_period=settings.slow_ema_period,
                         position_id=position_id,
                         leg_index=1,
-                        is_final_exit=True,
+                        is_final_exit=(sell_reason != "partial_take_profit" or partial_take_profit_full_exit),
                         holding_seconds=holding_seconds,
                         fee_rate_pct=config["fee_rate_pct"],
                         fee_quote_estimate=fee_quote_estimate,
@@ -1392,6 +1449,10 @@ def run_bot():
                             "confirm_bullish": confirm_bullish,
                             "stop_price": stop_price,
                             "take_profit_price": take_profit_price,
+                            "partial_take_profit_done": partial_take_profit_done,
+                            "partial_take_profit_triggered": partial_take_profit_triggered,
+                            "partial_take_profit_full_exit": partial_take_profit_full_exit,
+                            "partial_take_profit_ratio": settings.partial_take_profit_ratio,
                             "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
                             "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
                             "profit_protect_triggered": profit_protect_triggered,
@@ -1406,15 +1467,17 @@ def run_bot():
                         f"[{symbol}] 실현 손익: {realized_pnl_quote:.4f} {quote} | "
                         f"오늘 누적 실현 손익: {daily_realized_pnl_quote:.4f} {quote}"
                     )
-                    entry_price = None
-                    entry_opened_at = None
-                    position_id = None
-                    highest_price_since_entry = None
-                    lowest_price_since_entry = None
-                    trailing_armed = False
-                    trailing_armed_at = None
-                    trailing_activation_price = None
-                    add_on_count = 0
+                    if sell_reason != "partial_take_profit" or partial_take_profit_full_exit:
+                        entry_price = None
+                        entry_opened_at = None
+                        position_id = None
+                        highest_price_since_entry = None
+                        lowest_price_since_entry = None
+                        trailing_armed = False
+                        trailing_armed_at = None
+                        trailing_activation_price = None
+                        partial_take_profit_done = False
+                        add_on_count = 0
                 else:
                     log(
                         f"[{symbol}] 추정 매도 수량({amount:.8f} {base})이 "

@@ -1,6 +1,7 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 설정을 추가했다.
 - BTC 수익성 청산 직후에는 재진입과 추가매수를 잠시 막는 전용 쿨다운 설정을 추가했다.
 - 수수료를 반영해도 순익이 남을 때 추세 약화가 나오면 빠르게 보호 익절하는 설정을 추가했다.
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운 설정을 추가했다.
@@ -59,6 +60,8 @@ class BtcTrendSettings:
     min_trade_interval_sec: int
     stop_loss_reentry_cooldown_sec: int
     profit_exit_reentry_cooldown_sec: int
+    enable_partial_take_profit: bool
+    partial_take_profit_ratio: float
     enable_pyramid_add_on: bool
     pyramid_trigger_profit_pct: float
     pyramid_position_ratio: float
@@ -124,6 +127,13 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         ),
         profit_exit_reentry_cooldown_sec=int(
             os.getenv("BTC_TREND_PROFIT_EXIT_REENTRY_COOLDOWN_SEC", "600")
+        ),
+        enable_partial_take_profit=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_PARTIAL_TAKE_PROFIT", "true"),
+            default=True,
+        ),
+        partial_take_profit_ratio=float(
+            os.getenv("BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO", "0.5")
         ),
         enable_pyramid_add_on=parse_bool(
             os.getenv("BTC_TREND_ENABLE_PYRAMID_ADD_ON", "true"),
