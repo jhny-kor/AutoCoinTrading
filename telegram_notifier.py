@@ -1,6 +1,7 @@
 """
 텔레그램 알림 유틸
 
+- 오류 알림에 인시던트 ID 와 승인형 버튼(재기동/상세/수정 요청/무시)을 함께 보낼 수 있도록 확장했다.
 - .env 설정이 있으면 텔레그램으로 메시지를 전송한다.
 - 설정이 없거나 비활성화되어 있으면 조용히 아무 동작도 하지 않는다.
 - 봇 체결, 손절, 에러 같은 이벤트 알림에 사용한다.
@@ -20,6 +21,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from incident_manager import register_incident
 
 
 def extract_telegram_api_error_detail(body: bytes) -> str | None:
@@ -83,8 +85,14 @@ class TelegramNotifier:
     enable_error_notification: bool
     enable_daily_limit_notification: bool
     enable_attention_notification: bool
+    enable_error_action_buttons: bool
 
-    def send_message_detailed(self, text: str) -> tuple[bool, str | None]:
+    def send_message_detailed(
+        self,
+        text: str,
+        *,
+        reply_markup: dict | None = None,
+    ) -> tuple[bool, str | None]:
         """텔레그램 메시지를 전송하고 실패 원인을 함께 반환한다."""
         if not self.enabled:
             return False, "텔레그램 알림이 비활성화되어 있습니다."
@@ -95,6 +103,7 @@ class TelegramNotifier:
             {
                 "chat_id": self.chat_id,
                 "text": text,
+                **({"reply_markup": reply_markup} if reply_markup is not None else {}),
             }
         ).encode("utf-8")
 
@@ -159,7 +168,34 @@ class TelegramNotifier:
         """에러 알림을 보낸다."""
         if not self.enable_error_notification:
             return False
-        return self.send_message(f"[{exchange_name}] {symbol} 에러 발생\n{detail}")
+        incident = register_incident(
+            exchange_name=exchange_name,
+            symbol=symbol,
+            detail=detail,
+        )
+        text = (
+            f"[{exchange_name}] {symbol} 에러 발생\n"
+            f"인시던트 ID: {incident['id']}\n"
+            f"반복 횟수: {incident['count']}\n"
+            f"{detail}"
+        )
+        reply_markup = None
+        if self.enable_error_action_buttons:
+            incident_id = incident["id"]
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "재기동", "callback_data": f"inc:restart:{incident_id}"},
+                        {"text": "상세 보기", "callback_data": f"inc:detail:{incident_id}"},
+                    ],
+                    [
+                        {"text": "수정 요청", "callback_data": f"inc:fix:{incident_id}"},
+                        {"text": "무시", "callback_data": f"inc:ignore:{incident_id}"},
+                    ],
+                ]
+            }
+        sent, _ = self.send_message_detailed(text, reply_markup=reply_markup)
+        return sent
 
     def notify_daily_loss_limit(
         self, exchange_name: str, detail: str
@@ -243,6 +279,9 @@ def load_telegram_notifier() -> TelegramNotifier:
         ),
         enable_attention_notification=parse_bool(
             os.getenv("TELEGRAM_NOTIFY_ATTENTION", "true"), default=True
+        ),
+        enable_error_action_buttons=parse_bool(
+            os.getenv("TELEGRAM_ENABLE_ERROR_ACTION_BUTTONS", "true"), default=True
         ),
     )
 
