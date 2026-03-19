@@ -119,6 +119,7 @@
 
 위 도구는 `ma_crossover_bot.py`, `upbit_ma_crossover_bot.py`, `okx_btc_ema_trend_bot.py`, `upbit_btc_ema_trend_bot.py`, `analysis_log_collector.py`, `telegram_command_listener.py` 상태를 함께 확인하고 관리합니다.
 현재 기준으로 `start all`은 매일 돌려야 하는 프로그램 전체를 모두 시작하고, `stop all`은 이 관리 대상 전체를 모두 중지합니다.
+부팅 직후 `launchd` 환경에서는 `ps` 조회 권한이 막히는 경우가 있어, 현재는 `bot_manager.py` 가 `logs/pids/*.pid` 를 함께 관리해 자동 시작 시 중복 실행 확인과 상태 추적을 이어가도록 보완되어 있습니다.
 
 ## 운영 루틴 정리
 
