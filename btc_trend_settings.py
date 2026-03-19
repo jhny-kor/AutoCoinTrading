@@ -1,6 +1,7 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- BTC 진입 필터를 조금 더 보수적으로 하고, 강한 다중 상승 추세에서는 짧은 조정을 견디는 설정을 추가했다.
 - BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 설정을 추가했다.
 - BTC 수익성 청산 직후에는 재진입과 추가매수를 잠시 막는 전용 쿨다운 설정을 추가했다.
 - 수수료를 반영해도 순익이 남을 때 추세 약화가 나오면 빠르게 보호 익절하는 설정을 추가했다.
@@ -49,6 +50,9 @@ class BtcTrendSettings:
     min_ema_spread_pct: float
     enable_fee_protect_exit: bool
     fee_protect_min_net_pnl_pct: float
+    enable_bull_pullback_hold: bool
+    bull_pullback_tolerance_pct: float
+    bull_pullback_min_spread_pct: float
     atr_period: int
     min_atr_pct: float
     max_atr_pct: float
@@ -110,6 +114,16 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         ),
         fee_protect_min_net_pnl_pct=float(
             os.getenv("BTC_TREND_FEE_PROTECT_MIN_NET_PNL_PCT", "0.12")
+        ),
+        enable_bull_pullback_hold=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_BULL_PULLBACK_HOLD", "true"),
+            default=True,
+        ),
+        bull_pullback_tolerance_pct=float(
+            os.getenv("BTC_TREND_BULL_PULLBACK_TOLERANCE_PCT", "0.20")
+        ),
+        bull_pullback_min_spread_pct=float(
+            os.getenv("BTC_TREND_BULL_PULLBACK_MIN_SPREAD_PCT", "0.10")
         ),
         atr_period=int(os.getenv("BTC_TREND_ATR_PERIOD", "14")),
         min_atr_pct=float(os.getenv("BTC_TREND_MIN_ATR_PCT", "0.08")),

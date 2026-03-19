@@ -250,6 +250,20 @@
 - 해석:
   - BTC도 알트처럼 과도한 분할 구조는 아니어야 하므로, `1회 50% 부분 익절 + 잔량 추세 추종` 정도가 가장 무난한 시작점이라고 봄
 
+### 21. BTC 진입 필터 강화와 강한 상승 추세 pullback 허용 (2026-03-19, btc_mid_v1)
+
+- 변경 내용:
+  - `BTC_TREND_MIN_EMA_SPREAD_PCT` `0.015 -> 0.020`
+  - `BTC_TREND_MIN_VOLUME_RATIO` `1.30 -> 1.45`
+  - `BTC_TREND_ENABLE_BULL_PULLBACK_HOLD=true`
+  - `BTC_TREND_BULL_PULLBACK_TOLERANCE_PCT=0.20`
+  - `BTC_TREND_BULL_PULLBACK_MIN_SPREAD_PCT=0.10`
+- 근거 로그:
+  - 최근 BTC 손절 거래 상당수는 `MFE` 가 거의 없는 약한 진입이었음
+  - 반대로 강한 상방 정렬 구간에서는 작은 조정에도 `trend_exit` 또는 보호 익절이 너무 빨리 나갈 가능성이 있었음
+- 해석:
+  - 진입은 더 보수적으로 줄이고, 대신 `상위 추세 동의 + EMA 정렬 + 충분한 스프레드 + 짧은 되돌림` 구간은 일시 조정으로 봐서 너무 성급한 청산을 줄이는 편이 더 자연스럽다고 판단
+
 ### 16. 목표 비중 + 누적 투입 원가 기반 포트폴리오 배분 추가 (2026-03-17, portfolio allocator)
 
 - 변경 내용:

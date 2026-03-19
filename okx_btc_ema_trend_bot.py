@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC 진입 필터를 조금 더 보수적으로 강화하고, 강한 다중 상승 추세에서는 짧은 조정에 대한 청산을 잠시 보류하도록 조정
 - BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 구조를 추가
 - BTC 수익성 청산 직후 재진입과 추가매수를 잠시 막는 전용 쿨다운을 추가
 - 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 BTC 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
@@ -462,6 +463,21 @@ def run_bot():
                         f"[{symbol}] 수수료 반영 예상 순익률: {current_net_realized_pnl_pct:.2f}% "
                         f"(보호 익절 기준 {settings.fee_protect_min_net_pnl_pct:.2f}%)"
                     )
+                bull_pullback_hold_active = (
+                    settings.enable_bull_pullback_hold
+                    and confirm_bullish
+                    and ema_aligned
+                    and pnl_pct is not None
+                    and pnl_pct > 0
+                    and drawdown_from_high_pct is not None
+                    and drawdown_from_high_pct <= settings.bull_pullback_tolerance_pct
+                    and ema_spread_pct >= settings.bull_pullback_min_spread_pct
+                )
+                if bull_pullback_hold_active:
+                    log(
+                        f"[{symbol}] 강한 상방 정렬 구간이라 되돌림 {drawdown_from_high_pct:.2f}% 는 "
+                        f"일시 조정으로 보고 보유를 유지합니다."
+                    )
             else:
                 stop_price = None
                 take_profit_price = None
@@ -470,6 +486,7 @@ def run_bot():
                 current_net_realized_pnl_quote = None
                 current_net_realized_pnl_pct = None
                 partial_take_profit_triggered = False
+                bull_pullback_hold_active = False
                 drawdown_from_high_pct = None
                 mfe_pct = None
                 mae_pct = None
@@ -506,6 +523,7 @@ def run_bot():
                 and current_net_realized_pnl_pct >= settings.fee_protect_min_net_pnl_pct
                 and (bearish or (not ema_aligned) or (not price_above_fast))
                 and not trailing_stop_triggered
+                and not bull_pullback_hold_active
             )
             trend_exit_triggered = (
                 has_position
@@ -513,6 +531,7 @@ def run_bot():
                 and bearish
                 and not trailing_armed
                 and not profit_protect_triggered
+                and not bull_pullback_hold_active
             )
             position_ratio = settings.get_position_ratio(symbol)
             requested_order_value = quote_free * config["risk_per_trade"] * position_ratio
@@ -594,6 +613,9 @@ def run_bot():
                 "pnl_pct": pnl_pct,
                 "net_pnl_pct_estimate": current_net_realized_pnl_pct,
                 "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
+                "bull_pullback_hold_active": bull_pullback_hold_active,
+                "bull_pullback_tolerance_pct": settings.bull_pullback_tolerance_pct,
+                "bull_pullback_min_spread_pct": settings.bull_pullback_min_spread_pct,
                 "min_order_amount": settings.min_order_amount,
                 "position_id": position_id,
                 "highest_price_since_entry": highest_price_since_entry,
