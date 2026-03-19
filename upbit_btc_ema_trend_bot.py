@@ -1,5 +1,6 @@
 """
 수정 요약
+- 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - BTC 진입 필터를 조금 더 보수적으로 강화하고, 강한 다중 상승 추세에서는 짧은 조정에 대한 청산을 잠시 보류하도록 조정
 - BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 구조를 추가
 - BTC 수익성 청산 직후 재진입과 추가매수를 잠시 막는 전용 쿨다운을 추가
@@ -48,7 +49,11 @@ from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
 from strategy_settings import load_managed_symbols
 from telegram_notifier import load_telegram_notifier
-from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
+from trade_history_logger import (
+    TradeHistoryLogger,
+    estimate_round_trip_net_pnl,
+    summarize_order_for_notification,
+)
 from upbit_ma_crossover_bot import (
     create_upbit_client,
     fetch_ohlcv,
@@ -1039,11 +1044,21 @@ def run_bot():
                         f"[{symbol}] BTC EMA 전략 매수 체결",
                         f"주문 결과: {order}",
                     )
+                    buy_summary = summarize_order_for_notification(
+                        raw_order=order,
+                        side="buy",
+                        requested_amount=amount,
+                        requested_order_value_quote=cost_to_spend,
+                        fallback_amount=amount,
+                        fallback_order_value_quote=cost_to_spend,
+                        fallback_price=entry_price,
+                    )
                     notifier.notify_buy_fill(
                         "UPBIT-BTC",
                         symbol,
-                        f"주문 수량: {amount}\n"
-                        f"추정 진입가: {entry_price:.0f}",
+                        f"매수 금액: {buy_summary['executed_order_value_quote']:.0f} {quote}\n"
+                        f"매수 단가: {buy_summary['executed_price']:.0f}\n"
+                        f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
                     )
                     trade_history.log_fill(
                         exchange_name="UPBIT",
@@ -1189,11 +1204,22 @@ def run_bot():
                     f"[{symbol}] BTC EMA 전략 추가매수 체결",
                     f"주문 결과: {order}",
                 )
+                add_on_summary = summarize_order_for_notification(
+                    raw_order=order,
+                    side="buy",
+                    requested_amount=amount,
+                    requested_order_value_quote=add_on_cost_to_spend,
+                    fallback_amount=amount,
+                    fallback_order_value_quote=add_on_cost_to_spend,
+                    fallback_price=entry_price,
+                )
                 notifier.notify_buy_fill(
                     "UPBIT-BTC",
                     symbol,
                     f"사유: add_on_winner\n"
-                    f"주문 수량: {amount}\n"
+                    f"매수 금액: {add_on_summary['executed_order_value_quote']:.0f} {quote}\n"
+                    f"매수 단가: {add_on_summary['executed_price']:.0f}\n"
+                    f"체결 수량: {add_on_summary['executed_amount']:.8f} {base}\n"
                     f"갱신 평균 진입가: {entry_price:.0f}",
                 )
                 trade_history.log_fill(
@@ -1406,10 +1432,22 @@ def run_bot():
                         f"[{symbol}] {title}",
                         f"주문 결과: {order} | 수익률={realized_pnl_pct:.2f}%",
                     )
+                    sell_summary = summarize_order_for_notification(
+                        raw_order=order,
+                        side="sell",
+                        requested_amount=amount,
+                        requested_order_value_quote=amount * last_close,
+                        fallback_amount=amount,
+                        fallback_order_value_quote=amount * last_close,
+                        fallback_price=last_close,
+                    )
                     notify_fn(
                         "UPBIT-BTC",
                         symbol,
                         f"사유: {sell_reason}\n"
+                        f"매도 금액: {sell_summary['executed_order_value_quote']:.0f} {quote}\n"
+                        f"매도 단가: {sell_summary['executed_price']:.0f}\n"
+                        f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
                         f"수익률: {realized_pnl_pct:.2f}%\n"
                         f"실현 손익: {realized_pnl_quote:.2f} {quote}",
                     )
