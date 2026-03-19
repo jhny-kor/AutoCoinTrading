@@ -81,6 +81,7 @@ from ma_crossover_bot import (
 )
 from telegram_notifier import load_telegram_notifier
 from telegram_notifier import format_telegram_request_error
+from telegram_notifier import format_telegram_text_numbers
 from trade_history_logger import estimate_round_trip_net_pnl
 from strategy_settings import load_alt_symbols, load_managed_symbols
 from upbit_ma_crossover_bot import (
@@ -1929,7 +1930,7 @@ def send_direct_text(
     result, error = telegram_api_request(
         bot_token,
         "sendMessage",
-        payload={"chat_id": chat_id, "text": text},
+        payload={"chat_id": chat_id, "text": format_telegram_text_numbers(text)},
         timeout=15,
     )
     return (result is not None), error

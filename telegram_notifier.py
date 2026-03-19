@@ -2,6 +2,7 @@
 텔레그램 알림 유틸
 
 - 오류 알림에 인시던트 ID 와 승인형 버튼(재기동/상세/수정 요청/무시)을 함께 보낼 수 있도록 확장했다.
+- 날짜 표기는 유지하고, 그 밖의 숫자는 텔레그램 전송 직전에 세 자리마다 쉼표가 들어가도록 공통 포맷을 적용했다.
 - .env 설정이 있으면 텔레그램으로 메시지를 전송한다.
 - 설정이 없거나 비활성화되어 있으면 조용히 아무 동작도 하지 않는다.
 - 봇 체결, 손절, 에러 같은 이벤트 알림에 사용한다.
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -22,6 +24,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from incident_manager import register_incident
+
+NUMERIC_TOKEN_RE = re.compile(r"(?<![\w/:\-,])(-?\d+(?:\.\d+)?)(?![\w/:\-,])")
 
 
 def extract_telegram_api_error_detail(body: bytes) -> str | None:
@@ -65,6 +69,31 @@ def format_telegram_request_error(exc: Exception) -> str:
     return repr(exc)
 
 
+def format_numeric_token(token: str) -> str:
+    """숫자 토큰에 세 자리 쉼표를 넣되 소수점 자릿수는 유지한다."""
+    if not token:
+        return token
+    sign = ""
+    raw = token
+    if raw.startswith("-"):
+        sign = "-"
+        raw = raw[1:]
+    if "." in raw:
+        whole, fraction = raw.split(".", 1)
+        if not whole:
+            whole = "0"
+        return f"{sign}{int(whole):,}.{fraction}"
+    return f"{sign}{int(raw):,}"
+
+
+def format_telegram_text_numbers(text: str) -> str:
+    """날짜/시간 표현을 제외한 숫자에 세 자리 쉼표를 적용한다."""
+    return NUMERIC_TOKEN_RE.sub(
+        lambda match: format_numeric_token(match.group(1)),
+        text,
+    )
+
+
 def parse_bool(raw: str | None, default: bool = False) -> bool:
     """문자열 불리언 값을 파싱한다."""
     if raw is None:
@@ -99,10 +128,11 @@ class TelegramNotifier:
         if not self.bot_token or not self.chat_id:
             return False, "텔레그램 봇 토큰 또는 chat id 가 비어 있습니다."
 
+        formatted_text = format_telegram_text_numbers(text)
         payload = json.dumps(
             {
                 "chat_id": self.chat_id,
-                "text": text,
+                "text": formatted_text,
                 **({"reply_markup": reply_markup} if reply_markup is not None else {}),
             }
         ).encode("utf-8")
