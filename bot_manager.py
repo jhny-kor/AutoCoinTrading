@@ -9,6 +9,9 @@
 - 상태 출력 문자열을 콘솔과 텔레그램에서 함께 재사용할 수 있도록 정리했다.
 - start all 이 현재 매일 실행해야 하는 봇 4개와 수집기, 텔레그램 리스너를 모두 시작하도록 정리했다.
 - 상태 출력에서는 명령어 전체 문자열을 제외해 핵심 정보만 보이도록 정리했다.
+- launchd 환경에서 ps 호출 권한이 없어도 자동 시작이 실패하지 않도록 보완했다.
+- ps 조회가 막힌 경우 PID 파일을 이용해 중복 시작과 상태 추적을 이어가도록 보완했다.
+- 프로세스 목록 조회가 막힌 경우 상태 출력에 안내 문구를 함께 남기도록 정리했다.
 
 가능한 모든 터미널 명령
 - .venv/bin/python bot_manager.py status
@@ -76,6 +79,8 @@ GREEN = "\033[32m"
 YELLOW = "\033[33m"
 BLUE = "\033[34m"
 CYAN = "\033[36m"
+PROCESS_LIST_WARNING: str | None = None
+PID_DIR = Path("logs") / "pids"
 
 
 @dataclass
@@ -88,6 +93,91 @@ class ManagedProcess:
     ppid: int
     elapsed: str
     command: str
+
+
+def pid_file_path(name: str) -> Path:
+    """프로그램 이름에 대응하는 PID 파일 경로를 반환한다."""
+    return PID_DIR / f"{name}.pid"
+
+
+def is_pid_alive(pid: int) -> bool:
+    """주어진 PID 가 현재 살아 있는지 확인한다."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def read_pid_file(name: str) -> int | None:
+    """PID 파일에서 정수를 읽어 반환한다."""
+    path = pid_file_path(name)
+    if not path.exists():
+        return None
+
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def write_pid_file(name: str, pid: int) -> None:
+    """PID 파일을 기록한다."""
+    PID_DIR.mkdir(parents=True, exist_ok=True)
+    pid_file_path(name).write_text(str(pid), encoding="utf-8")
+
+
+def remove_pid_file(name: str) -> None:
+    """PID 파일이 있으면 삭제한다."""
+    path = pid_file_path(name)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def build_pidfile_fallback_processes(
+    exclude_current: bool = True,
+) -> list[ManagedProcess]:
+    """PID 파일을 기준으로 관리 대상 프로세스 목록을 구성한다."""
+    current_pid = os.getpid()
+    processes: list[ManagedProcess] = []
+
+    for name, script in PROGRAMS.items():
+        pid = read_pid_file(name)
+        if pid is None:
+            continue
+        if exclude_current and pid == current_pid:
+            continue
+        if not is_pid_alive(pid):
+            remove_pid_file(name)
+            continue
+
+        processes.append(
+            ManagedProcess(
+                name=name,
+                script=script,
+                pid=pid,
+                ppid=0,
+                elapsed="?",
+                command=f"{script} (pidfile)",
+            )
+        )
+
+    return processes
+
+
+def merge_with_pidfile_processes(
+    processes: list[ManagedProcess],
+    exclude_current: bool = True,
+) -> list[ManagedProcess]:
+    """ps 결과에 없는 항목은 PID 파일 기준 정보로 보완한다."""
+    by_name = {proc.name: proc for proc in processes}
+    for proc in build_pidfile_fallback_processes(exclude_current=exclude_current):
+        by_name.setdefault(proc.name, proc)
+    return list(by_name.values())
 
 
 def command_matches_script(command: str, script: str) -> bool:
@@ -113,12 +203,29 @@ def color_text(text: str, color: str, bold: bool = False) -> str:
 
 def list_managed_processes(exclude_current: bool = True) -> list[ManagedProcess]:
     """현재 실행 중인 관리 대상 프로세스를 조회한다."""
-    result = subprocess.run(
-        ["ps", "-Ao", "pid=,ppid=,etime=,command="],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    global PROCESS_LIST_WARNING
+    PROCESS_LIST_WARNING = None
+
+    try:
+        result = subprocess.run(
+            ["ps", "-Ao", "pid=,ppid=,etime=,command="],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except PermissionError:
+        PROCESS_LIST_WARNING = (
+            "프로세스 목록 조회 권한이 없어 PID 파일 기준 상태를 표시합니다."
+        )
+        return build_pidfile_fallback_processes(exclude_current=exclude_current)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        PROCESS_LIST_WARNING = (
+            "프로세스 목록 조회에 실패해 PID 파일 기준 상태를 표시합니다."
+            if not stderr
+            else f"프로세스 목록 조회에 실패해 PID 파일 기준 상태를 표시합니다: {stderr}"
+        )
+        return build_pidfile_fallback_processes(exclude_current=exclude_current)
 
     current_pid = os.getpid()
     processes: list[ManagedProcess] = []
@@ -151,7 +258,7 @@ def list_managed_processes(exclude_current: bool = True) -> list[ManagedProcess]
                 )
                 break
 
-    return processes
+    return merge_with_pidfile_processes(processes, exclude_current=exclude_current)
 
 
 def build_status_lines(
@@ -169,6 +276,14 @@ def build_status_lines(
     else:
         lines.append(header)
         lines.append(separator)
+
+    if PROCESS_LIST_WARNING:
+        warning_text = (
+            color_text(f"안내: {PROCESS_LIST_WARNING}", YELLOW, bold=True)
+            if use_color
+            else f"안내: {PROCESS_LIST_WARNING}"
+        )
+        lines.append(warning_text)
 
     for name, script in PROGRAMS.items():
         matched = [proc for proc in processes if proc.name == name]
@@ -279,6 +394,7 @@ def start_program(name: str) -> int:
             start_new_session=True,
         )
 
+    write_pid_file(name, process.pid)
     print(f"{name} 시작 요청 완료 (PID {process.pid})")
     return 0
 
@@ -338,8 +454,11 @@ def handle_stop(target: str = "all", force: bool = False) -> int:
 
     if target == "all":
         print("모든 관리 대상 프로세스가 중지되었습니다.")
+        for name in PROGRAMS:
+            remove_pid_file(name)
     else:
         print(f"{target} 관리 대상 프로세스가 중지되었습니다.")
+        remove_pid_file(target)
     return 0
 
 
