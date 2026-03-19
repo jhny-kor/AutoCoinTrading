@@ -1,6 +1,7 @@
 """
 체결 결과 구조화 로거
 
+- 텔레그램 체결 알림에 실제 체결가, 체결 수량, 체결 금액을 함께 표시할 수 있도록 주문 요약 helper 를 추가
 - 체결 시 왕복 수수료 추정치를 이용한 순손익 계산 helper 를 함께 제공해 로그 기록 기준을 통일
 - strategy_version 을 최상위 필드로 남겨 버전별 성과 비교가 가능하도록 확장
 - 진입 후 최고가/최저가, MFE/MAE, 트레일링 활성화 소요 시간 같은 거래 품질 필드도 함께 저장하도록 확장
@@ -202,6 +203,50 @@ def extract_execution_quality(
         "fee_currency": fee_currency,
         "slippage_pct": slippage_pct,
         "slippage_bps": slippage_bps,
+    }
+
+
+def summarize_order_for_notification(
+    *,
+    raw_order: Any,
+    side: str,
+    requested_amount: float | None = None,
+    requested_order_value_quote: float | None = None,
+    fallback_amount: float | None = None,
+    fallback_order_value_quote: float | None = None,
+    fallback_price: float | None = None,
+) -> dict[str, float | None]:
+    """텔레그램 체결 알림에 표시할 핵심 주문 요약값을 정리한다."""
+    execution_quality = extract_execution_quality(
+        raw_order=raw_order,
+        side=side,
+        requested_amount=requested_amount,
+        requested_order_value_quote=requested_order_value_quote,
+    )
+
+    executed_amount = execution_quality.get("filled_amount_reported")
+    if executed_amount in (None, 0):
+        executed_amount = requested_amount
+    if executed_amount in (None, 0):
+        executed_amount = fallback_amount
+
+    executed_price = execution_quality.get("average_fill_price")
+    if executed_price in (None, 0):
+        executed_price = fallback_price
+
+    executed_order_value_quote = execution_quality.get("order_cost_reported")
+    if executed_order_value_quote in (None, 0):
+        if executed_amount not in (None, 0) and executed_price not in (None, 0):
+            executed_order_value_quote = float(executed_amount) * float(executed_price)
+        elif requested_order_value_quote not in (None, 0):
+            executed_order_value_quote = requested_order_value_quote
+        else:
+            executed_order_value_quote = fallback_order_value_quote
+
+    return {
+        "executed_amount": _to_float(executed_amount),
+        "executed_price": _to_float(executed_price),
+        "executed_order_value_quote": _to_float(executed_order_value_quote),
     }
 
 

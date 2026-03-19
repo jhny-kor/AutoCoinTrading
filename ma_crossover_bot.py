@@ -1,5 +1,6 @@
 """
 수정 요약
+- 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운을 추가
 - 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 알트 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
 - 알트가 수수료를 제하고도 순익인 상태에서 메인 추세가 꺾이면 즉시 전량 익절하는 순익 보호 청산 규칙을 추가
@@ -49,7 +50,11 @@ from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
-from trade_history_logger import TradeHistoryLogger, estimate_round_trip_net_pnl
+from trade_history_logger import (
+    TradeHistoryLogger,
+    estimate_round_trip_net_pnl,
+    summarize_order_for_notification,
+)
 
 def load_config() -> dict:
     """환경 변수와 기본 설정 로드."""
@@ -1195,11 +1200,21 @@ def run_bot():
                             f"[{symbol}] 매수 주문 체결",
                             f"주문 결과: {order}",
                         )
+                        buy_summary = summarize_order_for_notification(
+                            raw_order=order,
+                            side="buy",
+                            requested_amount=estimated_bought_amount,
+                            requested_order_value_quote=order_value,
+                            fallback_amount=estimated_bought_amount,
+                            fallback_order_value_quote=order_value,
+                            fallback_price=entry_price[symbol],
+                        )
                         notifier.notify_buy_fill(
                             "OKX",
                             symbol,
-                            f"사용 금액: {order_value:.8f} {quote}\n"
-                            f"추정 진입가: {entry_price[symbol]:.4f}",
+                            f"매수 금액: {buy_summary['executed_order_value_quote']:.8f} {quote}\n"
+                            f"매수 단가: {buy_summary['executed_price']:.4f}\n"
+                            f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
                         )
                         trade_history.log_fill(
                             exchange_name="OKX",
@@ -1404,10 +1419,22 @@ def run_bot():
                                 f"[{symbol}] {sell_reason} 매도 주문 체결",
                                 f"주문 결과: {order} | 수익률={realized_pnl_pct:.2f}%",
                             )
+                            sell_summary = summarize_order_for_notification(
+                                raw_order=order,
+                                side="sell",
+                                requested_amount=amount,
+                                requested_order_value_quote=amount * last_close,
+                                fallback_amount=amount,
+                                fallback_order_value_quote=amount * last_close,
+                                fallback_price=last_close,
+                            )
                             if stop_loss_triggered:
                                 notifier.notify_stop_loss_fill(
                                     "OKX",
                                     symbol,
+                                    f"매도 금액: {sell_summary['executed_order_value_quote']:.4f} {quote}\n"
+                                    f"매도 단가: {sell_summary['executed_price']:.4f}\n"
+                                    f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
                                     f"수익률: {realized_pnl_pct:.2f}%\n"
                                     f"실현 손익: {realized_pnl_quote:.4f} {quote}",
                                 )
@@ -1415,6 +1442,9 @@ def run_bot():
                                 notifier.notify_sell_fill(
                                     "OKX",
                                     symbol,
+                                    f"매도 금액: {sell_summary['executed_order_value_quote']:.4f} {quote}\n"
+                                    f"매도 단가: {sell_summary['executed_price']:.4f}\n"
+                                    f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
                                     f"수익률: {realized_pnl_pct:.2f}%\n"
                                     f"실현 손익: {realized_pnl_quote:.4f} {quote}",
                                 )

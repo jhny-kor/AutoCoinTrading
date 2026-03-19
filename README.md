@@ -247,6 +247,7 @@
 - 일일 손실 제한 도달
 - 즉시 확인이 필요한 운영 알림
 - 승인형 버튼이 붙은 에러 인시던트 알림
+- 매수/매도 체결 알림에 체결 금액, 체결 단가, 체결 수량 표시
 
 알림은 `ma_crossover_bot.py`, `upbit_ma_crossover_bot.py`, `okx_btc_ema_trend_bot.py`, `upbit_btc_ema_trend_bot.py` 실행 중 자동으로 전송됩니다.
 즉시 확인 요청을 수동으로 보내고 싶으면 아래 명령을 사용할 수 있습니다.
