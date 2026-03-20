@@ -1,0 +1,4 @@
+# GitHub Linguist가 빌드 산출물을 언어 통계에서 제외하도록 설정
+build/** linguist-generated=true
+dist/** linguist-generated=true
+dist.zip linguist-generated=true
