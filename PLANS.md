@@ -188,6 +188,30 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
 - 일일 최대 수익 도달 시 거래 중단
 - 코인별 거래량/변동성 기준 세분화
 
+## 향후 후보안
+
+### 장타/스윙 전용 분리 폴더 구축 (2026-03-21 기준 후보안)
+
+- 방향
+  - 기존 `auto_coin_bot` 는 단타/인트라데이 전용 유지
+  - 장타는 새 폴더 `auto_coin_bot_swing` 으로 완전히 분리
+- 이유
+  - `.env`, 로그, 텔레그램 알림, 자동시작, 포트폴리오 배분이 단타와 장타에서 서로 섞이지 않도록 하기 위함
+  - 장타는 `1h / 4h / 1d` 기반의 더 긴 보유 전략이 필요해 현재 1분봉/5분봉 구조와 성격이 다름
+- 공통 모듈 재사용 후보
+  - `bot_logger.py`
+  - `telegram_notifier.py`
+  - `telegram_command_listener.py`
+  - `structured_log_manager.py`
+  - `trade_history_logger.py`
+  - `portfolio_allocator.py`
+  - `log_path_utils.py`
+- 초기 전략 방향
+  - `BTC / ETH / XRP`
+  - `1시간봉 진입 + 4시간봉 확인 + 일봉 레짐`
+  - 손절 우선, 브레이크이븐 가드, 부분 익절, 트레일링 순서
+  - 자세한 초안은 `SWING_BOT_DESIGN.md` 참고
+
 ## 앞으로 가능한 전략 개선
 
 ### BTC 별도 실험 전략
