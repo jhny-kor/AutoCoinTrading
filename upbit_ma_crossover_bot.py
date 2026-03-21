@@ -1,5 +1,6 @@
 """
 수정 요약
+- ETH/KRW 같은 특정 심볼에서 수익을 줬다가 다시 크게 깨지는 흐름을 막기 위한 브레이크이븐 가드를 추가했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운을 추가
 - 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 알트 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
@@ -543,6 +544,10 @@ def run_bot():
                 fee_round_trip_pct = config["fee_rate_pct"] * 2
                 take_profit_pct = strategy.get_take_profit_pct(symbol)
                 stop_loss_pct = strategy.get_stop_loss_pct(symbol)
+                break_even_guard_min_mfe_pct = strategy.get_break_even_guard_min_mfe_pct(symbol)
+                break_even_guard_floor_net_pnl_pct = (
+                    strategy.get_break_even_guard_floor_net_pnl_pct(symbol)
+                )
                 partial_take_profit_enabled = strategy.uses_partial_take_profit(symbol)
                 partial_stop_loss_enabled = strategy.uses_partial_stop_loss(symbol)
                 partial_take_profit_pending = (
@@ -614,12 +619,25 @@ def run_bot():
                     and bearish
                     and not stop_loss_triggered
                 )
+                break_even_guard_triggered = (
+                    has_position
+                    and strategy.enable_break_even_guard
+                    and break_even_guard_min_mfe_pct > 0
+                    and mfe_pct is not None
+                    and mfe_pct >= break_even_guard_min_mfe_pct
+                    and current_net_realized_pnl_pct is not None
+                    and current_net_realized_pnl_pct <= break_even_guard_floor_net_pnl_pct
+                    and bearish
+                    and not stop_loss_triggered
+                    and not profit_protect_triggered
+                )
                 if (
                     bearish
                     and has_position
                     and pnl_pct is not None
                     and not take_profit_ready
                     and not profit_protect_triggered
+                    and not break_even_guard_triggered
                     and not stop_loss_triggered
                 ):
                     log(
@@ -631,6 +649,11 @@ def run_bot():
                     log(
                         f"[{symbol}] 순익 보호 익절 조건 충족: 수수료 반영 순익률 "
                         f"{current_net_realized_pnl_pct:.2f}% >= {strategy.fee_protect_min_net_pnl_pct:.2f}%"
+                    )
+                if has_position and break_even_guard_triggered:
+                    log(
+                        f"[{symbol}] 브레이크이븐 가드 조건 충족: 최대 유리 구간 {mfe_pct:.2f}% 이후 "
+                        f"수수료 반영 순익률이 {current_net_realized_pnl_pct:.2f}% 까지 되돌아 청산합니다."
                     )
                 if has_position and stop_loss_triggered:
                     log(
@@ -679,7 +702,7 @@ def run_bot():
                     )
                 estimated_sell_amount = (
                     base_free
-                    if (stop_loss_triggered or profit_protect_triggered)
+                    if (stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered)
                     else (base_free * strategy.sell_split_ratio)
                 )
                 estimated_sell_amount = safe_amount_to_precision(
@@ -721,6 +744,9 @@ def run_bot():
                     "fee_round_trip_pct": fee_round_trip_pct,
                     "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
                     "profit_protect_triggered": profit_protect_triggered,
+                    "break_even_guard_min_mfe_pct": break_even_guard_min_mfe_pct,
+                    "break_even_guard_floor_net_pnl_pct": break_even_guard_floor_net_pnl_pct,
+                    "break_even_guard_triggered": break_even_guard_triggered,
                     "partial_take_profit_cooldown_active": partial_take_profit_cooldown_active,
                     "partial_take_profit_cooldown_remaining_sec": partial_take_profit_cooldown_remaining,
                     "partial_take_profit_pending": partial_take_profit_pending,
@@ -874,20 +900,31 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="exit_trigger",
-                        passed=(stop_loss_triggered or profit_protect_triggered or bearish),
+                        passed=(
+                            stop_loss_triggered
+                            or profit_protect_triggered
+                            or break_even_guard_triggered
+                            or bearish
+                        ),
                         reason="no_exit_signal",
                         actual={
                             "stop_loss_triggered": stop_loss_triggered,
                             "profit_protect_triggered": profit_protect_triggered,
+                            "break_even_guard_triggered": break_even_guard_triggered,
                             "bearish_signal": bearish,
                         },
                         required={
-                            "stop_loss_triggered_or_profit_protect_or_bearish_signal": True
+                            "stop_loss_or_profit_protect_or_break_even_guard_or_bearish_signal": True
                         },
                     ),
                     FunnelStep(
                         stage="cooldown",
-                        passed=(stop_loss_triggered or profit_protect_triggered or not in_cooldown),
+                        passed=(
+                            stop_loss_triggered
+                            or profit_protect_triggered
+                            or break_even_guard_triggered
+                            or not in_cooldown
+                        ),
                         reason="cooldown_active",
                         actual={"seconds_since_last_trade": seconds_since_last_trade},
                         required={
@@ -896,7 +933,12 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="distance",
-                        passed=(stop_loss_triggered or profit_protect_triggered or signal_is_strong),
+                        passed=(
+                            stop_loss_triggered
+                            or profit_protect_triggered
+                            or break_even_guard_triggered
+                            or signal_is_strong
+                        ),
                         reason="distance_too_small",
                         actual={"gap_pct": gap_pct},
                         required={"min_gap_pct": min_gap_pct},
@@ -906,6 +948,7 @@ def run_bot():
                         passed=(
                             stop_loss_triggered
                             or profit_protect_triggered
+                            or break_even_guard_triggered
                             or not strategy.enable_higher_timeframe_filter
                             or htf_bearish
                         ),
@@ -915,15 +958,23 @@ def run_bot():
                     ),
                     FunnelStep(
                         stage="take_profit",
-                        passed=(stop_loss_triggered or profit_protect_triggered or take_profit_ready),
+                        passed=(
+                            stop_loss_triggered
+                            or profit_protect_triggered
+                            or break_even_guard_triggered
+                            or take_profit_ready
+                        ),
                         reason="take_profit_not_reached",
                         actual={
                             "pnl_pct": pnl_pct,
                             "net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                            "mfe_pct": mfe_pct,
                         },
                         required={
                             "min_take_profit_pct": effective_min_take_profit_pct,
                             "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                            "break_even_guard_min_mfe_pct": break_even_guard_min_mfe_pct,
+                            "break_even_guard_floor_net_pnl_pct": break_even_guard_floor_net_pnl_pct,
                         },
                     ),
                     FunnelStep(
@@ -954,6 +1005,8 @@ def run_bot():
                         if stop_loss_triggered
                         else "profit_protect_triggered"
                         if profit_protect_triggered
+                        else "break_even_guard_triggered"
+                        if break_even_guard_triggered
                         else "take_profit_conditions_met"
                     ),
                 )
@@ -1151,6 +1204,10 @@ def run_bot():
                         sell_ratio = 1.0
                         exit_reason_key = "profit_protect_take_profit"
                         sell_reason = "순익보호익절"
+                    elif break_even_guard_triggered:
+                        sell_ratio = 1.0
+                        exit_reason_key = "break_even_guard_take_profit"
+                        sell_reason = "브레이크이븐보호익절"
                     elif partial_take_profit_pending:
                         sell_ratio = strategy.partial_take_profit_ratio
                         exit_reason_key = "partial_take_profit"

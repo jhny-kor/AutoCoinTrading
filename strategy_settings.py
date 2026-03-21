@@ -1,5 +1,6 @@
 """
 수정 요약
+- ETH/KRW 같은 특정 심볼만 별도로 수익을 지키도록 브레이크이븐 가드 설정을 공통 알트 전략에 추가
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운 설정을 공통 알트 전략에 추가
 - 수수료를 제하고도 순익이 남는 상태에서 메인 추세가 꺾이면 빠르게 전량 익절하는 공통 알트 청산 설정을 추가
 - 알트 전략에서 심볼별 부분익절/부분손절 대상과 비율을 .env 에서 읽도록 확장
@@ -65,6 +66,11 @@ class StrategySettings:
     stop_loss_pct: float
     enable_fee_protect_exit: bool
     fee_protect_min_net_pnl_pct: float
+    enable_break_even_guard: bool
+    break_even_guard_min_mfe_pct: float
+    break_even_guard_min_mfe_pct_map: dict[str, float]
+    break_even_guard_floor_net_pnl_pct: float
+    break_even_guard_floor_net_pnl_pct_map: dict[str, float]
     min_buy_order_value: float
     loop_interval_sec: int
     min_crossover_gap_pct_map: dict[str, float]
@@ -96,6 +102,20 @@ class StrategySettings:
     def get_min_order_amount(self, symbol: str) -> float:
         """심볼별 최소 주문 수량 오버라이드가 있으면 그 값을, 없으면 0을 반환한다."""
         return self.min_order_amount_map.get(symbol, 0.0)
+
+    def get_break_even_guard_min_mfe_pct(self, symbol: str) -> float:
+        """심볼별 브레이크이븐 가드 최소 MFE 기준을 반환한다."""
+        return self.break_even_guard_min_mfe_pct_map.get(
+            symbol,
+            self.break_even_guard_min_mfe_pct,
+        )
+
+    def get_break_even_guard_floor_net_pnl_pct(self, symbol: str) -> float:
+        """심볼별 브레이크이븐 가드 순익 바닥 기준을 반환한다."""
+        return self.break_even_guard_floor_net_pnl_pct_map.get(
+            symbol,
+            self.break_even_guard_floor_net_pnl_pct,
+        )
 
     def get_position_ratio(self, symbol: str, default_ratio: float) -> float:
         """심볼별 매수 비중 오버라이드가 있으면 그 값을, 없으면 기본 비중을 반환한다."""
@@ -282,6 +302,22 @@ def load_strategy_settings(
         ),
         fee_protect_min_net_pnl_pct=float(
             os.getenv("STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT", "0.20")
+        ),
+        enable_break_even_guard=parse_bool(
+            os.getenv("STRATEGY_ENABLE_BREAK_EVEN_GUARD", "true"),
+            default=True,
+        ),
+        break_even_guard_min_mfe_pct=float(
+            os.getenv("STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT", "0.0")
+        ),
+        break_even_guard_min_mfe_pct_map=parse_symbol_float_map(
+            os.getenv("STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP", "")
+        ),
+        break_even_guard_floor_net_pnl_pct=float(
+            os.getenv("STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT", "0.0")
+        ),
+        break_even_guard_floor_net_pnl_pct_map=parse_symbol_float_map(
+            os.getenv("STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP", "")
         ),
         min_buy_order_value=float(
             os.getenv(min_buy_order_env_key, str(default_min_buy_order_value))

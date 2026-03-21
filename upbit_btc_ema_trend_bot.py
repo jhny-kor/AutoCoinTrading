@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC/USDT 같은 특정 심볼만 더 엄격하게 보려는 심볼별 EMA 스프레드/거래량 진입 기준을 반영했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - BTC 진입 필터를 조금 더 보수적으로 강화하고, 강한 다중 상승 추세에서는 짧은 조정에 대한 청산을 잠시 보류하도록 조정
 - BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 구조를 추가
@@ -297,10 +298,11 @@ def run_bot():
             ema_spread_pct = (
                 ((last_fast - last_slow) / last_slow) * 100 if last_slow else 0.0
             )
+            effective_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
             trend_follow_entry = (
                 settings.enable_trend_follow_entry
                 and ema_aligned
-                and ema_spread_pct >= settings.min_ema_spread_pct
+                and ema_spread_pct >= effective_min_ema_spread_pct
                 and (
                     not settings.trend_follow_requires_price_above_fast
                     or price_above_fast
@@ -353,7 +355,11 @@ def run_bot():
                 profit_exit_cooldown_remaining,
             )
             in_cooldown = cooldown_remaining > 0
-            volume_filter_passed = volume_ratio is not None and volume_ratio >= settings.min_volume_ratio
+            effective_min_volume_ratio = settings.get_min_volume_ratio(symbol)
+            volume_filter_passed = (
+                volume_ratio is not None
+                and volume_ratio >= effective_min_volume_ratio
+            )
             atr_filter_passed = settings.min_atr_pct <= atr_pct <= settings.max_atr_pct
             daily_loss_limit_reached = daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
 
@@ -589,9 +595,11 @@ def run_bot():
                 "ema_aligned": ema_aligned,
                 "price_above_fast": price_above_fast,
                 "ema_spread_pct": ema_spread_pct,
+                "effective_min_ema_spread_pct": effective_min_ema_spread_pct,
                 "trend_follow_entry": trend_follow_entry,
                 "entry_signal": entry_signal,
                 "volume_ratio": volume_ratio,
+                "effective_min_volume_ratio": effective_min_volume_ratio,
                 "atr_value": atr_value,
                 "atr_pct": atr_pct,
                 "confirm_bullish": confirm_bullish,
@@ -656,7 +664,7 @@ def run_bot():
                     },
                     required={
                         "bullish_signal_or_trend_follow_entry": True,
-                        "min_ema_spread_pct": settings.min_ema_spread_pct,
+                        "min_ema_spread_pct": effective_min_ema_spread_pct,
                     },
                 ),
                 FunnelStep(
@@ -688,7 +696,7 @@ def run_bot():
                     passed=volume_filter_passed,
                     reason="volume_low" if volume_ratio is not None else "volume_data_missing",
                     actual={"volume_ratio": volume_ratio},
-                    required={"min_volume_ratio": settings.min_volume_ratio},
+                    required={"min_volume_ratio": effective_min_volume_ratio},
                 ),
                 FunnelStep(
                     stage="atr",
@@ -823,7 +831,7 @@ def run_bot():
                             if volume_ratio is not None
                             else "volume_data_missing",
                             actual={"volume_ratio": volume_ratio},
-                            required={"min_volume_ratio": settings.min_volume_ratio},
+                            required={"min_volume_ratio": effective_min_volume_ratio},
                         ),
                         FunnelStep(
                             stage="add_on_atr",
