@@ -1,5 +1,8 @@
 """
 수정 요약
+- 최근 체결 내역이 로그 제목만이 아니라 금액, 수량, 손익까지 보이도록 trade_history 기준으로 바꿨다.
+- 주간 리포트에도 현재 시장 해석과 전략 추천 섹션을 함께 넣어 /analysis 와 읽는 기준을 맞췄다.
+- /analysis 에 최신 시장 숫자 요약과 현재 로그 기준 추천 전략을 함께 보여주는 섹션을 추가했다.
 - 에러 알림 메시지에 붙는 승인형 버튼(재기동/상세 보기/수정 요청/무시)을 처리하는 텔레그램 callback 흐름을 추가
 - /analysis 와 /weekly 에 순익 보호 익절 발생 건수와 순손익을 바로 확인할 수 있는 전용 요약 섹션을 추가
 - /analysis 와 주간 리포트의 거래 품질 섹션에 API 지연, 슬리피지, 체결 비율 같은 주문 실행 품질 요약도 함께 표시하도록 확장
@@ -869,8 +872,9 @@ def build_analysis_text(settings: ListenerSettings) -> str:
     """시장 로그 분석과 전략 퍼널 분석을 함께 요약한 문구를 만든다."""
     sections = [
         build_market_analysis_text(settings),
+        build_current_market_strategy_text(settings),
         build_strategy_funnel_text(),
-        build_trade_quality_text(),
+        build_trade_quality_text(settings),
         build_profit_protect_text(),
         build_filter_gap_text(),
         build_time_of_day_text(),
@@ -1173,6 +1177,7 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
             "주간 리포트",
             f"집계 구간: {start} ~ {end}",
             build_period_pnl_text(7, title="최근 7일 누적 실현 손익"),
+            build_current_market_strategy_text(settings),
             build_weekly_trade_quality_text(7),
             build_weekly_profit_protect_text(7),
             build_weekly_funnel_text(7),
@@ -1186,6 +1191,8 @@ def build_market_analysis_text(settings: ListenerSettings) -> str:
     """시장 분석 수집 로그 요약 문구를 만든다."""
     records = analyze_logs.load_records(settings.analysis_log_dir)
     summaries = analyze_logs.build_summaries(records)
+    managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
+    summaries = [item for item in summaries if item.symbol in managed_symbols]
     if not summaries:
         return "분석 로그가 아직 없습니다. analysis_log_collector.py 가 더 수집한 뒤 다시 확인해 주세요."
 
@@ -1198,6 +1205,113 @@ def build_market_analysis_text(settings: ListenerSettings) -> str:
             f"평균 절대 변화율 {item.avg_abs_change_pct:.4f}% | "
             f"매수 {item.bullish_count}회 / 매도 {item.bearish_count}회"
         )
+    return "\n".join(lines)
+
+
+def load_latest_market_records(settings: ListenerSettings) -> list[dict]:
+    """심볼별 최신 분석 로그 1건씩을 반환한다."""
+    records = analyze_logs.load_records(settings.analysis_log_dir)
+    latest_by_key: dict[tuple[str, str], tuple[datetime, dict]] = {}
+
+    for record in records:
+        exchange = str(record.get("exchange", "")).strip()
+        symbol = str(record.get("symbol", "")).strip()
+        collected_at = parse_local_timestamp(str(record.get("collected_at", "")))
+        if not exchange or not symbol or collected_at is None:
+            continue
+        key = (exchange, symbol)
+        current = latest_by_key.get(key)
+        if current is None or collected_at > current[0]:
+            latest_by_key[key] = (collected_at, record)
+
+    managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
+    rows = [item[1] for item in latest_by_key.values() if str(item[1].get("symbol", "")) in managed_symbols]
+    rows.sort(key=lambda row: (str(row.get("exchange", "")), str(row.get("symbol", ""))))
+    return rows
+
+
+def build_current_market_strategy_text(settings: ListenerSettings) -> str:
+    """최신 시장 상태와 현재 로그 기준 전략 추천 문구를 만든다."""
+    latest_rows = load_latest_market_records(settings)
+    if not latest_rows:
+        return "현재 시장 해석과 전략 추천\n- 최신 분석 로그가 아직 없어 현재 시장 해석을 만들 수 없습니다."
+
+    bullish_count = sum(1 for row in latest_rows if row.get("bullish_signal"))
+    bearish_count = sum(1 for row in latest_rows if row.get("bearish_signal"))
+    above_ma_count = sum(1 for row in latest_rows if row.get("above_ma"))
+    ready_count = sum(1 for row in latest_rows if row.get("public_buy_ready"))
+
+    volume_values = [
+        value
+        for value in (safe_float(row.get("volume_ratio")) for row in latest_rows)
+        if value is not None
+    ]
+    volatility_values = [
+        value
+        for value in (safe_float(row.get("avg_abs_change_pct")) for row in latest_rows)
+        if value is not None
+    ]
+    spread_values = [
+        value
+        for value in (safe_float(row.get("spread_pct")) for row in latest_rows)
+        if value is not None
+    ]
+
+    avg_volume_ratio = sum(volume_values) / len(volume_values) if volume_values else 0.0
+    avg_abs_change_pct = (
+        sum(volatility_values) / len(volatility_values) if volatility_values else 0.0
+    )
+    avg_spread_pct = sum(spread_values) / len(spread_values) if spread_values else 0.0
+
+    scored_rows: list[tuple[float, str]] = []
+    for row in latest_rows:
+        symbol = str(row.get("symbol", "")).strip()
+        score = 0.0
+        if row.get("bullish_signal"):
+            score += 1.0
+        if row.get("above_ma"):
+            score += 0.8
+        if row.get("public_buy_ready"):
+            score += 1.2
+        score += min(safe_float(row.get("volume_ratio")) or 0.0, 3.0) * 0.3
+        score += min(safe_float(row.get("avg_abs_change_pct")) or 0.0, 1.0) * 2.0
+        scored_rows.append((score, symbol))
+
+    leaders = [symbol for _, symbol in sorted(scored_rows, reverse=True)[:3] if symbol]
+    laggards = [symbol for _, symbol in sorted(scored_rows)[:3] if symbol]
+
+    lines = ["현재 시장 해석과 전략 추천"]
+    lines.append(
+        f"- 최신 심볼 {len(latest_rows)}개 | 상승 신호 {bullish_count}개 | 하락 신호 {bearish_count}개 | "
+        f"MA 위 {above_ma_count}개 | 공개 기준 매수 준비 {ready_count}개"
+    )
+    lines.append(
+        f"- 평균 거래량 배수 {avg_volume_ratio:.3f}배 | "
+        f"평균 절대 변화율 {avg_abs_change_pct:.4f}% | "
+        f"평균 스프레드 {avg_spread_pct:.4f}%"
+    )
+    if leaders:
+        lines.append(f"- 상대 강세 후보: {', '.join(leaders)}")
+    if laggards:
+        lines.append(f"- 상대 약세/혼조 후보: {', '.join(laggards)}")
+
+    if avg_volume_ratio < 0.90 and avg_abs_change_pct < 0.10:
+        lines.append(
+            "- 추천: 시장 에너지가 약하니 단타는 강한 신호만 선별하고, 보유 중 포지션은 순익 보호/브레이크이븐 중심이 더 맞습니다."
+        )
+    elif bearish_count > bullish_count and ready_count == 0:
+        lines.append(
+            "- 추천: 약세 우위라 신규 추격 매수보다 손절 우선, 순익 보호, 관망 비중 확대가 더 안전합니다."
+        )
+    elif bullish_count >= bearish_count and avg_volume_ratio >= 1.00:
+        lines.append(
+            "- 추천: 상승 추세 확인형 전략이 비교적 맞습니다. BTC/ETH 중심 추세추종은 유지하고, 알트는 거래량 동반 구간만 받는 편이 좋습니다."
+        )
+    else:
+        lines.append(
+            "- 추천: 방향성이 혼재해 보수형 단타가 적합합니다. BTC/USDT는 강화된 진입 필터 유지, ETH/KRW는 브레이크이븐 가드 우선이 맞습니다."
+        )
+
     return "\n".join(lines)
 
 
@@ -1370,9 +1484,20 @@ def build_strategy_funnel_text(limit: int = 8) -> str:
     return "\n".join(lines)
 
 
-def build_trade_quality_text(limit: int = 8) -> str:
+def format_metric_with_unit(value: str, unit: str) -> str:
+    """지표 문자열이 비어 있지 않을 때만 단위를 붙인다."""
+    normalized = str(value).strip()
+    if not normalized or normalized == "-":
+        return "-"
+    return f"{normalized}{unit}"
+
+
+def build_trade_quality_text(settings: ListenerSettings | None = None, limit: int = 8) -> str:
     """체결 품질 요약 문구를 만든다."""
     rows = analyze_strategy_logs.build_trade_quality_rows()
+    if settings is not None:
+        managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
+        rows = [row for row in rows if str(row.get("symbol", "")) in managed_symbols]
     if not rows:
         return "거래 품질 요약\n- 아직 집계할 체결 품질 로그가 없습니다."
 
@@ -1383,11 +1508,11 @@ def build_trade_quality_text(limit: int = 8) -> str:
             f"거래 {row['trades']}건 | "
             f"평균 손익 {row['avg_net_pnl_pct']}% | "
             f"MFE {row['avg_mfe_pct']}% / MAE {row['avg_mae_pct']}% | "
-            f"보유 {row['avg_holding_seconds']}초 | "
+            f"보유 {format_metric_with_unit(row['avg_holding_seconds'], '초')} | "
             f"트레일링 활성 {row['trailing_arm_rate']} | "
-            f"API {row['avg_api_latency_ms']}ms | "
-            f"슬리피지 {row['avg_slippage_bps']}bp | "
-            f"체결비율 {row['avg_fill_ratio_pct']}%"
+            f"API {format_metric_with_unit(row['avg_api_latency_ms'], 'ms')} | "
+            f"슬리피지 {format_metric_with_unit(row['avg_slippage_bps'], 'bp')} | "
+            f"체결비율 {format_metric_with_unit(row['avg_fill_ratio_pct'], '%')}"
         )
     return "\n".join(lines)
 
@@ -1587,32 +1712,52 @@ def latest_log_file(filename: str) -> Path | None:
 
 def build_recent_trades_text(limit: int = 5) -> str:
     """오늘 발생한 최근 체결 내역을 요약한다."""
-    events: list[tuple[str, str, str, str]] = []
-
-    for exchange_name, filename in PROGRAM_LOG_SOURCES:
-        for line in iter_log_lines(filename):
-            match = TRADE_EVENT_RE.match(line.strip())
-            if not match:
+    records: list[dict] = []
+    for path in iter_files("trade_logs", "trade_history.jsonl"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
                 continue
-            ts = match.group("ts")
-            if not is_today_timestamp(ts):
+            try:
+                record = json.loads(stripped)
+            except (ValueError, json.JSONDecodeError):
                 continue
-            events.append(
-                (
-                    ts,
-                    exchange_name,
-                    match.group("symbol"),
-                    match.group("title"),
-                )
-            )
+            if not is_today_timestamp(str(record.get("recorded_at_local", ""))):
+                continue
+            records.append(record)
 
-    if not events:
+    if not records:
         return "최근 체결 내역\n- 오늘 발생한 체결 내역이 아직 없습니다."
 
-    events.sort(key=lambda item: item[0], reverse=True)
+    records.sort(key=lambda item: str(item.get("recorded_at_local", "")), reverse=True)
     lines = ["최근 체결 내역"]
-    for ts, exchange_name, symbol, title in events[:limit]:
-        lines.append(f"- {ts} | {exchange_name} | {symbol} | {title}")
+    for record in records[:limit]:
+        ts = str(record.get("recorded_at_local", "")).replace("T", " ")
+        exchange_name = str(record.get("exchange_name", record.get("exchange", ""))).upper()
+        symbol = str(record.get("symbol", ""))
+        side = str(record.get("side", "")).lower()
+        amount = safe_float(record.get("amount"))
+        order_value_quote = safe_float(record.get("order_value_quote"))
+        quote_currency = str(record.get("quote_currency", "")).strip().upper()
+        pnl_pct = safe_float(record.get("net_realized_pnl_pct"))
+        if pnl_pct is None:
+            pnl_pct = safe_float(record.get("realized_pnl_pct"))
+        reason = str(record.get("reason", "")).strip() or "-"
+
+        decimals = 0 if quote_currency == "KRW" else 4
+        amount_text = "-" if amount is None else format_number(amount, 8)
+        value_text = (
+            "-"
+            if order_value_quote is None or not quote_currency
+            else f"{format_number(order_value_quote, decimals)} {quote_currency}"
+        )
+        pnl_text = "-" if pnl_pct is None else f"{pnl_pct:.3f}%"
+        side_label = "매수" if side == "buy" else "매도"
+
+        lines.append(
+            f"- {ts} | {exchange_name} | {symbol} | {side_label} | "
+            f"수량 {amount_text} | 금액 {value_text} | 손익 {pnl_text} | 사유 {reason}"
+        )
     return "\n".join(lines)
 
 

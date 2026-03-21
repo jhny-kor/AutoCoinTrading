@@ -1,7 +1,9 @@
 # Auto Coin Bot
 
-이 저장소는 OKX와 업비트에서 각각 현물 자동매매를 테스트하기 위한 초기 버전 프로젝트입니다.
+이 저장소는 OKX와 업비트에서 각각 현물 자동매매를 테스트하기 위한 `단타/인트라데이 전용` 프로젝트입니다.
 전략 값을 바꿔가며 테스트할 수 있도록, 구조화 로그와 `trade_history.jsonl`에는 `strategy_version`도 함께 남기도록 구성했습니다.  
+
+장타/스윙 전용 설계는 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 으로 분리했습니다. 현재 폴더와 장타 폴더는 전략, 설정, 로그, 텔레그램 운영을 섞지 않는 것을 원칙으로 합니다.
 
 <div align="center">  
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>  

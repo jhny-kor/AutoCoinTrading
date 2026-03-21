@@ -1,6 +1,7 @@
 """
 텔레그램 알림 유틸
 
+- 날짜를 제외한 텔레그램 숫자 포맷이 %, 초, 개, bp, ms 같은 단위가 붙어도 세 자리 쉼표가 적용되도록 보완했다.
 - 오류 알림에 인시던트 ID 와 승인형 버튼(재기동/상세/수정 요청/무시)을 함께 보낼 수 있도록 확장했다.
 - 날짜 표기는 유지하고, 그 밖의 숫자는 텔레그램 전송 직전에 세 자리마다 쉼표가 들어가도록 공통 포맷을 적용했다.
 - .env 설정이 있으면 텔레그램으로 메시지를 전송한다.
@@ -25,7 +26,10 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from incident_manager import register_incident
 
-NUMERIC_TOKEN_RE = re.compile(r"(?<![\w/:\-,])(-?\d+(?:\.\d+)?)(?![\w/:\-,])")
+PROTECTED_DATETIME_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:\d{2})?)?"
+)
+NUMERIC_TOKEN_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def extract_telegram_api_error_detail(body: bytes) -> str | None:
@@ -88,10 +92,31 @@ def format_numeric_token(token: str) -> str:
 
 def format_telegram_text_numbers(text: str) -> str:
     """날짜/시간 표현을 제외한 숫자에 세 자리 쉼표를 적용한다."""
-    return NUMERIC_TOKEN_RE.sub(
-        lambda match: format_numeric_token(match.group(1)),
-        text,
-    )
+    protected_tokens: list[str] = []
+
+    def protect_datetime(match: re.Match[str]) -> str:
+        protected_tokens.append(match.group(0))
+        return f"__DATE_TOKEN_{len(protected_tokens) - 1}__"
+
+    masked_text = PROTECTED_DATETIME_RE.sub(protect_datetime, text)
+
+    def replace_number(match: re.Match[str]) -> str:
+        token = match.group(0)
+        start, end = match.span()
+        prev_char = masked_text[start - 1] if start > 0 else ""
+        next_char = masked_text[end] if end < len(masked_text) else ""
+
+        # incident id, placeholder, code-like token 안의 숫자는 그대로 둔다.
+        if prev_char == "_" or next_char == "_":
+            return token
+        if prev_char.isalpha() and next_char.isalpha():
+            return token
+        return format_numeric_token(token)
+
+    formatted = NUMERIC_TOKEN_RE.sub(replace_number, masked_text)
+    for index, protected in enumerate(protected_tokens):
+        formatted = formatted.replace(f"__DATE_TOKEN_{index}__", protected)
+    return formatted
 
 
 def parse_bool(raw: str | None, default: bool = False) -> bool:
