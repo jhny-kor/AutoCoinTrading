@@ -1,6 +1,7 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- BTC/USDT 같은 특정 심볼만 더 엄격하게 진입시키도록 심볼별 EMA 스프레드/거래량 기준 오버라이드를 추가했다.
 - BTC 진입 필터를 조금 더 보수적으로 하고, 강한 다중 상승 추세에서는 짧은 조정을 견디는 설정을 추가했다.
 - BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 설정을 추가했다.
 - BTC 수익성 청산 직후에는 재진입과 추가매수를 잠시 막는 전용 쿨다운 설정을 추가했다.
@@ -48,6 +49,7 @@ class BtcTrendSettings:
     enable_trend_follow_entry: bool
     trend_follow_requires_price_above_fast: bool
     min_ema_spread_pct: float
+    min_ema_spread_pct_map: dict[str, float]
     enable_fee_protect_exit: bool
     fee_protect_min_net_pnl_pct: float
     enable_bull_pullback_hold: bool
@@ -58,6 +60,7 @@ class BtcTrendSettings:
     max_atr_pct: float
     volume_lookback: int
     min_volume_ratio: float
+    min_volume_ratio_map: dict[str, float]
     position_ratio: float
     position_ratio_map: dict[str, float]
     min_order_amount: float
@@ -82,6 +85,14 @@ class BtcTrendSettings:
     def get_position_ratio(self, symbol: str) -> float:
         """심볼별 초기 진입 비중 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.position_ratio_map.get(symbol, self.position_ratio)
+
+    def get_min_ema_spread_pct(self, symbol: str) -> float:
+        """심볼별 EMA 스프레드 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.min_ema_spread_pct_map.get(symbol, self.min_ema_spread_pct)
+
+    def get_min_volume_ratio(self, symbol: str) -> float:
+        """심볼별 거래량 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.min_volume_ratio_map.get(symbol, self.min_volume_ratio)
 
 
 def load_btc_trend_settings() -> BtcTrendSettings:
@@ -108,6 +119,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
             default=True,
         ),
         min_ema_spread_pct=float(os.getenv("BTC_TREND_MIN_EMA_SPREAD_PCT", "0.002")),
+        min_ema_spread_pct_map=parse_symbol_float_map(
+            os.getenv("BTC_TREND_MIN_EMA_SPREAD_PCT_MAP", "")
+        ),
         enable_fee_protect_exit=parse_bool(
             os.getenv("BTC_TREND_ENABLE_FEE_PROTECT_EXIT", "true"),
             default=True,
@@ -130,6 +144,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         max_atr_pct=float(os.getenv("BTC_TREND_MAX_ATR_PCT", "2.50")),
         volume_lookback=int(os.getenv("BTC_TREND_VOLUME_LOOKBACK", "20")),
         min_volume_ratio=float(os.getenv("BTC_TREND_MIN_VOLUME_RATIO", "1.05")),
+        min_volume_ratio_map=parse_symbol_float_map(
+            os.getenv("BTC_TREND_MIN_VOLUME_RATIO_MAP", "")
+        ),
         position_ratio=float(os.getenv("BTC_TREND_POSITION_RATIO", "0.25")),
         position_ratio_map=parse_symbol_float_map(
             os.getenv("BTC_TREND_POSITION_RATIO_MAP", "")

@@ -289,6 +289,23 @@
   - 2차 확장은 기본 비중을 깨는 공격형 기능이 아니라, `강한 구간에서만 약간 더 싣는 보조 장치`로 시작하는 것이 맞음
   - 따라서 조건은 엄격하게 두고, 최대 확대 폭도 `+5%` 수준으로 제한하는 보수형이 적절하다고 판단
 
+### 18. BTC/USDT 진입 강화와 ETH/KRW 브레이크이븐 가드 추가 (2026-03-21, symbol tuning)
+
+- 변경 내용:
+  - `BTC/USDT` 에만 심볼별 진입 오버라이드를 추가해 EMA 스프레드와 거래량 기준을 더 엄격하게 적용
+  - `ETH/KRW` 에만 브레이크이븐 가드를 추가해, 충분한 `MFE` 가 나온 뒤 순익이 거의 사라지고 약세 신호가 나오면 먼저 청산
+- 반영 설정:
+  - `BTC_TREND_MIN_EMA_SPREAD_PCT_MAP=BTC/USDT:0.030`
+  - `BTC_TREND_MIN_VOLUME_RATIO_MAP=BTC/USDT:1.70`
+  - `STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP=ETH/KRW:0.30`
+  - `STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP=ETH/KRW:0.05`
+- 근거 로그:
+  - `BTC/USDT` 는 손실 거래 다수의 `MFE` 가 `0.0% ~ 0.2%` 수준이라 약한 진입 제거가 우선이라고 판단
+  - `ETH/KRW` 는 `MFE 0.3% ~ 2.0%` 구간이 있었는데도 최종 손절로 끝난 사례가 반복되어, 수익 보호 장치 강화가 더 효과적이라고 판단
+- 해석:
+  - BTC 쪽은 “덜 들어가고, 더 강한 자리만 받는 것”이 우선
+  - ETH/KRW 쪽은 “좋은 수익 구간을 크게 다시 반납하지 않게 잠그는 것”이 우선
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
