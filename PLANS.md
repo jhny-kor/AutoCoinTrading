@@ -29,6 +29,12 @@
 
 장타/스윙 전용 구조와 초기 전략안은 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 에 정리합니다.
 
+## 현재 적용 운영 안정화 보완
+
+- 업비트 공용 API 호출에는 `429 Too Many Requests` 완화를 위한 짧은 backoff 재시도가 들어가 있습니다.
+- 업비트 시장가 매수는 가용 KRW를 전부 쓰지 않도록 주문 버퍼를 둡니다.
+- 목적은 `insufficient_funds_bid` 와 연속 주문 실패를 줄이는 것입니다.
+
 ## 현재 적용 포트폴리오 배분
 
 - 기준 목표 비중

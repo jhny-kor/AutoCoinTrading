@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 429 요청 제한에 걸릴 때 짧은 backoff 재시도를 적용하고, KRW 매수 주문에는 안전 버퍼를 두도록 보강했다.
 - BTC/USDT 같은 특정 심볼만 더 엄격하게 보려는 심볼별 EMA 스프레드/거래량 진입 기준을 반영했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - BTC 진입 필터를 조금 더 보수적으로 강화하고, 강한 다중 상승 추세에서는 짧은 조정에 대한 청산을 잠시 보류하도록 조정
@@ -56,7 +57,9 @@ from trade_history_logger import (
     summarize_order_for_notification,
 )
 from upbit_ma_crossover_bot import (
+    apply_upbit_buy_order_buffer,
     create_upbit_client,
+    create_market_buy_order_upbit,
     fetch_ohlcv,
     fetch_best_bid,
     get_spot_balances,
@@ -963,8 +966,21 @@ def run_bot():
                 if order_value <= min_buy_order_value:
                     log(f"[{symbol}] 주문 금액이 너무 작아 진입을 생략합니다.")
                 else:
-                    amount = safe_amount_to_precision(exchange, symbol, order_value / last_close)
-                    cost_to_spend = float(f"{order_value:.8f}")
+                    buffered_order_value = apply_upbit_buy_order_buffer(
+                        requested_order_value_quote=order_value,
+                        quote_free=quote_free,
+                        fee_rate_pct=config["fee_rate_pct"],
+                        buffer_pct=config["krw_order_buffer_pct"],
+                        buffer_krw=config["krw_order_buffer_krw"],
+                    )
+                    if buffered_order_value <= min_buy_order_value:
+                        log(
+                            f"[{symbol}] 주문 가능 KRW 버퍼를 반영하면 금액이 "
+                            f"{min_buy_order_value:.0f} {quote} 이하라 진입을 생략합니다."
+                        )
+                        continue
+                    amount = safe_amount_to_precision(exchange, symbol, buffered_order_value / last_close)
+                    cost_to_spend = buffered_order_value
                     structured_logger.log_strategy(
                         symbol=symbol,
                         side="entry",
@@ -979,11 +995,7 @@ def run_bot():
                     )
                     order_request_started_at = time.time()
                     try:
-                        order = exchange.create_market_buy_order(
-                            symbol,
-                            cost_to_spend,
-                            params={"createMarketBuyOrderRequiresPrice": False},
-                        )
+                        order = create_market_buy_order_upbit(exchange, symbol, cost_to_spend)
                     except Exception as order_error:
                         structured_logger.log_strategy(
                             symbol=symbol,
@@ -1106,8 +1118,21 @@ def run_bot():
                     add_on_count = 0
 
             elif add_on_ready:
-                amount = safe_amount_to_precision(exchange, symbol, add_on_order_value / last_close)
-                cost_to_spend = float(f"{add_on_order_value:.8f}")
+                buffered_add_on_order_value = apply_upbit_buy_order_buffer(
+                    requested_order_value_quote=add_on_order_value,
+                    quote_free=quote_free,
+                    fee_rate_pct=config["fee_rate_pct"],
+                    buffer_pct=config["krw_order_buffer_pct"],
+                    buffer_krw=config["krw_order_buffer_krw"],
+                )
+                if buffered_add_on_order_value <= min_buy_order_value:
+                    log(
+                        f"[{symbol}] 추가매수 가능 KRW 버퍼를 반영하면 금액이 "
+                        f"{min_buy_order_value:.0f} {quote} 이하라 추가매수를 생략합니다."
+                    )
+                    continue
+                amount = safe_amount_to_precision(exchange, symbol, buffered_add_on_order_value / last_close)
+                cost_to_spend = buffered_add_on_order_value
                 structured_logger.log_strategy(
                     symbol=symbol,
                     side="entry",
@@ -1122,11 +1147,7 @@ def run_bot():
                 )
                 order_request_started_at = time.time()
                 try:
-                    order = exchange.create_market_buy_order(
-                        symbol,
-                        cost_to_spend,
-                        params={"createMarketBuyOrderRequiresPrice": False},
-                    )
+                    order = create_market_buy_order_upbit(exchange, symbol, cost_to_spend)
                 except Exception as order_error:
                     structured_logger.log_strategy(
                         symbol=symbol,
@@ -1216,9 +1237,9 @@ def run_bot():
                     raw_order=order,
                     side="buy",
                     requested_amount=amount,
-                    requested_order_value_quote=add_on_cost_to_spend,
+                    requested_order_value_quote=cost_to_spend,
                     fallback_amount=amount,
-                    fallback_order_value_quote=add_on_cost_to_spend,
+                    fallback_order_value_quote=cost_to_spend,
                     fallback_price=entry_price,
                 )
                 notifier.notify_buy_fill(

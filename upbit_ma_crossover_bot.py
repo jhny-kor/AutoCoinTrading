@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 429 요청 제한에 걸릴 때 짧은 backoff 재시도를 적용하고, KRW 매수 주문에는 안전 버퍼를 두도록 보강했다.
 - ETH/KRW 같은 특정 심볼에서 수익을 줬다가 다시 크게 깨지는 흐름을 막기 위한 브레이크이븐 가드를 추가했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운을 추가
@@ -76,6 +77,10 @@ def load_config() -> dict:
     risk_per_trade = float(os.getenv("UPBIT_TRADE_RISK_PER_TRADE", "0.05"))
     fee_rate_pct = float(os.getenv("UPBIT_FEE_RATE_PCT", "0.05"))
     max_daily_loss_quote = float(os.getenv("UPBIT_MAX_DAILY_LOSS_QUOTE", "5000"))
+    request_retry_count = int(os.getenv("UPBIT_REQUEST_RETRY_COUNT", "3"))
+    request_retry_delay_sec = float(os.getenv("UPBIT_REQUEST_RETRY_DELAY_SEC", "1.2"))
+    krw_order_buffer_pct = float(os.getenv("UPBIT_KRW_ORDER_BUFFER_PCT", "0.002"))
+    krw_order_buffer_krw = float(os.getenv("UPBIT_KRW_ORDER_BUFFER_KRW", "1000"))
 
     return {
         "api_key": api_key,
@@ -83,6 +88,10 @@ def load_config() -> dict:
         "risk_per_trade": risk_per_trade,
         "fee_rate_pct": fee_rate_pct,
         "max_daily_loss_quote": max_daily_loss_quote,
+        "request_retry_count": request_retry_count,
+        "request_retry_delay_sec": request_retry_delay_sec,
+        "krw_order_buffer_pct": krw_order_buffer_pct,
+        "krw_order_buffer_krw": krw_order_buffer_krw,
     }
 
 
@@ -95,17 +104,82 @@ def create_upbit_client(config: dict) -> ccxt.upbit:
             "enableRateLimit": True,
             "options": {
                 "adjustForTimeDifference": True,
+                "upbit_request_retry_count": config["request_retry_count"],
+                "upbit_request_retry_delay_sec": config["request_retry_delay_sec"],
             },
         }
     )
     return exchange
 
 
+def is_upbit_rate_limit_error(exc: Exception) -> bool:
+    """업비트 요청 제한(429) 계열 예외인지 확인한다."""
+    lowered = str(exc).lower()
+    return isinstance(exc, ccxt.RateLimitExceeded) or "too_many_requests" in lowered or "429" in lowered
+
+
+def call_upbit_with_retry(exchange: ccxt.upbit, func, *args, **kwargs):
+    """업비트 공통 호출에 짧은 backoff 재시도를 적용한다."""
+    retry_count = int(exchange.options.get("upbit_request_retry_count", 3) or 3)
+    retry_delay_sec = float(exchange.options.get("upbit_request_retry_delay_sec", 1.2) or 1.2)
+    last_error: Exception | None = None
+    for attempt in range(retry_count + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if not is_upbit_rate_limit_error(exc) or attempt >= retry_count:
+                raise
+            time.sleep(retry_delay_sec * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("업비트 재시도 호출이 비정상 종료되었습니다.")
+
+
+def apply_upbit_buy_order_buffer(
+    *,
+    requested_order_value_quote: float,
+    quote_free: float,
+    fee_rate_pct: float,
+    buffer_pct: float,
+    buffer_krw: float,
+) -> float:
+    """업비트 시장가 매수 시 KRW를 너무 타이트하게 쓰지 않도록 안전 버퍼를 둔다."""
+    if requested_order_value_quote <= 0 or quote_free <= 0:
+        return 0.0
+    fee_multiplier = 1 + max(fee_rate_pct, 0.0) / 100.0
+    max_order_value_by_balance = quote_free / fee_multiplier
+    buffer_value = max(buffer_krw, quote_free * max(buffer_pct, 0.0))
+    safe_order_value = min(requested_order_value_quote, max_order_value_by_balance - buffer_value)
+    return max(0.0, float(f"{safe_order_value:.8f}"))
+
+
+def create_market_buy_order_upbit(
+    exchange: ccxt.upbit,
+    symbol: str,
+    cost_to_spend: float,
+):
+    """업비트 시장가 매수 주문에 재시도를 적용한다."""
+    return call_upbit_with_retry(
+        exchange,
+        exchange.create_market_buy_order,
+        symbol,
+        cost_to_spend,
+        params={"createMarketBuyOrderRequiresPrice": False},
+    )
+
+
 def fetch_ohlcv(
     exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
 ):
     """과거 캔들 데이터를 가져온다 (업비트)."""
-    return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    return call_upbit_with_retry(
+        exchange,
+        exchange.fetch_ohlcv,
+        symbol,
+        timeframe=timeframe,
+        limit=limit,
+    )
 
 
 def calc_sma(prices, period: int) -> float:
@@ -144,7 +218,7 @@ def detect_crossover(
 
 def get_spot_balances(exchange: ccxt.upbit, base: str, quote: str) -> Tuple[float, float]:
     """현물 지갑에서 base/quote 코인의 잔고를 가져온다 (업비트)."""
-    balance = exchange.fetch_balance()
+    balance = call_upbit_with_retry(exchange, exchange.fetch_balance)
     base_free = balance.get(base, {}).get("free", 0.0)
     quote_free = balance.get(quote, {}).get("free", 0.0)
     return float(base_free), float(quote_free)
@@ -161,7 +235,7 @@ def safe_amount_to_precision(exchange: ccxt.upbit, symbol: str, amount: float) -
 def fetch_best_bid(exchange: ccxt.upbit, symbol: str) -> float | None:
     """업비트 시장가 매도 최소금액 판정에 쓰는 매수 1호가를 가져온다."""
     try:
-        order_book = exchange.fetch_order_book(symbol, limit=1)
+        order_book = call_upbit_with_retry(exchange, exchange.fetch_order_book, symbol, limit=1)
     except Exception:
         return None
     bids = order_book.get("bids") or []
@@ -1018,9 +1092,22 @@ def run_bot():
                             f"[{symbol}] 주문 금액이 {strategy.min_buy_order_value} {quote} 이하라 매수 주문을 생략합니다."
                         )
                     else:
-                        amount = krw_to_use / last_close
+                        buffered_order_value = apply_upbit_buy_order_buffer(
+                            requested_order_value_quote=krw_to_use,
+                            quote_free=quote_free,
+                            fee_rate_pct=config["fee_rate_pct"],
+                            buffer_pct=config["krw_order_buffer_pct"],
+                            buffer_krw=config["krw_order_buffer_krw"],
+                        )
+                        if buffered_order_value <= strategy.min_buy_order_value:
+                            log(
+                                f"[{symbol}] 주문 가능 KRW 버퍼를 반영하면 금액이 "
+                                f"{strategy.min_buy_order_value:.0f} {quote} 이하라 매수 주문을 생략합니다."
+                            )
+                            continue
+                        amount = buffered_order_value / last_close
                         amount = safe_amount_to_precision(exchange, symbol, amount)
-                        cost_to_spend = float(f"{krw_to_use:.8f}")
+                        cost_to_spend = buffered_order_value
                         structured_logger.log_strategy(
                             symbol=symbol,
                             side="entry",
@@ -1036,10 +1123,10 @@ def run_bot():
                         log(f"[매수] 시장가 매수 시도: {symbol}, 사용 금액={cost_to_spend:.0f} {quote}, 수량={amount}")
                         order_request_started_at = time.time()
                         try:
-                            order = exchange.create_market_buy_order(
+                            order = create_market_buy_order_upbit(
+                                exchange,
                                 symbol,
                                 cost_to_spend,
-                                params={"createMarketBuyOrderRequiresPrice": False},
                             )
                         except Exception as order_error:
                             structured_logger.log_strategy(
