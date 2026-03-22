@@ -57,6 +57,7 @@ class BtcTrendSettings:
     bull_pullback_min_spread_pct: float
     atr_period: int
     min_atr_pct: float
+    min_atr_pct_map: dict[str, float]
     max_atr_pct: float
     volume_lookback: int
     min_volume_ratio: float
@@ -93,6 +94,10 @@ class BtcTrendSettings:
     def get_min_volume_ratio(self, symbol: str) -> float:
         """심볼별 거래량 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.min_volume_ratio_map.get(symbol, self.min_volume_ratio)
+
+    def get_min_atr_pct(self, symbol: str) -> float:
+        """심볼별 최소 ATR 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.min_atr_pct_map.get(symbol, self.min_atr_pct)
 
 
 def load_btc_trend_settings() -> BtcTrendSettings:
@@ -141,6 +146,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         ),
         atr_period=int(os.getenv("BTC_TREND_ATR_PERIOD", "14")),
         min_atr_pct=float(os.getenv("BTC_TREND_MIN_ATR_PCT", "0.08")),
+        min_atr_pct_map=parse_symbol_float_map(
+            os.getenv("BTC_TREND_MIN_ATR_PCT_MAP", "")
+        ),
         max_atr_pct=float(os.getenv("BTC_TREND_MAX_ATR_PCT", "2.50")),
         volume_lookback=int(os.getenv("BTC_TREND_VOLUME_LOOKBACK", "20")),
         min_volume_ratio=float(os.getenv("BTC_TREND_MIN_VOLUME_RATIO", "1.05")),

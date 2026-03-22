@@ -324,6 +324,25 @@
   - 업비트는 짧은 주기 다중 봇 운영에서 공개/인증 호출이 겹치면 429가 날 수 있어 공용 재시도 완화가 필요
   - 시장가 매수는 수수료와 잠금 금액 때문에 가용 KRW를 너무 타이트하게 쓰면 반복적으로 주문 실패가 날 수 있어 안전 버퍼가 필요하다고 판단
 
+### 20. 저에너지 장 공통 가드와 BTC/KRW 추가 보수화 (2026-03-22, low energy gate)
+
+- 변경 내용:
+  - 분석 수집 로그의 최신 상태를 읽어 거래소별 평균 거래량 배수와 평균 절대 변화율이 낮으면 신규 진입을 차단하는 공통 저에너지 가드 추가
+  - `BTC/KRW` 에만 심볼별 최소 ATR 기준을 더 높여 저변동 구간 진입을 줄이도록 조정
+- 반영 설정:
+  - `MARKET_GUARD_ENABLE_LOW_ENERGY`
+  - `MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO`
+  - `MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT`
+  - `MARKET_GUARD_LOW_ENERGY_REQUIRE_READY_COUNT_ZERO`
+  - `MARKET_GUARD_LOW_ENERGY_MAX_RECORD_AGE_SEC`
+  - `BTC_TREND_MIN_ATR_PCT_MAP=BTC/KRW:0.09`
+- 근거 로그:
+  - 오늘 최신 시장 상태는 운영 심볼 평균 거래량 배수 `0.632`, 평균 절대 변화율 `0.0475%`, 공개 기준 매수 준비 `0`
+  - 오늘 `BTC/KRW` 실체결은 손절 2건뿐이었고 `MFE` 도 `0.074%`, `0.000%` 수준으로 매우 낮았음
+- 해석:
+  - 전체 시장 에너지가 약한 시간대엔 추세추종 단타가 잘 안 먹히므로 진입 자체를 줄이는 것이 우선
+  - `BTC/KRW` 는 저변동 구간에서 준비 신호가 많아도 실제 수익 기여가 낮아 ATR 기준을 더 보수적으로 보는 편이 맞다고 판단
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

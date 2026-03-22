@@ -1,5 +1,6 @@
 """
 수정 요약
+- 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가하고, BTC/KRW 전용 보수화를 위한 심볼별 최소 ATR 기준도 반영했다.
 - 업비트 429 요청 제한에 걸릴 때 짧은 backoff 재시도를 적용하고, KRW 매수 주문에는 안전 버퍼를 두도록 보강했다.
 - BTC/USDT 같은 특정 심볼만 더 엄격하게 보려는 심볼별 EMA 스프레드/거래량 진입 기준을 반영했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
@@ -47,6 +48,7 @@ from datetime import datetime
 
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
+from market_regime_guard import load_low_energy_snapshot
 from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
 from strategy_settings import load_managed_symbols
@@ -293,6 +295,7 @@ def run_bot():
             volume_ratio = calc_volume_ratio(ohlcv, settings.volume_lookback)
             atr_value = calc_atr(ohlcv, settings.atr_period)
             atr_pct = (atr_value / last_close * 100) if last_close else 0.0
+            effective_min_atr_pct = settings.get_min_atr_pct(symbol)
             confirm_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
             confirm_close = confirm_closes[-1]
             confirm_bullish = confirm_close > confirm_ema
@@ -363,7 +366,12 @@ def run_bot():
                 volume_ratio is not None
                 and volume_ratio >= effective_min_volume_ratio
             )
-            atr_filter_passed = settings.min_atr_pct <= atr_pct <= settings.max_atr_pct
+            atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
+            low_energy_snapshot = load_low_energy_snapshot(
+                exchange_name="upbit",
+                managed_symbols=load_managed_symbols("upbit"),
+            )
+            low_energy_guard_active = low_energy_snapshot.active and not has_position
             daily_loss_limit_reached = daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
 
             log("-" * 60)
@@ -379,8 +387,13 @@ def run_bot():
             )
             log(
                 f"[{symbol}] ATR: {atr_value:.0f}, ATR 비율: {atr_pct:.4f}% "
-                f"(허용 {settings.min_atr_pct:.4f}% ~ {settings.max_atr_pct:.4f}%)"
+                f"(허용 {effective_min_atr_pct:.4f}% ~ {settings.max_atr_pct:.4f}%)"
             )
+            if low_energy_guard_active:
+                log(
+                    f"[{symbol}] 저에너지 장 감지: 평균 거래량 배수 {low_energy_snapshot.avg_volume_ratio:.3f}, "
+                    f"평균 절대 변화율 {low_energy_snapshot.avg_abs_change_pct:.4f}% 로 신규 진입을 보류합니다."
+                )
             log(
                 f"[{symbol}] 확인 타임프레임 종가: {confirm_close:.0f}, "
                 f"확인 EMA: {confirm_ema:.0f}, 상승 추세={confirm_bullish}"
@@ -605,6 +618,7 @@ def run_bot():
                 "effective_min_volume_ratio": effective_min_volume_ratio,
                 "atr_value": atr_value,
                 "atr_pct": atr_pct,
+                "effective_min_atr_pct": effective_min_atr_pct,
                 "confirm_bullish": confirm_bullish,
                 "base_free": base_free,
                 "quote_free": quote_free,
@@ -640,6 +654,10 @@ def run_bot():
                 "pyramid_max_add_ons": settings.pyramid_max_add_ons,
                 "profit_protect_triggered": profit_protect_triggered,
                 "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
+                "low_energy_guard_active": low_energy_guard_active,
+                "low_energy_avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                "low_energy_avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                "low_energy_ready_count": low_energy_snapshot.ready_count,
             }
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
@@ -695,6 +713,17 @@ def run_bot():
                     },
                 ),
                 FunnelStep(
+                    stage="market_regime",
+                    passed=not low_energy_guard_active,
+                    reason="low_energy_market",
+                    actual={
+                        "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                        "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                        "ready_count": low_energy_snapshot.ready_count,
+                    },
+                    required={"low_energy_market_inactive": True},
+                ),
+                FunnelStep(
                     stage="volume",
                     passed=volume_filter_passed,
                     reason="volume_low" if volume_ratio is not None else "volume_data_missing",
@@ -706,12 +735,12 @@ def run_bot():
                     passed=atr_filter_passed,
                     reason=choose_atr_reason(
                         atr_pct,
-                        min_value=settings.min_atr_pct,
+                        min_value=effective_min_atr_pct,
                         max_value=settings.max_atr_pct,
                     ),
                     actual={"atr_pct": atr_pct},
                     required={
-                        "min_atr_pct": settings.min_atr_pct,
+                        "min_atr_pct": effective_min_atr_pct,
                         "max_atr_pct": settings.max_atr_pct,
                     },
                 ),
