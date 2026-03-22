@@ -1,5 +1,6 @@
 """
 수정 요약
+- 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가했다.
 - ETH/KRW 같은 특정 심볼에서 수익을 줬다가 다시 크게 깨지는 흐름을 막기 위한 브레이크이븐 가드를 추가했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운을 추가
@@ -47,6 +48,7 @@ import ccxt
 from dotenv import load_dotenv
 
 from bot_logger import BLUE, RED, BotLogger
+from market_regime_guard import load_low_energy_snapshot
 from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
@@ -448,7 +450,6 @@ def run_bot():
                         f"(허용 {strategy.min_volatility_pct:.4f}% ~ "
                         f"{strategy.max_volatility_pct:.4f}%)"
                     )
-
                 htf_bullish = True
                 htf_bearish = True
                 if strategy.enable_higher_timeframe_filter:
@@ -482,6 +483,16 @@ def run_bot():
                 position_threshold = min_order_amount if min_order_amount > 0 else 0.0001
                 # 거래 가능한 최소 수량보다 작은 잔고는 먼지잔고로 보고 포지션에서 제외
                 has_position = base_free >= position_threshold
+                low_energy_snapshot = load_low_energy_snapshot(
+                    exchange_name="okx",
+                    managed_symbols=load_managed_symbols("okx"),
+                )
+                low_energy_guard_active = low_energy_snapshot.active and not has_position
+                if low_energy_guard_active:
+                    log(
+                        f"[{symbol}] 저에너지 장 감지: 평균 거래량 배수 {low_energy_snapshot.avg_volume_ratio:.3f}, "
+                        f"평균 절대 변화율 {low_energy_snapshot.avg_abs_change_pct:.4f}% 로 신규 진입을 보류합니다."
+                    )
                 avg_entry_price = entry_price.get(symbol)
                 if has_position and avg_entry_price is None:
                     # 재시작 후 기존 보유분의 실제 진입가를 알 수 없으므로 현재가를 임시 기준으로 사용
@@ -866,6 +877,10 @@ def run_bot():
                     "break_even_guard_min_mfe_pct": break_even_guard_min_mfe_pct,
                     "break_even_guard_floor_net_pnl_pct": break_even_guard_floor_net_pnl_pct,
                     "break_even_guard_triggered": break_even_guard_triggered,
+                    "low_energy_guard_active": low_energy_guard_active,
+                    "low_energy_avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                    "low_energy_avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                    "low_energy_ready_count": low_energy_snapshot.ready_count,
                     "partial_take_profit_cooldown_active": partial_take_profit_cooldown_active,
                     "partial_take_profit_cooldown_remaining_sec": partial_take_profit_cooldown_remaining,
                     "partial_take_profit_pending": partial_take_profit_pending,
@@ -898,6 +913,17 @@ def run_bot():
                         reason="higher_timeframe_not_bullish",
                         actual={"htf_bullish": htf_bullish},
                         required={"htf_bullish": True},
+                    ),
+                    FunnelStep(
+                        stage="market_regime",
+                        passed=not low_energy_guard_active,
+                        reason="low_energy_market",
+                        actual={
+                            "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                            "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                            "ready_count": low_energy_snapshot.ready_count,
+                        },
+                        required={"low_energy_market_inactive": True},
                     ),
                     FunnelStep(
                         stage="volume",

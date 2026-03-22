@@ -22,7 +22,7 @@ import argparse
 import tarfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -42,11 +42,12 @@ class ArchiveCandidate:
     root: Path
     size_bytes: int
     modified_at: float
+    archive_day_text: str
 
     @property
     def archive_day(self) -> str:
-        """파일 수정 시각 기준 날짜 키를 반환한다."""
-        return datetime.fromtimestamp(self.modified_at).strftime("%Y-%m-%d")
+        """압축 묶음 기준 날짜 키를 반환한다."""
+        return self.archive_day_text
 
 
 @dataclass(frozen=True)
@@ -66,8 +67,7 @@ class ArchiveGroup:
 
 def iter_candidates(keep_days: int) -> list[ArchiveCandidate]:
     """압축 가능한 로그 후보를 수집한다."""
-    now = time.time()
-    keep_cutoff = now - (keep_days * 86400)
+    today = datetime.now().date()
     candidates: list[ArchiveCandidate] = []
 
     for root in LOG_ROOTS:
@@ -86,7 +86,11 @@ def iter_candidates(keep_days: int) -> list[ArchiveCandidate]:
                 stat = path.stat()
             except FileNotFoundError:
                 continue
-            if stat.st_mtime >= keep_cutoff:
+
+            archive_day = resolve_archive_day(path, root, stat.st_mtime)
+            if archive_day is None:
+                continue
+            if not should_archive_day(archive_day, today, keep_days):
                 continue
             candidates.append(
                 ArchiveCandidate(
@@ -94,9 +98,33 @@ def iter_candidates(keep_days: int) -> list[ArchiveCandidate]:
                     root=root,
                     size_bytes=stat.st_size,
                     modified_at=stat.st_mtime,
+                    archive_day_text=archive_day.isoformat(),
                 )
             )
     return sorted(candidates, key=lambda item: (str(item.path), item.modified_at))
+
+
+def resolve_archive_day(path: Path, root: Path, modified_at: float) -> date | None:
+    """날짜 폴더가 있으면 그 날짜를, 없으면 수정 시각 날짜를 사용한다."""
+    relative_parts = path.relative_to(root).parts[:-1]
+    for part in relative_parts:
+        parsed = try_parse_date(part)
+        if parsed is not None:
+            return parsed
+    return datetime.fromtimestamp(modified_at).date()
+
+
+def try_parse_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def should_archive_day(target_day: date, today: date, keep_days: int) -> bool:
+    """최근 keep_days 는 유지하고, 그 이전 날짜만 압축 대상으로 본다."""
+    age_days = (today - target_day).days
+    return age_days > keep_days
 
 
 def group_candidates(candidates: list[ArchiveCandidate]) -> list[ArchiveGroup]:
@@ -166,6 +194,7 @@ def compress_groups(groups: list[ArchiveGroup]) -> None:
     compressed_file_count = 0
     original_total = 0
     compressed_total = 0
+    cleaned_dir_count = 0
 
     for group in groups:
         archive_path = group.archive_path
@@ -178,6 +207,7 @@ def compress_groups(groups: list[ArchiveGroup]) -> None:
 
         for item in group.files:
             item.path.unlink()
+            cleaned_dir_count += remove_empty_parent_dirs(item.path.parent, stop_at=group.root)
 
         compressed_size = archive_path.stat().st_size
         compressed_group_count += 1
@@ -195,9 +225,34 @@ def compress_groups(groups: list[ArchiveGroup]) -> None:
     print(f"압축 파일 수: {compressed_file_count}")
     print(f"원본 총 크기: {format_bytes(original_total)}")
     print(f"압축 총 크기: {format_bytes(compressed_total)}")
+    print(f"정리한 빈 폴더 수: {cleaned_dir_count}")
     if original_total > 0:
         saved = original_total - compressed_total
         print(f"절감 크기: {format_bytes(saved)}")
+
+
+def remove_empty_parent_dirs(start_dir: Path, stop_at: Path) -> int:
+    """압축 후 비게 된 날짜 폴더를 루트 전까지만 정리한다."""
+    removed = 0
+    current = start_dir
+    stop_at = stop_at.resolve()
+    while True:
+        try:
+            current_resolved = current.resolve()
+        except FileNotFoundError:
+            current_resolved = current
+
+        if current_resolved == stop_at:
+            break
+        if not current.exists():
+            current = current.parent
+            continue
+        if any(current.iterdir()):
+            break
+        current.rmdir()
+        removed += 1
+        current = current.parent
+    return removed
 
 
 def main() -> None:
