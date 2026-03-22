@@ -4,6 +4,7 @@
 전략 값을 바꿔가며 테스트할 수 있도록, 구조화 로그와 `trade_history.jsonl`에는 `strategy_version`도 함께 남기도록 구성했습니다.  
 
 장타/스윙 전용 설계는 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 으로 분리했습니다. 현재 폴더와 장타 폴더는 전략, 설정, 로그, 텔레그램 운영을 섞지 않는 것을 원칙으로 합니다.
+업비트는 최근 `429 Too Many Requests` 와 `insufficient_funds_bid` 완화를 위해 공용 재시도/backoff 와 KRW 주문 버퍼를 적용했습니다.
 
 <div align="center">  
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>  
@@ -12,6 +13,7 @@
 ## 문서 역할
 
 - `README.md`: 현재 운영 기준과 현재 구조를 설명합니다.
+- `MODULE_GUIDE.md`: 공통 모듈, 거래소별 모듈, 전략별 모듈을 기능 단위로 정리합니다.
 - `STRATEGY_DECISIONS.md`: 왜 값을 바꿨는지, 어떤 버전과 로그를 근거로 바꿨는지 이력 중심으로 기록합니다.
 - `PLANS.md`: 현재 적용 상태, 과거 검토안, 앞으로 볼 후보안을 함께 정리합니다.
 - `SWING_BOT_DESIGN.md`: 장타/스윙 전용 새 폴더 설계, 공통 모듈 재사용 후보, 초기 전략안을 정리합니다.

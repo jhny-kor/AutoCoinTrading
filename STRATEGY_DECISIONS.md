@@ -306,6 +306,24 @@
   - BTC 쪽은 “덜 들어가고, 더 강한 자리만 받는 것”이 우선
   - ETH/KRW 쪽은 “좋은 수익 구간을 크게 다시 반납하지 않게 잠그는 것”이 우선
 
+### 19. 업비트 429 완화와 KRW 주문 버퍼 추가 (2026-03-22, upbit stability)
+
+- 변경 내용:
+  - 업비트 공용 API 호출(`fetch_ohlcv`, `fetch_balance`, `fetch_order_book`)에 짧은 backoff 재시도 추가
+  - 업비트 시장가 매수 시 KRW 잔고를 끝까지 쓰지 않도록 주문 버퍼 추가
+  - BTC 업비트 추가매수 경로에서도 같은 버퍼 로직을 사용하도록 통일
+- 반영 설정:
+  - `UPBIT_REQUEST_RETRY_COUNT`
+  - `UPBIT_REQUEST_RETRY_DELAY_SEC`
+  - `UPBIT_KRW_ORDER_BUFFER_PCT`
+  - `UPBIT_KRW_ORDER_BUFFER_KRW`
+- 근거 로그:
+  - `RateLimitExceeded ... 429 Too Many Requests`
+  - `insufficient_funds_bid`
+- 해석:
+  - 업비트는 짧은 주기 다중 봇 운영에서 공개/인증 호출이 겹치면 429가 날 수 있어 공용 재시도 완화가 필요
+  - 시장가 매수는 수수료와 잠금 금액 때문에 가용 KRW를 너무 타이트하게 쓰면 반복적으로 주문 실패가 날 수 있어 안전 버퍼가 필요하다고 판단
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
