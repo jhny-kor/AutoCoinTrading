@@ -1,6 +1,8 @@
 """
 저에너지 장 감지 공통 모듈
 
+- 레짐 변경 알림 메시지가 실제 줄바꿈으로 보이도록 정리하고, 심볼 레짐이 바뀔 때마다 바로 알림이 가도록 조정했다.
+- 레짐 알림은 `OVERHEATED` 진입 시점과 `OVERHEATED` 에서 다른 레짐으로 벗어나는 시점에만 보내도록 보수화했다.
 - 심볼별 최신 분석 로그를 기준으로 레짐을 분류하고, 레짐 변경 알림 상태를 기록하는 기능을 추가했다.
 - 분석 수집 로그의 최신 상태를 읽어 거래소별 저에너지 장 여부를 공통으로 판단하도록 추가했다.
 - 단타 봇들이 같은 기준으로 신규 진입을 줄일 수 있게 평균 거래량 배수, 평균 절대 변화율, 공개 기준 준비 건수를 함께 계산한다.
@@ -385,7 +387,6 @@ def update_regime_state(
     new_regime: str,
 ) -> tuple[bool, str | None]:
     """심볼별 이전 레짐과 비교해 알림이 필요한지 판단하고 상태를 저장한다."""
-    thresholds = load_regime_thresholds()
     now_ts = time.time()
     key = f"{exchange_name.strip().lower()}::{symbol}"
     state: dict[str, dict] = {}
@@ -397,14 +398,15 @@ def update_regime_state(
 
     previous = state.get(key, {})
     previous_regime = previous.get("regime")
-    last_alert_ts = float(previous.get("last_alert_ts", 0) or 0)
     changed = previous_regime != new_regime
-    should_alert = changed and (now_ts - last_alert_ts >= int(thresholds["alert_min_interval_sec"]))
+    entering_overheated = new_regime == "OVERHEATED" and previous_regime != "OVERHEATED"
+    leaving_overheated = previous_regime == "OVERHEATED" and new_regime != "OVERHEATED"
+    should_alert = changed and (entering_overheated or leaving_overheated)
 
     state[key] = {
         "regime": new_regime,
         "updated_at_ts": now_ts,
-        "last_alert_ts": now_ts if should_alert else last_alert_ts,
+        "last_alert_ts": now_ts if should_alert else float(previous.get("last_alert_ts", 0) or 0),
     }
     REGIME_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     REGIME_STATE_PATH.write_text(
@@ -428,12 +430,12 @@ def build_regime_change_message(
     gap_text = "-" if snapshot.gap_pct is None else f"{snapshot.gap_pct:.4f}%"
     rsi_text = "-" if snapshot.rsi is None else f"{snapshot.rsi:.1f}"
     return (
-        f"[REGIME] {exchange_name.upper()} {symbol}\\n"
-        f"이전 레짐: {previous_text}\\n"
-        f"현재 레짐: {snapshot.regime}\\n"
-        f"거래량 배수: {volume_text}\\n"
-        f"평균 절대 변화율: {abs_text}\\n"
-        f"이격도: {gap_text}\\n"
-        f"RSI: {rsi_text}\\n"
+        f"[REGIME] {exchange_name.upper()} {symbol}\n"
+        f"이전 레짐: {previous_text}\n"
+        f"현재 레짐: {snapshot.regime}\n"
+        f"거래량 배수: {volume_text}\n"
+        f"평균 절대 변화율: {abs_text}\n"
+        f"이격도: {gap_text}\n"
+        f"RSI: {rsi_text}\n"
         f"공개 준비: {'Y' if snapshot.public_buy_ready else 'N'}"
     )
