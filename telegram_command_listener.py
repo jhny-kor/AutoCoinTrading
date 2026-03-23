@@ -1,5 +1,6 @@
 """
 수정 요약
+- /regime 명령으로 심볼별 현재 레짐과 핵심 근거 숫자를 바로 볼 수 있도록 추가했다.
 - /pnl 과 기간 손익 요약에서 KRW, USDT 손익 문구를 한국어 기준으로 더 자연스럽게 보이도록 정리했다.
 - 최근 체결 내역이 로그 제목만이 아니라 금액, 수량, 손익까지 보이도록 trade_history 기준으로 바꿨다.
 - 주간 리포트에도 현재 시장 해석과 전략 추천 섹션을 함께 넣어 /analysis 와 읽는 기준을 맞췄다.
@@ -23,7 +24,7 @@
 
 텔레그램 명령 리스너
 
-- 텔레그램에서 /status, /positions, /pnl, /analysis, /weekly, /last 명령을 받아 응답한다.
+- 텔레그램에서 /status, /positions, /pnl, /analysis, /regime, /weekly, /last 명령을 받아 응답한다.
 - 상태 조회는 bot_manager 의 관리 대상 상태 문자열을 재사용한다.
 - 포지션 조회는 각 거래소 API 를 호출해 현재 잔고와 대략적인 평가 금액을 보여준다.
 - 분석 조회는 analyze_logs 의 요약 함수를 재사용한다.
@@ -44,6 +45,7 @@
 - /positions
 - /pnl
 - /analysis
+- /regime
 - /weekly
 - /last
 
@@ -83,6 +85,7 @@ from ma_crossover_bot import (
     get_spot_balances as get_okx_spot_balances,
     load_config as load_okx_config,
 )
+from market_regime_guard import classify_symbol_regime
 from telegram_notifier import load_telegram_notifier
 from telegram_notifier import format_telegram_request_error
 from telegram_notifier import format_telegram_text_numbers
@@ -447,6 +450,7 @@ def build_help_text() -> str:
         "- /positions : 현재 잔고와 포지션 요약\n"
         "- /pnl : 오늘 누적 실현 손익 요약\n"
         "- /analysis : 최근 분석 로그 요약\n"
+        "- /regime : 심볼별 현재 레짐 요약\n"
         "- /weekly : 최근 7일 기준 주간 리포트\n"
         "- /last : 최근 운영 로그 확인\n"
         "- /help : 도움말"
@@ -1320,6 +1324,34 @@ def build_current_market_strategy_text(settings: ListenerSettings) -> str:
     return "\n".join(lines)
 
 
+def build_regime_text(settings: ListenerSettings) -> str:
+    """심볼별 현재 레짐과 핵심 근거 숫자를 요약한다."""
+    latest_rows = load_latest_market_records(settings)
+    if not latest_rows:
+        return "현재 레짐 요약\n- 최신 분석 로그가 아직 없어 레짐을 계산할 수 없습니다."
+
+    lines = ["현재 레짐 요약"]
+    for row in latest_rows:
+        exchange = str(row.get("exchange", "")).upper()
+        symbol = str(row.get("symbol", ""))
+        snapshot = classify_symbol_regime(row)
+        volume_ratio = "-" if snapshot.volume_ratio is None else f"{snapshot.volume_ratio:.3f}"
+        abs_change = (
+            "-"
+            if snapshot.avg_abs_change_pct is None
+            else f"{snapshot.avg_abs_change_pct:.4f}%"
+        )
+        gap_pct = "-" if snapshot.gap_pct is None else f"{snapshot.gap_pct:.4f}%"
+        rsi_text = "-" if snapshot.rsi is None else f"{snapshot.rsi:.1f}"
+        ready_text = "Y" if snapshot.public_buy_ready else "N"
+        lines.append(
+            f"- {exchange} {symbol} | {snapshot.regime} | "
+            f"거래량 {volume_ratio}배 | 변화율 {abs_change} | "
+            f"이격도 {gap_pct} | RSI {rsi_text} | 준비 {ready_text}"
+        )
+    return "\n".join(lines)
+
+
 def fetch_public_json(url: str, timeout: int = 20) -> object:
     """공개 HTTP JSON 응답을 읽는다."""
     request = urllib.request.Request(
@@ -2021,6 +2053,8 @@ def build_response_text(command: str, settings: ListenerSettings) -> str:
         return build_pnl_text()
     if command == "/analysis":
         return build_analysis_text(settings)
+    if command == "/regime":
+        return build_regime_text(settings)
     if command == "/weekly":
         return build_weekly_report_text(settings)
     if command == "/last":
