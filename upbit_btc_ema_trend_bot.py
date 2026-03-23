@@ -48,7 +48,13 @@ from datetime import datetime
 
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
-from market_regime_guard import load_low_energy_snapshot
+from market_regime_guard import (
+    build_regime_change_message,
+    classify_symbol_regime,
+    load_latest_symbol_record,
+    load_low_energy_snapshot,
+    update_regime_state,
+)
 from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
 from strategy_settings import load_managed_symbols
@@ -372,6 +378,29 @@ def run_bot():
                 managed_symbols=load_managed_symbols("upbit"),
             )
             low_energy_guard_active = low_energy_snapshot.active and not has_position
+            symbol_regime_snapshot = classify_symbol_regime(
+                load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
+            )
+            symbol_regime = symbol_regime_snapshot.regime
+            symbol_regime_blocks_entry = (
+                not has_position and symbol_regime in {"LOW_ENERGY", "OVERHEATED", "EXHAUSTION_RISK"}
+            )
+            symbol_regime_requires_fresh_cross = symbol_regime in {"BREAKOUT_ATTEMPT", "CHOPPY"}
+            should_alert, previous_regime = update_regime_state(
+                exchange_name="upbit",
+                symbol=symbol,
+                new_regime=symbol_regime,
+            )
+            if should_alert:
+                notifier.notify_attention_required(
+                    "REGIME",
+                    build_regime_change_message(
+                        exchange_name="UPBIT",
+                        symbol=symbol,
+                        previous_regime=previous_regime,
+                        snapshot=symbol_regime_snapshot,
+                    ),
+                )
             daily_loss_limit_reached = daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
 
             log("-" * 60)
@@ -394,6 +423,8 @@ def run_bot():
                     f"[{symbol}] 저에너지 장 감지: 평균 거래량 배수 {low_energy_snapshot.avg_volume_ratio:.3f}, "
                     f"평균 절대 변화율 {low_energy_snapshot.avg_abs_change_pct:.4f}% 로 신규 진입을 보류합니다."
                 )
+            if symbol_regime_blocks_entry:
+                log(f"[{symbol}] 심볼 레짐 {symbol_regime} 상태라 신규 진입을 보류합니다.")
             log(
                 f"[{symbol}] 확인 타임프레임 종가: {confirm_close:.0f}, "
                 f"확인 EMA: {confirm_ema:.0f}, 상승 추세={confirm_bullish}"
@@ -658,6 +689,9 @@ def run_bot():
                 "low_energy_avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
                 "low_energy_avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
                 "low_energy_ready_count": low_energy_snapshot.ready_count,
+                "symbol_regime": symbol_regime,
+                "symbol_regime_blocks_entry": symbol_regime_blocks_entry,
+                "symbol_regime_requires_fresh_cross": symbol_regime_requires_fresh_cross,
             }
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
@@ -722,6 +756,23 @@ def run_bot():
                         "ready_count": low_energy_snapshot.ready_count,
                     },
                     required={"low_energy_market_inactive": True},
+                ),
+                FunnelStep(
+                    stage="symbol_regime",
+                    passed=not symbol_regime_blocks_entry,
+                    reason="symbol_regime_blocks_entry",
+                    actual={"symbol_regime": symbol_regime},
+                    required={"symbol_regime_allows_entry": True},
+                ),
+                FunnelStep(
+                    stage="regime_entry_signal",
+                    passed=(not symbol_regime_requires_fresh_cross or bullish),
+                    reason="regime_requires_fresh_cross",
+                    actual={
+                        "symbol_regime": symbol_regime,
+                        "bullish_signal": bullish,
+                    },
+                    required={"fresh_bullish_cross_required": True},
                 ),
                 FunnelStep(
                     stage="volume",
