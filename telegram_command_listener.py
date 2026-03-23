@@ -1,5 +1,6 @@
 """
 수정 요약
+- /pnl 과 기간 손익 요약에서 KRW, USDT 손익 문구를 한국어 기준으로 더 자연스럽게 보이도록 정리했다.
 - 최근 체결 내역이 로그 제목만이 아니라 금액, 수량, 손익까지 보이도록 trade_history 기준으로 바꿨다.
 - 주간 리포트에도 현재 시장 해석과 전략 추천 섹션을 함께 넣어 /analysis 와 읽는 기준을 맞췄다.
 - /analysis 에 최신 시장 숫자 요약과 현재 로그 기준 추천 전략을 함께 보여주는 섹션을 추가했다.
@@ -742,14 +743,16 @@ def build_pnl_text() -> str:
     lines = ["오늘 누적 실현 손익"]
     for quote in sorted(totals):
         decimals = 0 if quote == "KRW" else 4
+        label = "원화 손익" if quote == "KRW" else f"{quote} 손익"
+        unit = "원" if quote == "KRW" else f" {quote}"
         lines.append(
-            f"- {quote}: {format_number(totals[quote], decimals)} "
-            f"({trade_counts.get(quote, 0)}건)"
+            f"- {label}: {format_number(totals[quote], decimals)}{unit} "
+            f"(체결 {trade_counts.get(quote, 0)}건)"
         )
         estimated_count = estimated_counts.get(quote, 0)
         if estimated_count:
             lines.append(
-                f"  참고: {estimated_count}건은 왕복 수수료를 적용해 순손익으로 재계산했습니다."
+                f"  참고: {estimated_count}건은 왕복 수수료를 반영한 순손익 기준입니다."
             )
         gross_fallback_count = gross_fallback_counts.get(quote, 0)
         if gross_fallback_count:
@@ -851,14 +854,16 @@ def build_period_pnl_text(days: int, *, title: str) -> str:
     lines = [title]
     for quote in sorted(totals):
         decimals = 0 if quote == "KRW" else 4
+        label = "원화 손익" if quote == "KRW" else f"{quote} 손익"
+        unit = "원" if quote == "KRW" else f" {quote}"
         lines.append(
-            f"- {quote}: {format_number(totals[quote], decimals)} "
-            f"({trade_counts.get(quote, 0)}건)"
+            f"- {label}: {format_number(totals[quote], decimals)}{unit} "
+            f"(체결 {trade_counts.get(quote, 0)}건)"
         )
         estimated_count = estimated_counts.get(quote, 0)
         if estimated_count:
             lines.append(
-                f"  참고: {estimated_count}건은 왕복 수수료를 적용해 순손익으로 재계산했습니다."
+                f"  참고: {estimated_count}건은 왕복 수수료를 반영한 순손익 기준입니다."
             )
         gross_fallback_count = gross_fallback_counts.get(quote, 0)
         if gross_fallback_count:
