@@ -52,7 +52,13 @@ import ccxt
 from dotenv import load_dotenv
 
 from bot_logger import BLUE, RED, BotLogger
-from market_regime_guard import load_low_energy_snapshot
+from market_regime_guard import (
+    build_regime_change_message,
+    classify_symbol_regime,
+    load_latest_symbol_record,
+    load_low_energy_snapshot,
+    update_regime_state,
+)
 from portfolio_allocator import PortfolioAllocator
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
@@ -464,11 +470,36 @@ def run_bot():
                     managed_symbols=load_managed_symbols("upbit"),
                 )
                 low_energy_guard_active = low_energy_snapshot.active and not has_position
+                symbol_regime_snapshot = classify_symbol_regime(
+                    load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
+                )
+                symbol_regime = symbol_regime_snapshot.regime
+                symbol_regime_blocks_entry = (
+                    not has_position and symbol_regime in {"LOW_ENERGY", "OVERHEATED", "EXHAUSTION_RISK"}
+                )
+                symbol_regime_requires_strong_signal = symbol_regime in {"BREAKOUT_ATTEMPT", "CHOPPY"}
+                should_alert, previous_regime = update_regime_state(
+                    exchange_name="upbit",
+                    symbol=symbol,
+                    new_regime=symbol_regime,
+                )
+                if should_alert:
+                    notifier.notify_attention_required(
+                        "REGIME",
+                        build_regime_change_message(
+                            exchange_name="UPBIT",
+                            symbol=symbol,
+                            previous_regime=previous_regime,
+                            snapshot=symbol_regime_snapshot,
+                        ),
+                    )
                 if low_energy_guard_active:
                     log(
                         f"[{symbol}] 저에너지 장 감지: 평균 거래량 배수 {low_energy_snapshot.avg_volume_ratio:.3f}, "
                         f"평균 절대 변화율 {low_energy_snapshot.avg_abs_change_pct:.4f}% 로 신규 진입을 보류합니다."
                     )
+                if symbol_regime_blocks_entry:
+                    log(f"[{symbol}] 심볼 레짐 {symbol_regime} 상태라 신규 진입을 보류합니다.")
                 avg_entry_price = entry_price.get(symbol)
                 if has_position and avg_entry_price is None:
                     # 봇 재시작 후 기존 보유 물량의 실제 매수가를 알 수 없을 때 현재가를 임시 기준으로 사용
@@ -836,6 +867,9 @@ def run_bot():
                     "low_energy_avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
                     "low_energy_avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
                     "low_energy_ready_count": low_energy_snapshot.ready_count,
+                    "symbol_regime": symbol_regime,
+                    "symbol_regime_blocks_entry": symbol_regime_blocks_entry,
+                    "symbol_regime_requires_strong_signal": symbol_regime_requires_strong_signal,
                     "partial_take_profit_cooldown_active": partial_take_profit_cooldown_active,
                     "partial_take_profit_cooldown_remaining_sec": partial_take_profit_cooldown_remaining,
                     "partial_take_profit_pending": partial_take_profit_pending,
@@ -879,6 +913,23 @@ def run_bot():
                             "ready_count": low_energy_snapshot.ready_count,
                         },
                         required={"low_energy_market_inactive": True},
+                    ),
+                    FunnelStep(
+                        stage="symbol_regime",
+                        passed=not symbol_regime_blocks_entry,
+                        reason="symbol_regime_blocks_entry",
+                        actual={"symbol_regime": symbol_regime},
+                        required={"symbol_regime_allows_entry": True},
+                    ),
+                    FunnelStep(
+                        stage="regime_signal_strength",
+                        passed=(not symbol_regime_requires_strong_signal or signal_is_strong),
+                        reason="regime_requires_strong_signal",
+                        actual={
+                            "symbol_regime": symbol_regime,
+                            "signal_is_strong": signal_is_strong,
+                        },
+                        required={"strong_signal_required": True},
                     ),
                     FunnelStep(
                         stage="volume",
