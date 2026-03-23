@@ -1156,6 +1156,7 @@ def run_bot():
                     notifier.notify_buy_fill(
                         "UPBIT-BTC",
                         symbol,
+                        f"현재 레짐: {symbol_regime}\n"
                         f"매수 금액: {buy_summary['executed_order_value_quote']:.0f} {quote}\n"
                         f"매수 단가: {buy_summary['executed_price']:.0f}\n"
                         f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
@@ -1325,6 +1326,7 @@ def run_bot():
                 notifier.notify_buy_fill(
                     "UPBIT-BTC",
                     symbol,
+                    f"현재 레짐: {symbol_regime}\n"
                     f"사유: add_on_winner\n"
                     f"매수 금액: {add_on_summary['executed_order_value_quote']:.0f} {quote}\n"
                     f"매수 단가: {add_on_summary['executed_price']:.0f}\n"
@@ -1553,6 +1555,7 @@ def run_bot():
                     notify_fn(
                         "UPBIT-BTC",
                         symbol,
+                        f"현재 레짐: {symbol_regime}\n"
                         f"사유: {sell_reason}\n"
                         f"매도 금액: {sell_summary['executed_order_value_quote']:.0f} {quote}\n"
                         f"매도 단가: {sell_summary['executed_price']:.0f}\n"
