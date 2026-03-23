@@ -1342,6 +1342,7 @@ def run_bot():
                         notifier.notify_buy_fill(
                             "OKX",
                             symbol,
+                            f"현재 레짐: {symbol_regime}\n"
                             f"매수 금액: {buy_summary['executed_order_value_quote']:.8f} {quote}\n"
                             f"매수 단가: {buy_summary['executed_price']:.4f}\n"
                             f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
@@ -1566,6 +1567,7 @@ def run_bot():
                                 notifier.notify_stop_loss_fill(
                                     "OKX",
                                     symbol,
+                                    f"현재 레짐: {symbol_regime}\n"
                                     f"매도 금액: {sell_summary['executed_order_value_quote']:.4f} {quote}\n"
                                     f"매도 단가: {sell_summary['executed_price']:.4f}\n"
                                     f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
@@ -1576,6 +1578,7 @@ def run_bot():
                                 notifier.notify_sell_fill(
                                     "OKX",
                                     symbol,
+                                    f"현재 레짐: {symbol_regime}\n"
                                     f"매도 금액: {sell_summary['executed_order_value_quote']:.4f} {quote}\n"
                                     f"매도 단가: {sell_summary['executed_price']:.4f}\n"
                                     f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
