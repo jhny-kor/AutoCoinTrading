@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 외부 응답 지연(RequestTimeout/NetworkError) 완화를 위해 시세/잔고 조회에 제한적 재시도를 적용했다.
 - 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가했다.
 - ETH/KRW 같은 특정 심볼에서 수익을 줬다가 다시 크게 깨지는 흐름을 막기 위한 브레이크이븐 가드를 추가했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
@@ -83,6 +84,9 @@ def load_config() -> dict:
     risk_per_trade = float(os.getenv("OKX_TRADE_RISK_PER_TRADE", "0.05"))
     fee_rate_pct = float(os.getenv("OKX_FEE_RATE_PCT", "1.0"))
     max_daily_loss_quote = float(os.getenv("OKX_MAX_DAILY_LOSS_QUOTE", "5.0"))
+    request_retry_count = int(os.getenv("OKX_REQUEST_RETRY_COUNT", "2"))
+    request_retry_delay_sec = float(os.getenv("OKX_REQUEST_RETRY_DELAY_SEC", "1.0"))
+    timeout_ms = int(os.getenv("OKX_REQUEST_TIMEOUT_MS", "15000"))
 
     return {
         "api_key": api_key,
@@ -92,6 +96,9 @@ def load_config() -> dict:
         "risk_per_trade": risk_per_trade,
         "fee_rate_pct": fee_rate_pct,
         "max_daily_loss_quote": max_daily_loss_quote,
+        "request_retry_count": request_retry_count,
+        "request_retry_delay_sec": request_retry_delay_sec,
+        "timeout_ms": timeout_ms,
     }
 
 
@@ -103,12 +110,15 @@ def create_okx_client(config: dict) -> ccxt.okx:
             "secret": config["api_secret"],
             "password": config["api_passphrase"],
             "enableRateLimit": True,
+            "timeout": config["timeout_ms"],
             "options": {
                 # 현물만 사용하도록 명시
                 "defaultType": "spot",
                 # 일부 환경에서 OKX 마켓 전체를 불러오다 에러가 나는 이슈가 있어
                 # fetchMarkets 대상을 spot 으로만 제한
                 "fetchMarkets": ["spot"],
+                "okx_request_retry_count": config["request_retry_count"],
+                "okx_request_retry_delay_sec": config["request_retry_delay_sec"],
             },
         }
     )
@@ -118,6 +128,36 @@ def create_okx_client(config: dict) -> ccxt.okx:
         exchange.set_sandbox_mode(True)
 
     return exchange
+
+
+def is_okx_retryable_error(exc: Exception) -> bool:
+    """OKX 조회 재시도로 완화할 수 있는 예외인지 확인한다."""
+    lowered = str(exc).lower()
+    return (
+        isinstance(exc, ccxt.RequestTimeout)
+        or isinstance(exc, ccxt.NetworkError)
+        or "timeout" in lowered
+        or "networkerror" in lowered
+        or "connection reset" in lowered
+    )
+
+
+def call_okx_with_retry(exchange: ccxt.okx, func, *args, **kwargs):
+    """OKX 조회 계열 호출에만 짧은 backoff 재시도를 적용한다."""
+    retry_count = int(exchange.options.get("okx_request_retry_count", 2) or 2)
+    retry_delay_sec = float(exchange.options.get("okx_request_retry_delay_sec", 1.0) or 1.0)
+    last_error: Exception | None = None
+    for attempt in range(retry_count + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if not is_okx_retryable_error(exc) or attempt >= retry_count:
+                raise
+            time.sleep(retry_delay_sec * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("OKX 재시도 호출이 비정상 종료되었습니다.")
 
 
 def fetch_ohlcv(
@@ -148,12 +188,14 @@ def fetch_ohlcv(
     bar = timeframe_map.get(timeframe, "1m")
 
     # OKX 는 최신 → 과거 순으로 내려오므로, ccxt ohlcv 포맷에 맞게 정렬
-    res = exchange.publicGetMarketCandles(
+    res = call_okx_with_retry(
+        exchange,
+        exchange.publicGetMarketCandles,
         {
             "instId": inst_id,
             "bar": bar,
             "limit": limit,
-        }
+        },
     )
 
     # res["data"] 형식:
@@ -220,7 +262,7 @@ def get_spot_balances(exchange: ccxt.okx, base: str, quote: str) -> Tuple[float,
     여기서는 OKX 계정 원시 API 를 직접 사용한다.
     """
     # https://www.okx.com/docs-v5/ko/#trading-account-rest-api-get-balance
-    res = exchange.privateGetAccountBalance({})
+    res = call_okx_with_retry(exchange, exchange.privateGetAccountBalance, {})
 
     data = res.get("data", []) if isinstance(res, dict) else res
     if not data:
