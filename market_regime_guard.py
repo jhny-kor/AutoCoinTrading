@@ -1,8 +1,9 @@
 """
 저에너지 장 감지 공통 모듈
 
-- 레짐 변경 알림 메시지가 실제 줄바꿈으로 보이도록 정리하고, 심볼 레짐이 바뀔 때마다 바로 알림이 가도록 조정했다.
-- 레짐 알림은 `OVERHEATED` 진입 시점과 `OVERHEATED` 에서 다른 레짐으로 벗어나는 시점에만 보내도록 보수화했다.
+- 레짐 변경 알림 메시지가 실제 줄바꿈으로 보이도록 정리했다.
+- 레짐 알림은 환경 변수로 끌 수 있도록 바꾸고, 기본값은 비활성화로 둬 운영 중 과도한 메시지를 막도록 조정했다.
+- 레짐 알림 비활성화 경로에서 `thresholds` 참조 오류가 나지 않도록 상태 저장 함수 내부를 보강했다.
 - 심볼별 최신 분석 로그를 기준으로 레짐을 분류하고, 레짐 변경 알림 상태를 기록하는 기능을 추가했다.
 - 분석 수집 로그의 최신 상태를 읽어 거래소별 저에너지 장 여부를 공통으로 판단하도록 추가했다.
 - 단타 봇들이 같은 기준으로 신규 진입을 줄일 수 있게 평균 거래량 배수, 평균 절대 변화율, 공개 기준 준비 건수를 함께 계산한다.
@@ -98,6 +99,10 @@ def load_regime_thresholds() -> dict[str, float | int | bool]:
     """심볼별 레짐 분류에 사용할 임계값을 읽는다."""
     load_dotenv()
     return {
+        "alert_enabled": parse_bool(
+            os.getenv("REGIME_ALERT_ENABLED", "false"),
+            False,
+        ),
         "breakout_volume_ratio_threshold": float(
             os.getenv("REGIME_BREAKOUT_VOLUME_RATIO_THRESHOLD", "1.20")
         ),
@@ -387,6 +392,7 @@ def update_regime_state(
     new_regime: str,
 ) -> tuple[bool, str | None]:
     """심볼별 이전 레짐과 비교해 알림이 필요한지 판단하고 상태를 저장한다."""
+    thresholds = load_regime_thresholds()
     now_ts = time.time()
     key = f"{exchange_name.strip().lower()}::{symbol}"
     state: dict[str, dict] = {}
@@ -401,7 +407,9 @@ def update_regime_state(
     changed = previous_regime != new_regime
     entering_overheated = new_regime == "OVERHEATED" and previous_regime != "OVERHEATED"
     leaving_overheated = previous_regime == "OVERHEATED" and new_regime != "OVERHEATED"
-    should_alert = changed and (entering_overheated or leaving_overheated)
+    should_alert = bool(thresholds["alert_enabled"]) and changed and (
+        entering_overheated or leaving_overheated
+    )
 
     state[key] = {
         "regime": new_regime,
