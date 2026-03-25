@@ -5,6 +5,7 @@
 
 장타/스윙 전용 설계는 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 으로 분리했습니다. 현재 폴더와 장타 폴더는 전략, 설정, 로그, 텔레그램 운영을 섞지 않는 것을 원칙으로 합니다.
 업비트는 최근 `429 Too Many Requests` 와 `insufficient_funds_bid` 완화를 위해 공용 재시도/backoff 와 KRW 주문 버퍼를 적용했습니다.
+`ETH/KRW` 는 최근 손절 패턴 기준으로 거래량, 최소 이격도, 브레이크이븐 보호 기준을 심볼별로 더 보수적으로 조정했습니다.
 
 <div align="center">  
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>  
