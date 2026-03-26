@@ -1,5 +1,6 @@
 """
 수정 요약
+- 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 공통 알트 전략 진입 가드를 강화했다.
 - OKX 외부 응답 지연(RequestTimeout/NetworkError) 완화를 위해 시세/잔고 조회에 제한적 재시도를 적용했다.
 - 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가했다.
 - ETH/KRW 같은 특정 심볼에서 수익을 줬다가 다시 크게 깨지는 흐름을 막기 위한 브레이크이븐 가드를 추가했다.
@@ -723,6 +724,15 @@ def run_bot():
                     log(
                         f"[{symbol}] 거래량이 부족하여 신규 매수를 보류합니다."
                     )
+                htf_bearish_entry_blocked = (
+                    entry_signal
+                    and strategy.blocks_entry_when_htf_bearish(symbol)
+                    and htf_bearish
+                )
+                if htf_bearish_entry_blocked:
+                    log(
+                        f"[{symbol}] 상위 타임프레임 하락 추세가 유지 중이라 신규 매수를 보류합니다."
+                    )
                 if entry_signal and strategy.enable_volatility_filter and not volatility_filter_passed:
                     log(
                         f"[{symbol}] 변동성이 기준 범위를 벗어나 신규 매수를 보류합니다."
@@ -929,6 +939,7 @@ def run_bot():
                     "avg_abs_change_pct": avg_abs_change_pct,
                     "htf_bullish": htf_bullish,
                     "htf_bearish": htf_bearish,
+                    "htf_bearish_entry_blocked": htf_bearish_entry_blocked,
                     "base_free": base_free,
                     "quote_free": quote_free,
                     "position_ratio": position_ratio,
@@ -989,6 +1000,13 @@ def run_bot():
                         reason="higher_timeframe_not_bullish",
                         actual={"htf_bullish": htf_bullish},
                         required={"htf_bullish": True},
+                    ),
+                    FunnelStep(
+                        stage="htf_bearish_entry_guard",
+                        passed=not htf_bearish_entry_blocked,
+                        reason="higher_timeframe_bearish_entry_blocked",
+                        actual={"htf_bearish": htf_bearish},
+                        required={"htf_bearish": False},
                     ),
                     FunnelStep(
                         stage="market_regime",

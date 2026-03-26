@@ -1,5 +1,6 @@
 """
 수정 요약
+- 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 공통 알트 전략 설정을 추가
 - ETH/KRW 같은 특정 심볼만 별도로 수익을 지키도록 브레이크이븐 가드 설정을 공통 알트 전략에 추가
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운 설정을 공통 알트 전략에 추가
 - 수수료를 제하고도 순익이 남는 상태에서 메인 추세가 꺾이면 빠르게 전량 익절하는 공통 알트 청산 설정을 추가
@@ -49,6 +50,7 @@ class StrategySettings:
     trend_follow_requires_prev_above_ma: bool
     trend_follow_requires_price_rising: bool
     enable_higher_timeframe_filter: bool
+    block_entry_when_htf_bearish_symbols: tuple[str, ...]
     higher_timeframe: str
     higher_timeframe_ma_period: int
     enable_volume_filter: bool
@@ -128,6 +130,10 @@ class StrategySettings:
     def uses_partial_stop_loss(self, symbol: str) -> bool:
         """심볼이 부분손절 대상인지 반환한다."""
         return symbol in self.partial_stop_loss_symbols
+
+    def blocks_entry_when_htf_bearish(self, symbol: str) -> bool:
+        """심볼이 상위 하락 추세일 때 신규 진입 차단 대상인지 반환한다."""
+        return symbol in self.block_entry_when_htf_bearish_symbols
 
 
 def parse_symbol_list(raw: str | None, default: list[str] | None = None) -> list[str]:
@@ -256,6 +262,11 @@ def load_strategy_settings(
         enable_higher_timeframe_filter=parse_bool(
             os.getenv("STRATEGY_ENABLE_HIGHER_TIMEFRAME_FILTER", "true"),
             default=True,
+        ),
+        block_entry_when_htf_bearish_symbols=tuple(
+            parse_symbol_list(
+                os.getenv("STRATEGY_BLOCK_ENTRY_WHEN_HTF_BEARISH_SYMBOLS", "")
+            )
         ),
         higher_timeframe=os.getenv("STRATEGY_HIGHER_TIMEFRAME", "5m"),
         higher_timeframe_ma_period=int(
