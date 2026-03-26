@@ -359,6 +359,23 @@
   - ETH/KRW 는 아직 추세 지속력이 약한 구간에서도 들어가는 편이라 진입 자체를 더 선별해야 함
   - 동시에 브레이크이븐 가드는 더 이르게 켜되, 순익 바닥은 더 높게 잠가야 실질적인 손익 개선이 가능하다고 판단
 
+### 22. XRP/KRW 및 BTC CHOPPY 구간 추가 보수화 (2026-03-26, xrp btc conservative tuning)
+
+- 변경 내용:
+  - `XRP/KRW` 는 상위 타임프레임이 하락 추세일 때 신규 진입을 차단
+  - `XRP/KRW` 거래량 기준을 소폭 상향
+  - BTC 는 `CHOPPY` 레짐에서 심볼별 추가 최소 거래량 기준을 적용
+- 변경 전 -> 변경 후:
+  - `STRATEGY_BLOCK_ENTRY_WHEN_HTF_BEARISH_SYMBOLS`: `미사용 -> XRP/KRW`
+  - `STRATEGY_MIN_VOLUME_RATIO_MAP`: `XRP/KRW 기본값 사용 -> XRP/KRW 1.10`
+  - `BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP`: `미사용 -> BTC/USDT 1.90, BTC/KRW 1.70`
+- 근거 로그:
+  - `2026-03-26 XRP/KRW` 손실 거래는 `volume_ratio 4.55`였지만 `htf_bearish=True` 상태에서 최종 `-1.33%` 순손실로 마감
+  - `2026-03-26 BTC/KRW`, `BTC/USDT` 손실 거래는 모두 `CHOPPY` 또는 `LOW_ENERGY` 구간에서 `MFE` 가 매우 낮았음
+- 해석:
+  - XRP/KRW 는 순간 거래량만 강해도 상위 하락 추세에 다시 눌리는 경우가 있어 상위 추세 역행 진입을 더 강하게 막는 편이 맞음
+  - BTC 는 `CHOPPY` 구간에서 기존 거래량 기준만으로는 약한 진입을 충분히 거르지 못해 레짐별 추가 거래량 기준이 필요하다고 판단
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

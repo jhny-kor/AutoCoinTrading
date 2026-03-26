@@ -336,6 +336,8 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 최근 7일 시간대 성과 요약
 - 최근 1주 거래량 기준 신규 후보 코인
 
+지표 용어와 레짐 기준은 [MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/MODULE_GUIDE.md)에 정리합니다.
+
 ## 현재 운영 방향
 
 - 당분간은 낮은 시드머니로 전략을 테스트합니다.

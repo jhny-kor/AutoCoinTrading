@@ -1,6 +1,7 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- BTC 가 CHOPPY 레짐일 때는 심볼별 추가 최소 거래량 기준을 적용하도록 설정을 확장했다.
 - BTC/USDT 같은 특정 심볼만 더 엄격하게 진입시키도록 심볼별 EMA 스프레드/거래량 기준 오버라이드를 추가했다.
 - BTC 진입 필터를 조금 더 보수적으로 하고, 강한 다중 상승 추세에서는 짧은 조정을 견디는 설정을 추가했다.
 - BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 설정을 추가했다.
@@ -62,6 +63,7 @@ class BtcTrendSettings:
     volume_lookback: int
     min_volume_ratio: float
     min_volume_ratio_map: dict[str, float]
+    choppy_min_volume_ratio_map: dict[str, float]
     position_ratio: float
     position_ratio_map: dict[str, float]
     min_order_amount: float
@@ -98,6 +100,18 @@ class BtcTrendSettings:
     def get_min_atr_pct(self, symbol: str) -> float:
         """심볼별 최소 ATR 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.min_atr_pct_map.get(symbol, self.min_atr_pct)
+
+    def get_effective_min_volume_ratio(
+        self, symbol: str, regime: str | None = None
+    ) -> float:
+        """심볼별 기본 거래량 기준에 레짐별 추가 기준을 반영해 반환한다."""
+        base_ratio = self.get_min_volume_ratio(symbol)
+        if regime == "CHOPPY":
+            return max(
+                base_ratio,
+                self.choppy_min_volume_ratio_map.get(symbol, base_ratio),
+            )
+        return base_ratio
 
 
 def load_btc_trend_settings() -> BtcTrendSettings:
@@ -154,6 +168,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         min_volume_ratio=float(os.getenv("BTC_TREND_MIN_VOLUME_RATIO", "1.05")),
         min_volume_ratio_map=parse_symbol_float_map(
             os.getenv("BTC_TREND_MIN_VOLUME_RATIO_MAP", "")
+        ),
+        choppy_min_volume_ratio_map=parse_symbol_float_map(
+            os.getenv("BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP", "")
         ),
         position_ratio=float(os.getenv("BTC_TREND_POSITION_RATIO", "0.25")),
         position_ratio_map=parse_symbol_float_map(

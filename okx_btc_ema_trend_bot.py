@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC 가 CHOPPY 레짐일 때는 심볼별 추가 거래량 기준을 적용해 약한 진입을 더 줄이도록 보수화했다.
 - 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가하고, BTC/KRW 전용 보수화를 위한 심볼별 최소 ATR 기준도 반영했다.
 - BTC/USDT 같은 특정 심볼만 더 엄격하게 보려는 심볼별 EMA 스프레드/거래량 진입 기준을 반영했다.
 - 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
@@ -361,12 +362,6 @@ def run_bot():
                 profit_exit_cooldown_remaining,
             )
             in_cooldown = cooldown_remaining > 0
-            effective_min_volume_ratio = settings.get_min_volume_ratio(symbol)
-            volume_filter_passed = (
-                volume_ratio is not None
-                and volume_ratio >= effective_min_volume_ratio
-            )
-            atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
             low_energy_snapshot = load_low_energy_snapshot(
                 exchange_name="okx",
                 managed_symbols=load_managed_symbols("okx"),
@@ -380,6 +375,15 @@ def run_bot():
                 not has_position and symbol_regime in {"LOW_ENERGY", "OVERHEATED", "EXHAUSTION_RISK"}
             )
             symbol_regime_requires_fresh_cross = symbol_regime in {"BREAKOUT_ATTEMPT", "CHOPPY"}
+            effective_min_volume_ratio = settings.get_effective_min_volume_ratio(
+                symbol,
+                symbol_regime,
+            )
+            volume_filter_passed = (
+                volume_ratio is not None
+                and volume_ratio >= effective_min_volume_ratio
+            )
+            atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
             should_alert, previous_regime = update_regime_state(
                 exchange_name="okx",
                 symbol=symbol,
