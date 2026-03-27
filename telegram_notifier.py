@@ -1,6 +1,8 @@
 """
 텔레그램 알림 유틸
 
+- `07:40:03`, `01-00:52:55` 같은 실행시간 문자열은 숫자 포맷터가 건드리지 않도록 보호했다.
+- 이미 쉼표가 들어간 숫자도 다시 깨지지 않도록 텔레그램 숫자 포맷터를 보정했다.
 - 텔레그램 전송 실패 시 DNS 조회 실패, 연결 종료, 네트워크 미도달 같은 원인을 한국어로 더 분명하게 진단하도록 개선했다.
 - 날짜를 제외한 텔레그램 숫자 포맷이 %, 초, 개, bp, ms 같은 단위가 붙어도 세 자리 쉼표가 적용되도록 보완했다.
 - 오류 알림에 인시던트 ID 와 승인형 버튼(재기동/상세/수정 요청/무시)을 함께 보낼 수 있도록 확장했다.
@@ -32,7 +34,8 @@ from incident_manager import register_incident
 PROTECTED_DATETIME_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:\d{2})?)?"
 )
-NUMERIC_TOKEN_RE = re.compile(r"-?\d+(?:\.\d+)?")
+PROTECTED_ELAPSED_TIME_RE = re.compile(r"\b\d+(?:-\d{1,2})?:\d{2}:\d{2}\b")
+NUMERIC_TOKEN_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 
 def extract_telegram_api_error_detail(body: bytes) -> str | None:
@@ -101,6 +104,7 @@ def format_numeric_token(token: str) -> str:
     if raw.startswith("-"):
         sign = "-"
         raw = raw[1:]
+    raw = raw.replace(",", "")
     if "." in raw:
         whole, fraction = raw.split(".", 1)
         if not whole:
@@ -113,11 +117,12 @@ def format_telegram_text_numbers(text: str) -> str:
     """날짜/시간 표현을 제외한 숫자에 세 자리 쉼표를 적용한다."""
     protected_tokens: list[str] = []
 
-    def protect_datetime(match: re.Match[str]) -> str:
+    def protect_token(match: re.Match[str]) -> str:
         protected_tokens.append(match.group(0))
-        return f"__DATE_TOKEN_{len(protected_tokens) - 1}__"
+        return f"__TEXT_TOKEN_{len(protected_tokens) - 1}__"
 
-    masked_text = PROTECTED_DATETIME_RE.sub(protect_datetime, text)
+    masked_text = PROTECTED_DATETIME_RE.sub(protect_token, text)
+    masked_text = PROTECTED_ELAPSED_TIME_RE.sub(protect_token, masked_text)
 
     def replace_number(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -134,7 +139,7 @@ def format_telegram_text_numbers(text: str) -> str:
 
     formatted = NUMERIC_TOKEN_RE.sub(replace_number, masked_text)
     for index, protected in enumerate(protected_tokens):
-        formatted = formatted.replace(f"__DATE_TOKEN_{index}__", protected)
+        formatted = formatted.replace(f"__TEXT_TOKEN_{index}__", protected)
     return formatted
 
 

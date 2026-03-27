@@ -1,5 +1,6 @@
 """
 수정 요약
+- /pnl 과 기간 손익 요약의 KRW 금액은 반올림이 아니라 절사 기준으로 표시하도록 정리했다.
 - /regime 명령으로 심볼별 현재 레짐과 핵심 근거 숫자를 바로 볼 수 있도록 추가했다.
 - /pnl 과 기간 손익 요약에서 KRW, USDT 손익 문구를 한국어 기준으로 더 자연스럽게 보이도록 정리했다.
 - 최근 체결 내역이 로그 제목만이 아니라 금액, 수량, 손익까지 보이도록 trade_history 기준으로 바꿨다.
@@ -66,6 +67,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from decimal import Decimal, ROUND_DOWN
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -384,6 +386,13 @@ def send_text_in_chunks(notifier, text: str, limit: int = 3900) -> tuple[bool, s
 def format_number(value: float, decimals: int = 4) -> str:
     """지정 소수점 자리수와 천 단위 쉼표를 적용한 숫자 문자열을 만든다."""
     return f"{value:,.{decimals}f}"
+
+
+def format_number_trunc(value: float, decimals: int = 4) -> str:
+    """지정 소수점 자리수에서 절사 기준으로 천 단위 쉼표 문자열을 만든다."""
+    quantizer = Decimal("1") if decimals <= 0 else Decimal(f"1.{'0' * decimals}")
+    truncated = Decimal(str(value)).quantize(quantizer, rounding=ROUND_DOWN)
+    return f"{truncated:,.{decimals}f}"
 
 
 def safe_float(value) -> float | None:
@@ -749,8 +758,13 @@ def build_pnl_text() -> str:
         decimals = 0 if quote == "KRW" else 4
         label = "원화 손익" if quote == "KRW" else f"{quote} 손익"
         unit = "원" if quote == "KRW" else f" {quote}"
+        value_text = (
+            format_number_trunc(totals[quote], decimals)
+            if quote == "KRW"
+            else format_number(totals[quote], decimals)
+        )
         lines.append(
-            f"- {label}: {format_number(totals[quote], decimals)}{unit} "
+            f"- {label}: {value_text}{unit} "
             f"(체결 {trade_counts.get(quote, 0)}건)"
         )
         estimated_count = estimated_counts.get(quote, 0)
@@ -860,8 +874,13 @@ def build_period_pnl_text(days: int, *, title: str) -> str:
         decimals = 0 if quote == "KRW" else 4
         label = "원화 손익" if quote == "KRW" else f"{quote} 손익"
         unit = "원" if quote == "KRW" else f" {quote}"
+        value_text = (
+            format_number_trunc(totals[quote], decimals)
+            if quote == "KRW"
+            else format_number(totals[quote], decimals)
+        )
         lines.append(
-            f"- {label}: {format_number(totals[quote], decimals)}{unit} "
+            f"- {label}: {value_text}{unit} "
             f"(체결 {trade_counts.get(quote, 0)}건)"
         )
         estimated_count = estimated_counts.get(quote, 0)
