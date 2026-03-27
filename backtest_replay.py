@@ -1,5 +1,6 @@
 """
 수정 요약
+- 혼합 청산 세트를 위해 알트 리플레이도 심볼별 순익 보호 익절 기준 map 을 읽도록 확장
 - 로컬 OHLCV 파일과 공개 거래소 시세를 이용해 전략을 오프라인으로 재생하는 백테스트/리플레이 CLI 를 추가
 - 알트 MA 전략과 BTC EMA 전략을 공통 인터페이스로 요약/거래 로그까지 저장하도록 구성
 - 결과를 reports/backtests 아래에 summary.json, trades.jsonl, equity_curve.jsonl 로 남기도록 추가
@@ -578,6 +579,7 @@ def simulate_alt_strategy(
         take_profit_pct = strategy.get_take_profit_pct(symbol)
         effective_min_take_profit_pct = max(take_profit_pct, fee_rate_pct * 2 * 1.1)
         stop_loss_pct = strategy.get_stop_loss_pct(symbol)
+        fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
 
         volume_filter_passed = (
             True
@@ -613,7 +615,7 @@ def simulate_alt_strategy(
             profit_protect_triggered = (
                 strategy.enable_fee_protect_exit
                 and bearish
-                and current_net_realized_pnl_pct >= strategy.fee_protect_min_net_pnl_pct
+                and current_net_realized_pnl_pct >= fee_protect_min_net_pnl_pct
                 and not stop_loss_triggered
             )
             break_even_guard_triggered = (

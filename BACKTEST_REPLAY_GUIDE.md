@@ -123,6 +123,8 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
 .venv/bin/python backtest_report_runner.py weekly
 ```
 
+`weekly` 는 기본적으로 타임프레임과 일수에 맞춰 fetch 범위를 자동으로 넓혀, 최근 7일 비교에 필요한 구간을 더 충분히 가져오도록 설계합니다.
+
 설정 변경 전 스냅샷 예시
 
 ```bash
@@ -131,6 +133,8 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
   --since 2026-03-20 \
   --until 2026-03-27
 ```
+
+`snapshot` 도 `since`, `until` 이 있으면 기간에 맞춰 fetch 범위를 자동으로 넓힙니다.
 
 설정 변경 후 스냅샷 예시
 
@@ -155,6 +159,13 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
 - `batch_summary.md`
 - `diff_summary.json`
 - `diff_summary.md`
+
+주간 배치 요약에는 아래 정보도 함께 들어갑니다.
+
+- 실제 데이터 구간 시작/종료
+- 가져온 캔들 수
+- 목표 일수 대비 실제 커버 일수
+- `no_backtest_trades`, `backtest_sample_too_small`, `live_exists_without_backtest` 같은 상태 플래그
 
 ## 6. 현재 제한 사항
 

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 혼합 청산 세트를 위해 심볼별 순익 보호 익절 기준을 읽어 ETH/USDT, XRP/KRW 같은 심볼별 청산 성격을 분리할 수 있게 확장
 - 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 공통 알트 전략 진입 가드를 강화했다.
 - OKX 외부 응답 지연(RequestTimeout/NetworkError) 완화를 위해 시세/잔고 조회에 제한적 재시도를 적용했다.
 - 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가했다.
@@ -862,6 +863,7 @@ def run_bot():
                 effective_min_take_profit_pct = fee_round_trip_pct * 1.1
                 take_profit_pct = strategy.get_take_profit_pct(symbol)
                 stop_loss_pct = strategy.get_stop_loss_pct(symbol)
+                fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
                 break_even_guard_min_mfe_pct = strategy.get_break_even_guard_min_mfe_pct(symbol)
                 break_even_guard_floor_net_pnl_pct = (
                     strategy.get_break_even_guard_floor_net_pnl_pct(symbol)
@@ -900,7 +902,7 @@ def run_bot():
                     if current_net_realized_pnl_pct is not None:
                         log(
                             f"[{symbol}] 수수료 반영 예상 순익률: {current_net_realized_pnl_pct:.2f}% "
-                            f"(보호 익절 기준 {strategy.fee_protect_min_net_pnl_pct:.2f}%)"
+                            f"(보호 익절 기준 {fee_protect_min_net_pnl_pct:.2f}%)"
                         )
                 daily_loss_limit_reached = (
                     daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
@@ -932,7 +934,7 @@ def run_bot():
                     has_position
                     and strategy.enable_fee_protect_exit
                     and current_net_realized_pnl_pct is not None
-                    and current_net_realized_pnl_pct >= strategy.fee_protect_min_net_pnl_pct
+                    and current_net_realized_pnl_pct >= fee_protect_min_net_pnl_pct
                     and bearish
                     and not stop_loss_triggered
                 )
@@ -971,7 +973,7 @@ def run_bot():
                 if has_position and profit_protect_triggered:
                     log(
                         f"[{symbol}] 순익 보호 익절 조건 충족: 수수료 반영 순익률 "
-                        f"{current_net_realized_pnl_pct:.2f}% >= {strategy.fee_protect_min_net_pnl_pct:.2f}%"
+                        f"{current_net_realized_pnl_pct:.2f}% >= {fee_protect_min_net_pnl_pct:.2f}%"
                     )
                 if has_position and break_even_guard_triggered:
                     log(
@@ -1023,7 +1025,7 @@ def run_bot():
                     "portfolio_current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
                     "portfolio_remaining_budget_quote": allocation_decision.remaining_budget_quote,
                     "net_pnl_pct_estimate": current_net_realized_pnl_pct,
-                    "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                    "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                     "daily_realized_pnl_quote": daily_realized_pnl_quote,
                     "profit_protect_triggered": profit_protect_triggered,
                     "break_even_guard_min_mfe_pct": break_even_guard_min_mfe_pct,
@@ -1306,7 +1308,7 @@ def run_bot():
                         },
                         required={
                             "min_take_profit_pct": effective_take_profit_pct,
-                            "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                            "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                             "break_even_guard_min_mfe_pct": break_even_guard_min_mfe_pct,
                             "break_even_guard_floor_net_pnl_pct": break_even_guard_floor_net_pnl_pct,
                         },
@@ -1760,7 +1762,7 @@ def run_bot():
                                     "take_profit_pct": take_profit_pct,
                                     "stop_loss_pct": stop_loss_pct,
                                     "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
-                                    "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                                    "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                                     "profit_protect_triggered": profit_protect_triggered,
                                     "pnl_pct_at_decision": pnl_pct,
                                     "htf_bearish": htf_bearish,
@@ -1837,7 +1839,7 @@ def run_bot():
                                     "signal_is_strong": signal_is_strong,
                                     "gap_pct": gap_pct,
                                     "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
-                                    "fee_protect_min_net_pnl_pct": strategy.fee_protect_min_net_pnl_pct,
+                                    "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                                     "profit_protect_triggered": profit_protect_triggered,
                                     "entry_price_unknown": True,
                                     "htf_bearish": htf_bearish,
