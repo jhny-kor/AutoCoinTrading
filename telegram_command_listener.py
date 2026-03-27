@@ -1,5 +1,6 @@
 """
 수정 요약
+- /analysis 와 /weekly 에 최신 튜닝 세트 diff 요약을 붙여 보수형 대비 혼합형 개선 여부를 바로 보이도록 확장
 - /status, /positions, /analysis, 일일/주간 리포트에 복구 포지션 상태와 일일 손실 제한 상태를 함께 보여주도록 확장
 - 백테스트 대비 실거래 설명 섹션에 누락 심볼 안내와 더 구체적인 차이 설명을 함께 넣도록 보강
 - /pnl 과 기간 손익 요약의 KRW 금액은 반올림이 아니라 절사 기준으로 표시하도록 정리했다.
@@ -781,6 +782,36 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
     return "\n".join(lines)
 
 
+def build_latest_tuning_diff_text(limit: int = 6) -> str:
+    """가장 최근 튜닝 세트 diff 요약을 만든다."""
+    diff_paths = sorted(iter_files("reports/backtest_batches", "diff_summary.json"))
+    if not diff_paths:
+        return "최근 튜닝 세트 비교\n- 아직 생성된 diff_summary.json 이 없습니다."
+
+    latest_path = max(diff_paths, key=lambda path: path.stat().st_mtime)
+    try:
+        rows = json.loads(latest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return "최근 튜닝 세트 비교\n- 최신 diff_summary.json 을 읽지 못했습니다."
+
+    if not isinstance(rows, list) or not rows:
+        return "최근 튜닝 세트 비교\n- 최신 diff_summary.json 에 비교 행이 없습니다."
+
+    lines = ["최근 튜닝 세트 비교"]
+    lines.append(f"- 기준 파일: {latest_path.parent.name}")
+    for row in rows[:limit]:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            f"- {row.get('key', '-')} | "
+            f"수익률 {float(row.get('before_return_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_return_pct', 0.0) or 0.0):.2f}% "
+            f"({float(row.get('return_diff_pct', 0.0) or 0.0):+,.2f}%p) | "
+            f"거래 수 {int(row.get('before_trade_count', 0) or 0)} -> {int(row.get('after_trade_count', 0) or 0)} | "
+            f"MDD {float(row.get('before_max_drawdown_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_max_drawdown_pct', 0.0) or 0.0):.2f}%"
+        )
+    return "\n".join(lines)
+
+
 def load_latest_entry_prices() -> dict[tuple[str, str], float]:
     """체결 이력에서 거래소/심볼별 최신 추정 진입가를 읽는다."""
     latest_prices: dict[tuple[str, str], float] = {}
@@ -1207,6 +1238,7 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_current_market_strategy_text(settings),
         build_recovered_position_state_text(settings),
         build_backtest_comparison_text(settings),
+        build_latest_tuning_diff_text(),
         build_strategy_funnel_text(),
         build_trade_quality_text(settings),
         build_profit_protect_text(),
@@ -1514,6 +1546,7 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
             build_positions_text(settings),
             build_current_market_strategy_text(settings),
             build_backtest_comparison_text(settings),
+            build_latest_tuning_diff_text(),
             build_weekly_trade_quality_text(7),
             build_weekly_profit_protect_text(7),
             build_weekly_funnel_text(7),

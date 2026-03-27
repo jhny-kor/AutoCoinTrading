@@ -1,5 +1,7 @@
 """
 수정 요약
+- snapshot 도 기간에 맞춰 fetch 범위를 자동 확장할 수 있도록 보강해 기준선 스냅샷과 주간 배치의 비교 조건을 맞추도록 개선
+- weekly 기본 fetch 범위를 타임프레임과 일수에 맞춰 자동 확장하고, 배치 요약에 실제 데이터 커버 구간과 표본 부족 상태 플래그를 함께 남기도록 보강
 - 관리 심볼 기준 주간 배치 백테스트와 설정 변경 전후 비교를 한 번에 돌리는 러너를 추가
 - fetch -> run -> compare 흐름을 심볼별로 묶고 배치 요약 Markdown/JSON 을 생성하도록 구성
 - weekly, snapshot, diff 서브커맨드로 운영 루틴과 전후 비교 루틴을 분리해 실행할 수 있도록 확장
@@ -15,20 +17,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from analysis_log_collector import (
-    create_okx_public_client,
-    create_upbit_public_client,
-    fetch_okx_ohlcv,
-    fetch_upbit_ohlcv,
-)
+from analysis_log_collector import create_okx_public_client, create_upbit_public_client
 from backtest_replay import (
     build_output_dir,
     load_candles,
+    parse_timeframe_to_minutes,
     resolve_default_fee_rate,
     resolve_default_max_daily_loss,
     resolve_default_min_buy_order_value,
@@ -44,6 +43,7 @@ from strategy_settings import load_managed_symbols
 
 DEFAULT_WEEKLY_DAYS = 7
 DEFAULT_FETCH_LIMIT = 3000
+DEFAULT_WEEKLY_BUFFER_MULTIPLIER = 1.2
 
 
 def infer_strategy_type(symbol: str) -> str:
@@ -72,10 +72,115 @@ def fetch_symbol_ohlcv(
 ) -> list[list[float]]:
     """공개 거래소에서 심볼별 OHLCV 를 가져온다."""
     if exchange_name.lower() == "okx":
-        exchange = create_okx_public_client()
-        return fetch_okx_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
+        return fetch_okx_ohlcv_paginated(symbol=symbol, timeframe=timeframe, limit=limit)
+    return fetch_upbit_ohlcv_paginated(symbol=symbol, timeframe=timeframe, limit=limit)
+
+
+def fetch_okx_ohlcv_paginated(*, symbol: str, timeframe: str, limit: int) -> list[list[float]]:
+    """OKX 공개 캔들을 여러 번 호출해 필요한 개수까지 모은다."""
+    exchange = create_okx_public_client()
+    inst_id = symbol.replace("/", "-")
+    timeframe_map = {
+        "1m": "1m",
+        "3m": "3m",
+        "5m": "5m",
+        "15m": "15m",
+        "30m": "30m",
+        "1h": "1H",
+        "4h": "4H",
+        "1d": "1D",
+    }
+    bar = timeframe_map.get(timeframe, timeframe)
+    batch_limit = min(300, max(1, limit))
+    rows_by_ts: dict[int, list[float]] = {}
+    cursor_after: int | None = None
+
+    while len(rows_by_ts) < limit:
+        request = {
+            "instId": inst_id,
+            "bar": bar,
+            "limit": min(batch_limit, limit - len(rows_by_ts)),
+        }
+        if cursor_after is not None:
+            request["after"] = cursor_after
+        response = exchange.publicGetMarketHistoryCandles(request)
+        data = response.get("data", []) if isinstance(response, dict) else response
+        if not data:
+            break
+
+        parsed_batch: list[list[float]] = []
+        for item in data:
+            parsed_batch.append(
+                [
+                    int(item[0]),
+                    float(item[1]),
+                    float(item[2]),
+                    float(item[3]),
+                    float(item[4]),
+                    float(item[5]),
+                ]
+            )
+        parsed_batch.sort(key=lambda row: row[0])
+        for row in parsed_batch:
+            rows_by_ts[row[0]] = row
+
+        oldest_ts = parsed_batch[0][0]
+        next_cursor = oldest_ts - 1
+        if cursor_after is not None and next_cursor >= cursor_after:
+            break
+        if len(parsed_batch) < request["limit"]:
+            break
+        cursor_after = next_cursor
+
+    return [rows_by_ts[ts] for ts in sorted(rows_by_ts)[-limit:]]
+
+
+def fetch_upbit_ohlcv_paginated(*, symbol: str, timeframe: str, limit: int) -> list[list[float]]:
+    """업비트 공개 캔들을 여러 번 호출해 필요한 개수까지 모은다."""
     exchange = create_upbit_public_client()
-    return fetch_upbit_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
+    batch_limit = min(200, max(1, limit))
+    rows_by_ts: dict[int, list[float]] = {}
+    to_ts: int | None = None
+
+    while len(rows_by_ts) < limit:
+        params: dict[str, Any] = {}
+        if to_ts is not None:
+            params["to"] = exchange.iso8601(to_ts)
+        batch = exchange.fetch_ohlcv(
+            symbol,
+            timeframe=timeframe,
+            limit=min(batch_limit, limit - len(rows_by_ts)),
+            params=params,
+        )
+        if not batch:
+            break
+
+        batch.sort(key=lambda row: row[0])
+        for row in batch:
+            rows_by_ts[int(row[0])] = row
+
+        oldest_ts = int(batch[0][0])
+        next_to_ts = oldest_ts - 1
+        if to_ts is not None and next_to_ts >= to_ts:
+            break
+        if len(batch) < min(batch_limit, limit - (len(rows_by_ts) - len(batch))):
+            break
+        to_ts = next_to_ts
+
+    return [rows_by_ts[ts] for ts in sorted(rows_by_ts)[-limit:]]
+
+
+def calculate_required_fetch_limit(
+    *,
+    timeframe: str,
+    days: int,
+    buffer_multiplier: float = DEFAULT_WEEKLY_BUFFER_MULTIPLIER,
+) -> int:
+    """지정 일수를 커버하기 위한 대략적인 fetch limit 을 계산한다."""
+    timeframe_minutes = parse_timeframe_to_minutes(timeframe)
+    candles_per_day = max(1, int((24 * 60) / timeframe_minutes))
+    raw_limit = candles_per_day * max(1, days)
+    return max(200, math.ceil(raw_limit * max(buffer_multiplier, 1.0)))
 
 
 def resolve_targets(args: argparse.Namespace) -> list[tuple[str, str]]:
@@ -130,6 +235,13 @@ def run_single_backtest(
     save_fetch_output(data_path, rows)
 
     candles = load_candles(data_path)
+    data_start = None
+    data_end = None
+    covered_days = 0.0
+    if rows:
+        data_start = datetime.fromtimestamp(rows[0][0] / 1000).astimezone().isoformat()
+        data_end = datetime.fromtimestamp(rows[-1][0] / 1000).astimezone().isoformat()
+        covered_days = max(0.0, (rows[-1][0] - rows[0][0]) / 1000 / 60 / 60 / 24)
     initial_cash = infer_initial_cash(symbol)
     fee_rate_pct = resolve_default_fee_rate(exchange_name)
     min_buy_order_value = resolve_default_min_buy_order_value(exchange_name)
@@ -173,11 +285,36 @@ def run_single_backtest(
         until=until,
     )
     save_comparison_payload(result_dir, comparison_payload)
+    flags: list[str] = []
+    expected_days = 0.0
+    if since and until:
+        try:
+            since_date = datetime.strptime(since, "%Y-%m-%d").date()
+            until_date = datetime.strptime(until, "%Y-%m-%d").date()
+            expected_days = max(0.0, float((until_date - since_date).days))
+        except ValueError:
+            expected_days = 0.0
+    backtest_sell_count = int(summary.get("sell_count", 0) or 0)
+    live_sell_count = int(comparison_payload.get("live", {}).get("sell_count", 0) or 0)
+    if expected_days > 0 and covered_days < expected_days * 0.9:
+        flags.append("data_window_short_for_period")
+    if backtest_sell_count == 0:
+        flags.append("no_backtest_trades")
+    if 0 < backtest_sell_count < 3:
+        flags.append("backtest_sample_too_small")
+    if backtest_sell_count == 0 and live_sell_count > 0:
+        flags.append("live_exists_without_backtest")
     return {
         "exchange_name": exchange_name,
         "symbol": symbol,
         "strategy_type": strategy_type,
         "result_dir": str(result_dir),
+        "data_candle_count": len(rows),
+        "data_start": data_start,
+        "data_end": data_end,
+        "covered_days": covered_days,
+        "expected_days": expected_days,
+        "flags": flags,
         "summary": summary,
         "comparison": comparison_payload,
     }
@@ -213,10 +350,14 @@ def build_batch_markdown(
                 f"## {row['exchange_name'].upper()} {row['symbol']} ({row['strategy_type']})",
                 "",
                 f"- 결과 디렉토리: `{row['result_dir']}`",
+                f"- 데이터 캔들 수: `{row['data_candle_count']}`",
+                f"- 데이터 구간: `{row['data_start'] or '-'}` -> `{row['data_end'] or '-'}`",
+                f"- 데이터 커버: `{row['covered_days']:.2f}일` (목표 `{row['expected_days']:.2f}일`)",
                 f"- 백테스트 수익률: `{float(summary.get('net_return_pct', 0.0) or 0.0):.2f}%`",
                 f"- 백테스트 거래 수: `{summary.get('trade_count', 0)}`",
                 f"- 백테스트 최대 낙폭: `{float(summary.get('max_drawdown_pct', 0.0) or 0.0):.2f}%`",
                 f"- 실거래 매도 수: `{live.get('sell_count', 0)}`",
+                f"- 상태 플래그: `{', '.join(row['flags']) if row['flags'] else '-'}`",
                 f"- 비교 코멘트: `{' / '.join(str(comment) for comment in comments[:3]) if comments else '-'}`",
                 "",
             ]
@@ -240,6 +381,21 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
     if not targets:
         raise ValueError("실행 대상 심볼이 없습니다.")
     batch_root = build_batch_root(Path(args.output_dir), label)
+    effective_limit = args.limit
+    if getattr(args, "auto_limit", False):
+        if since and until:
+            try:
+                since_date = datetime.strptime(since, "%Y-%m-%d").date()
+                until_date = datetime.strptime(until, "%Y-%m-%d").date()
+                days_for_limit = max(1, (until_date - since_date).days)
+            except ValueError:
+                days_for_limit = int(getattr(args, "days", DEFAULT_WEEKLY_DAYS) or DEFAULT_WEEKLY_DAYS)
+        else:
+            days_for_limit = int(getattr(args, "days", DEFAULT_WEEKLY_DAYS) or DEFAULT_WEEKLY_DAYS)
+        effective_limit = calculate_required_fetch_limit(
+            timeframe=args.timeframe,
+            days=days_for_limit,
+        )
     rows: list[dict[str, Any]] = []
     for exchange_name, symbol in targets:
         rows.append(
@@ -248,7 +404,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
                 exchange_name=exchange_name,
                 symbol=symbol,
                 timeframe=args.timeframe,
-                limit=args.limit,
+                limit=effective_limit,
                 since=since,
                 until=until,
                 risk_per_trade=args.risk_per_trade,
@@ -259,7 +415,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
         "label": label,
         "created_at": datetime.now().isoformat(),
         "timeframe": args.timeframe,
-        "limit": args.limit,
+        "limit": effective_limit,
         "since": since,
         "until": until,
         "rows": rows,
@@ -269,7 +425,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
         build_batch_markdown(
             label=label,
             timeframe=args.timeframe,
-            limit=args.limit,
+            limit=effective_limit,
             since=since,
             until=until,
             rows=rows,
@@ -340,11 +496,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     weekly_parser = subparsers.add_parser("weekly", parents=[common], help="최근 7일 비교 기준 주간 배치 실행")
     weekly_parser.add_argument("--days", type=int, default=DEFAULT_WEEKLY_DAYS)
+    weekly_parser.add_argument("--auto-limit", action="store_true", default=True)
 
     snapshot_parser = subparsers.add_parser("snapshot", parents=[common], help="임의 라벨 배치 실행")
     snapshot_parser.add_argument("--label", required=True)
     snapshot_parser.add_argument("--since", help="실거래 비교 시작 YYYY-MM-DD")
     snapshot_parser.add_argument("--until", help="실거래 비교 종료 YYYY-MM-DD")
+    snapshot_parser.add_argument("--auto-limit", action="store_true", default=True)
 
     diff_parser = subparsers.add_parser("diff", help="두 배치 결과 전후 비교")
     diff_parser.add_argument("--before-dir", required=True)

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 혼합 청산 세트를 위해 수수료 반영 순익 보호 익절 기준도 심볼별 map 으로 읽도록 확장
 - 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 공통 알트 전략 설정을 추가
 - ETH/KRW 같은 특정 심볼만 별도로 수익을 지키도록 브레이크이븐 가드 설정을 공통 알트 전략에 추가
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운 설정을 공통 알트 전략에 추가
@@ -68,6 +69,7 @@ class StrategySettings:
     stop_loss_pct: float
     enable_fee_protect_exit: bool
     fee_protect_min_net_pnl_pct: float
+    fee_protect_min_net_pnl_pct_map: dict[str, float]
     enable_break_even_guard: bool
     break_even_guard_min_mfe_pct: float
     break_even_guard_min_mfe_pct_map: dict[str, float]
@@ -110,6 +112,13 @@ class StrategySettings:
         return self.break_even_guard_min_mfe_pct_map.get(
             symbol,
             self.break_even_guard_min_mfe_pct,
+        )
+
+    def get_fee_protect_min_net_pnl_pct(self, symbol: str) -> float:
+        """심볼별 순익 보호 최소 순익률 기준을 반환한다."""
+        return self.fee_protect_min_net_pnl_pct_map.get(
+            symbol,
+            self.fee_protect_min_net_pnl_pct,
         )
 
     def get_break_even_guard_floor_net_pnl_pct(self, symbol: str) -> float:
@@ -313,6 +322,9 @@ def load_strategy_settings(
         ),
         fee_protect_min_net_pnl_pct=float(
             os.getenv("STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT", "0.20")
+        ),
+        fee_protect_min_net_pnl_pct_map=parse_symbol_float_map(
+            os.getenv("STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT_MAP", "")
         ),
         enable_break_even_guard=parse_bool(
             os.getenv("STRATEGY_ENABLE_BREAK_EVEN_GUARD", "true"),
