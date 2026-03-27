@@ -61,6 +61,10 @@ from market_regime_guard import (
     update_regime_state,
 )
 from portfolio_allocator import PortfolioAllocator
+from state_recovery import (
+    load_program_daily_realized_pnl_quote,
+    restore_program_position_states,
+)
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
@@ -308,28 +312,71 @@ def run_bot():
 
     # BTC 는 전용 EMA 봇으로 분리했으므로 기존 업비트 봇은 알트만 담당한다.
     markets = load_alt_markets("upbit")
+    recovered_states = restore_program_position_states(
+        "upbit_ma_crossover_bot",
+        [market["symbol"] for market in markets],
+    )
 
     timeframe = "1m"
     ma_period = 20
 
     # 심볼별 평균 진입가 저장 (손익 계산용)
-    entry_price = {}
+    entry_price = {
+        symbol: state.average_entry_price
+        for symbol, state in recovered_states.items()
+        if state.average_entry_price is not None
+    }
     # 심볼별 포지션 시작 시각 저장 (보유 시간 분석용)
-    entry_opened_at = {}
+    entry_opened_at = {
+        symbol: state.opened_at_ts
+        for symbol, state in recovered_states.items()
+        if state.opened_at_ts is not None
+    }
     # 심볼별 진입 후 최고가/최저가 저장 (MFE/MAE 분석용)
-    highest_price_since_entry = {}
-    lowest_price_since_entry = {}
+    highest_price_since_entry = {
+        symbol: state.highest_price_since_entry
+        for symbol, state in recovered_states.items()
+        if state.highest_price_since_entry is not None
+    }
+    lowest_price_since_entry = {
+        symbol: state.lowest_price_since_entry
+        for symbol, state in recovered_states.items()
+        if state.lowest_price_since_entry is not None
+    }
     # 심볼별 부분익절/부분손절 1회 실행 여부 저장
-    partial_take_profit_done = {}
-    partial_stop_loss_done = {}
-    partial_take_profit_last_at = {}
+    partial_take_profit_done = {
+        symbol: state.partial_take_profit_done
+        for symbol, state in recovered_states.items()
+        if state.partial_take_profit_done
+    }
+    partial_stop_loss_done = {
+        symbol: state.partial_stop_loss_done
+        for symbol, state in recovered_states.items()
+        if state.partial_stop_loss_done
+    }
+    partial_take_profit_last_at = {
+        symbol: state.last_partial_take_profit_at_ts
+        for symbol, state in recovered_states.items()
+        if state.last_partial_take_profit_at_ts > 0
+    }
     # 심볼별 분할 진입 횟수 저장
-    entry_count = {}
+    entry_count = {
+        symbol: state.cycle_buy_count
+        for symbol, state in recovered_states.items()
+        if state.cycle_buy_count > 0
+    }
     # 심볼별 마지막 거래 시각 저장
-    last_trade_at = {}
+    last_trade_at = {
+        symbol: state.last_trade_at_ts
+        for symbol, state in recovered_states.items()
+        if state.last_trade_at_ts > 0
+    }
     # 일일 누적 실현 손익(KRW 기준)
-    daily_realized_pnl_quote = 0.0
     daily_pnl_date = datetime.now().date()
+    daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+        "upbit_ma_crossover_bot",
+        daily_pnl_date,
+    )
     logger = BotLogger("upbit_ma_crossover_bot")
     structured_logger = StructuredLogManager("upbit_ma_crossover_bot")
     notifier = load_telegram_notifier()
@@ -339,7 +386,9 @@ def run_bot():
         quote_currency="KRW",
         tracked_symbols=load_managed_symbols("upbit"),
     )
-    daily_limit_notified = False
+    daily_limit_notified = (
+        daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+    )
     log = logger.log
 
     log("=== 업비트 단순 이동평균 돌파 봇 시작 ===")
@@ -347,6 +396,15 @@ def run_bot():
     log(f"한 번에 사용하는 계좌 비율: {config['risk_per_trade']}")
     log(f"업비트 편도 수수료: {config['fee_rate_pct']}%")
     log(f"일일 최대 손실 제한: {config['max_daily_loss_quote']} KRW")
+    log(f"복구된 당일 실현 손익: {daily_realized_pnl_quote:.2f} KRW")
+    if recovered_states:
+        recovered_summary = ", ".join(
+            f"{symbol}(avg={state.average_entry_price:.2f}, entries={state.cycle_buy_count})"
+            for symbol, state in recovered_states.items()
+            if state.average_entry_price is not None
+        )
+        if recovered_summary:
+            log(f"복구된 포지션 상태: {recovered_summary}")
     structured_logger.log_system(
         level="INFO",
         event="bot_started",
@@ -364,7 +422,10 @@ def run_bot():
         today = datetime.now().date()
         if today != daily_pnl_date:
             daily_pnl_date = today
-            daily_realized_pnl_quote = 0.0
+            daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+                "upbit_ma_crossover_bot",
+                daily_pnl_date,
+            )
             daily_limit_notified = False
             log("일자가 변경되어 일일 손익 누적값을 초기화합니다.")
             structured_logger.log_system(

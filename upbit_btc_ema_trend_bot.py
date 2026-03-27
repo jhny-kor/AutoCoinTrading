@@ -57,6 +57,10 @@ from market_regime_guard import (
     update_regime_state,
 )
 from portfolio_allocator import PortfolioAllocator
+from state_recovery import (
+    load_program_daily_realized_pnl_quote,
+    restore_program_position_states,
+)
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
 from strategy_settings import load_managed_symbols
 from telegram_notifier import load_telegram_notifier
@@ -207,27 +211,62 @@ def run_bot():
     symbol = "BTC/KRW"
     base = "BTC"
     quote = "KRW"
+    recovered_state = restore_program_position_states(
+        "upbit_btc_ema_trend_bot",
+        [symbol],
+    ).get(symbol)
     portfolio_allocator = PortfolioAllocator(
         exchange_name="UPBIT",
         quote_currency=quote,
         tracked_symbols=load_managed_symbols("upbit"),
     )
-    entry_price: float | None = None
-    entry_opened_at: float | None = None
-    position_id: str | None = None
-    highest_price_since_entry: float | None = None
-    lowest_price_since_entry: float | None = None
-    trailing_armed = False
-    trailing_armed_at: float | None = None
-    trailing_activation_price: float | None = None
-    partial_take_profit_done = False
-    add_on_count = 0
-    last_trade_at = 0.0
-    last_stop_loss_at = 0.0
-    last_profit_exit_at = 0.0
-    daily_realized_pnl_quote = 0.0
+    entry_price: float | None = (
+        recovered_state.average_entry_price if recovered_state else None
+    )
+    entry_opened_at: float | None = (
+        recovered_state.opened_at_ts if recovered_state else None
+    )
+    position_id: str | None = (
+        f"{symbol}:{int(recovered_state.opened_at_ts)}"
+        if recovered_state and recovered_state.opened_at_ts is not None
+        else None
+    )
+    highest_price_since_entry: float | None = (
+        recovered_state.highest_price_since_entry if recovered_state else None
+    )
+    lowest_price_since_entry: float | None = (
+        recovered_state.lowest_price_since_entry if recovered_state else None
+    )
+    trailing_armed = recovered_state.trailing_armed if recovered_state else False
+    trailing_armed_at: float | None = (
+        recovered_state.trailing_armed_at_ts if recovered_state else None
+    )
+    trailing_activation_price: float | None = (
+        recovered_state.trailing_activation_price if recovered_state else None
+    )
+    partial_take_profit_done = (
+        recovered_state.partial_take_profit_done if recovered_state else False
+    )
+    add_on_count = (
+        max(0, recovered_state.cycle_buy_count - 1) if recovered_state else 0
+    )
+    last_trade_at = (
+        recovered_state.last_trade_at_ts if recovered_state else 0.0
+    )
+    last_stop_loss_at = (
+        recovered_state.last_stop_loss_at_ts if recovered_state else 0.0
+    )
+    last_profit_exit_at = (
+        recovered_state.last_profit_exit_at_ts if recovered_state else 0.0
+    )
     daily_pnl_date = datetime.now().date()
-    daily_limit_notified = False
+    daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+        "upbit_btc_ema_trend_bot",
+        daily_pnl_date,
+    )
+    daily_limit_notified = (
+        daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+    )
     min_buy_order_value = float(os.getenv("UPBIT_MIN_BUY_ORDER_VALUE", "5000"))
 
     min_ohlcv_limit = max(
@@ -254,6 +293,14 @@ def run_bot():
         f"트레일링 되돌림 기준: {settings.trailing_drawdown_pct:.2f}% "
         f"(익절 구간 도달 후 활성화)"
     )
+    log(f"복구된 당일 실현 손익: {daily_realized_pnl_quote:.2f} {quote}")
+    if recovered_state and recovered_state.average_entry_price is not None:
+        log(
+            f"복구된 BTC 포지션: avg={recovered_state.average_entry_price:.0f}, "
+            f"entries={recovered_state.cycle_buy_count}, "
+            f"partial_tp_done={recovered_state.partial_take_profit_done}, "
+            f"trailing_armed={recovered_state.trailing_armed}"
+        )
     structured_logger.log_system(
         level="INFO",
         event="bot_started",
@@ -272,7 +319,10 @@ def run_bot():
         today = datetime.now().date()
         if today != daily_pnl_date:
             daily_pnl_date = today
-            daily_realized_pnl_quote = 0.0
+            daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+                "upbit_btc_ema_trend_bot",
+                daily_pnl_date,
+            )
             daily_limit_notified = False
             log("일자가 변경되어 BTC 전용 봇의 일일 손익을 초기화합니다.")
             structured_logger.log_system(
