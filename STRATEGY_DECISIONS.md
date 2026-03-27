@@ -376,6 +376,21 @@
   - XRP/KRW 는 순간 거래량만 강해도 상위 하락 추세에 다시 눌리는 경우가 있어 상위 추세 역행 진입을 더 강하게 막는 편이 맞음
   - BTC 는 `CHOPPY` 구간에서 기존 거래량 기준만으로는 약한 진입을 충분히 거르지 못해 레짐별 추가 거래량 기준이 필요하다고 판단
 
+### 23. ETH/USDT 상위 하락 추세 차단 및 BTC CHOPPY 기준 소폭 상향 (2026-03-27, eth usdt guard and btc mild tighten)
+
+- 변경 내용:
+  - `ETH/USDT` 도 `htf_bearish=True`일 때 신규 진입 차단 대상에 추가
+  - BTC 는 `CHOPPY` 레짐 추가 거래량 기준만 소폭 상향
+- 변경 전 -> 변경 후:
+  - `STRATEGY_BLOCK_ENTRY_WHEN_HTF_BEARISH_SYMBOLS`: `XRP/KRW -> XRP/KRW,ETH/USDT`
+  - `BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP`: `BTC/USDT 1.90 -> 2.00`, `BTC/KRW 1.70 -> 1.80`
+- 근거 로그:
+  - `2026-03-27 ETH/USDT` 손실 2건은 모두 `htf_bearish=True` 상태였고, 장중 `MFE` 는 약 `0.49%`까지 있었지만 최종 `-1.11%`, `-1.24%` 순손실로 마감
+  - `2026-03-27 BTC/KRW`, `BTC/USDT` 손실은 여전히 `CHOPPY/LOW_ENERGY` 구간에서 낮은 `MFE` 패턴이 반복
+- 해석:
+  - `ETH/USDT` 는 상위 하락 추세 역행 진입을 더 강하게 차단하는 편이 맞음
+  - BTC 는 이미 많이 보수화된 상태라, 추가 조정은 `CHOPPY` 구간 거래량 기준만 소폭 높이는 정도가 적절하다고 판단
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
