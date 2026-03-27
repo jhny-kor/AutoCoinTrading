@@ -355,6 +355,7 @@ def run_bot():
         for symbol, state in recovered_states.items()
         if state.partial_stop_loss_done
     }
+    unrecoverable_position_warned: set[str] = set()
     partial_take_profit_last_at = {
         symbol: state.last_partial_take_profit_at_ts
         for symbol, state in recovered_states.items()
@@ -565,23 +566,24 @@ def run_bot():
                     log(f"[{symbol}] 심볼 레짐 {symbol_regime} 상태라 신규 진입을 보류합니다.")
                 avg_entry_price = entry_price.get(symbol)
                 if has_position and avg_entry_price is None:
-                    # 봇 재시작 후 기존 보유 물량의 실제 매수가를 알 수 없을 때 현재가를 임시 기준으로 사용
-                    entry_price[symbol] = last_close
-                    avg_entry_price = last_close
-                    entry_count[symbol] = max(entry_count.get(symbol, 0), 1)
-                    entry_opened_at[symbol] = entry_opened_at.get(symbol, time.time())
-                    highest_price_since_entry[symbol] = last_close
-                    lowest_price_since_entry[symbol] = last_close
-                    log(
-                        f"[{symbol}] 기존 보유 물량이 감지되어 평균 진입가를 현재가({last_close:.0f})로 임시 설정합니다."
-                    )
-                    structured_logger.log_system(
-                        level="INFO",
-                        event="position_bootstrap",
-                        message="기존 보유 포지션을 감지해 평균 진입가를 임시 설정했습니다.",
-                        symbol=symbol,
-                        context={"bootstrap_entry_price": last_close},
-                    )
+                    if symbol not in unrecoverable_position_warned:
+                        log(
+                            f"[{symbol}] 복구 가능한 진입가 없이 보유 포지션만 감지되었습니다. "
+                            "현재가로 임시 진입가를 만들지 않고 자동 매매를 보류합니다."
+                        )
+                        structured_logger.log_system(
+                            level="WARNING",
+                            event="position_state_unrecoverable",
+                            message="평균 진입가를 복구하지 못한 포지션을 감지해 자동 매매를 보류합니다.",
+                            symbol=symbol,
+                            context={
+                                "base_free": base_free,
+                                "quote_free": quote_free,
+                                "position_quote_value": position_quote_value,
+                            },
+                        )
+                        unrecoverable_position_warned.add(symbol)
+                    continue
                 elif not has_position:
                     # 최소 주문 금액 미만 잔량은 신규 포지션으로 다시 진입할 수 있도록 내부 상태를 비운다.
                     if (
@@ -596,6 +598,7 @@ def run_bot():
                         lowest_price_since_entry.pop(symbol, None)
                         partial_take_profit_done.pop(symbol, None)
                         partial_stop_loss_done.pop(symbol, None)
+                        unrecoverable_position_warned.discard(symbol)
                         log(
                             f"[{symbol}] 최소 주문 금액 미만 잔량은 포지션에서 제외하고 재진입 가능 상태로 초기화합니다."
                         )
