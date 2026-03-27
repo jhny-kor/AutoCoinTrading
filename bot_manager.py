@@ -1,6 +1,7 @@
 """
 봇 프로세스 관리 도구
 
+- 봇 시작 시 현재 인터프리터 대신 프로젝트 `.venv/bin/python` 을 우선 사용하도록 보강해 collector/telegram 이 시스템 파이썬으로 잘못 뜨지 않게 수정했다.
 - 현재 실행 중인 봇 프로세스와 분석 수집기 상태를 확인한다.
 - 개별 봇 시작, 전체 시작, 전체 중지, 강제 종료를 지원한다.
 - 개별 봇 중지와 텔레그램 리스너 개별 중지를 지원한다.
@@ -55,6 +56,7 @@ from pathlib import Path
 from log_path_utils import dated_path
 
 ROOT_DIR = Path(__file__).resolve().parent
+PREFERRED_PYTHON = ROOT_DIR / ".venv" / "bin" / "python"
 
 PROGRAMS = {
     "okx": "ma_crossover_bot.py",
@@ -390,6 +392,11 @@ def start_program(name: str) -> int:
         return 0
 
     script = PROGRAMS[name]
+    python_executable = (
+        str(PREFERRED_PYTHON)
+        if PREFERRED_PYTHON.exists()
+        else sys.executable
+    )
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     launcher_log = dated_path("logs", f"{Path(script).stem}.launcher.log")
@@ -397,7 +404,7 @@ def start_program(name: str) -> int:
 
     with launcher_log.open("a", encoding="utf-8") as f:
         process = subprocess.Popen(
-            [sys.executable, script],
+            [python_executable, script],
             cwd=os.getcwd(),
             stdout=subprocess.DEVNULL,
             stderr=f,
