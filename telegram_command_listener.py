@@ -769,6 +769,15 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
     missing_symbols = sorted(set(settings.okx_symbols + settings.upbit_symbols) - covered_symbols)
     if missing_symbols:
         lines.append(f"- 비교 결과가 아직 없는 심볼: {', '.join(missing_symbols[:6])}")
+        sample_symbol = missing_symbols[0]
+        sample_exchange = "upbit" if sample_symbol.endswith("/KRW") else "okx"
+        sample_strategy = "btc" if sample_symbol.startswith("BTC/") else "alt"
+        sample_slug = sample_symbol.replace("/", "_").replace("-", "_").lower()
+        lines.append(
+            "  권장 실행: "
+            f".venv/bin/python backtest_report_runner.py snapshot --label auto_compare_{sample_slug} "
+            f"--symbols {sample_symbol} --exchanges {sample_exchange}"
+        )
     return "\n".join(lines)
 
 
