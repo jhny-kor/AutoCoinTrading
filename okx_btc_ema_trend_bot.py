@@ -255,6 +255,7 @@ def run_bot():
     last_profit_exit_at = (
         recovered_state.last_profit_exit_at_ts if recovered_state else 0.0
     )
+    unrecoverable_position_warned = False
     daily_pnl_date = datetime.now().date()
     daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
         "okx_btc_ema_trend_bot",
@@ -376,25 +377,26 @@ def run_bot():
             # 최소 주문 수량보다 작은 잔량은 즉시 정리할 수 없으므로 포지션에서 제외한다.
             has_position = base_free >= settings.min_order_amount
             if has_position and entry_price is None:
-                entry_price = last_close
-                entry_opened_at = entry_opened_at or time.time()
-                position_id = position_id or f"{symbol}:{int(time.time())}"
-                highest_price_since_entry = last_close
-                lowest_price_since_entry = last_close
-                trailing_armed = False
-                trailing_armed_at = None
-                trailing_activation_price = None
-                add_on_count = settings.pyramid_max_add_ons
-                log(
-                    f"[{symbol}] 기존 보유 물량이 감지되어 평균 진입가를 현재가({last_close:.2f})로 임시 설정합니다."
-                )
-                structured_logger.log_system(
-                    level="INFO",
-                    event="position_bootstrap",
-                    message="기존 BTC 포지션을 감지해 평균 진입가를 임시 설정했습니다.",
-                    symbol=symbol,
-                    context={"bootstrap_entry_price": last_close},
-                )
+                if not unrecoverable_position_warned:
+                    log(
+                        f"[{symbol}] 복구 가능한 진입가 없이 보유 포지션만 감지되었습니다. "
+                        "현재가로 임시 진입가를 만들지 않고 자동 매매를 보류합니다."
+                    )
+                    structured_logger.log_system(
+                        level="WARNING",
+                        event="position_state_unrecoverable",
+                        message="평균 진입가를 복구하지 못한 BTC 포지션을 감지해 자동 매매를 보류합니다.",
+                        symbol=symbol,
+                        context={
+                            "base_free": base_free,
+                            "quote_free": quote_free,
+                            "min_order_amount": settings.min_order_amount,
+                        },
+                    )
+                    unrecoverable_position_warned = True
+                continue
+            if not has_position:
+                unrecoverable_position_warned = False
 
             now_ts = time.time()
             base_cooldown_remaining = max(0.0, settings.min_trade_interval_sec - (now_ts - last_trade_at))
@@ -1160,7 +1162,7 @@ def run_bot():
                                 "error": repr(order_error),
                             },
                         )
-                        raise
+                        continue
                     order_response_received_at = time.time()
                     estimated_amount = estimated_entry_amount
                     entry_price = last_close
@@ -1299,7 +1301,7 @@ def run_bot():
                             "error": repr(order_error),
                         },
                     )
-                    raise
+                    continue
                 order_response_received_at = time.time()
 
                 previous_amount = base_free
@@ -1501,7 +1503,7 @@ def run_bot():
                                 "error": repr(order_error),
                             },
                         )
-                        raise
+                        continue
                     order_response_received_at = time.time()
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
