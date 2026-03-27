@@ -1,5 +1,7 @@
 """
 수정 요약
+- /status, /positions, /analysis, 일일/주간 리포트에 복구 포지션 상태와 일일 손실 제한 상태를 함께 보여주도록 확장
+- 백테스트 대비 실거래 설명 섹션에 누락 심볼 안내와 더 구체적인 차이 설명을 함께 넣도록 보강
 - /pnl 과 기간 손익 요약의 KRW 금액은 반올림이 아니라 절사 기준으로 표시하도록 정리했다.
 - /regime 명령으로 심볼별 현재 레짐과 핵심 근거 숫자를 바로 볼 수 있도록 추가했다.
 - /pnl 과 기간 손익 요약에서 KRW, USDT 손익 문구를 한국어 기준으로 더 자연스럽게 보이도록 정리했다.
@@ -78,6 +80,7 @@ from dotenv import load_dotenv
 import analyze_logs
 import analyze_strategy_logs
 import bot_manager
+from btc_trend_settings import load_btc_trend_settings
 from incident_manager import find_incident, update_incident_status
 from bot_logger import BotLogger
 from log_path_utils import iter_files, latest_file, read_all_lines
@@ -88,11 +91,15 @@ from ma_crossover_bot import (
     load_config as load_okx_config,
 )
 from market_regime_guard import classify_symbol_regime
+from state_recovery import (
+    load_program_daily_realized_pnl_quote,
+    restore_program_position_states,
+)
+from strategy_settings import load_alt_symbols, load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
 from telegram_notifier import format_telegram_request_error
 from telegram_notifier import format_telegram_text_numbers
 from trade_history_logger import estimate_round_trip_net_pnl
-from strategy_settings import load_alt_symbols, load_managed_symbols
 from upbit_ma_crossover_bot import (
     create_upbit_client,
     fetch_ohlcv as fetch_upbit_ohlcv,
@@ -131,6 +138,27 @@ PROGRAM_STRUCTURE_SOURCES = [
     ("OKX BTC", "okx_btc_ema_trend_bot"),
     ("업비트 BTC", "upbit_btc_ema_trend_bot"),
 ]
+
+PROGRAM_LABELS = {
+    "ma_crossover_bot": "OKX 알트",
+    "upbit_ma_crossover_bot": "업비트 알트",
+    "okx_btc_ema_trend_bot": "OKX BTC",
+    "upbit_btc_ema_trend_bot": "업비트 BTC",
+}
+
+PROGRAM_STRATEGY_TYPES = {
+    "ma_crossover_bot": "alt",
+    "upbit_ma_crossover_bot": "alt",
+    "okx_btc_ema_trend_bot": "btc",
+    "upbit_btc_ema_trend_bot": "btc",
+}
+
+PROGRAM_EXCHANGES = {
+    "ma_crossover_bot": "OKX",
+    "upbit_ma_crossover_bot": "UPBIT",
+    "okx_btc_ema_trend_bot": "OKX",
+    "upbit_btc_ema_trend_bot": "UPBIT",
+}
 
 OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SPOT"
 OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles?instId={inst}&bar=1D&limit=7"
@@ -494,7 +522,254 @@ def build_positions_text(settings: ListenerSettings) -> str:
     sections = ["현재 포지션 요약"]
     sections.append(build_okx_positions_text(settings.okx_symbols))
     sections.append(build_upbit_positions_text(settings.upbit_symbols))
+    sections.append(build_recovered_position_state_text(settings))
     return "\n\n".join(sections)
+
+
+def load_recovered_position_rows(settings: ListenerSettings) -> list[dict[str, object]]:
+    """프로그램별 복구 포지션 상태를 요약 행으로 반환한다."""
+    now_ts = time.time()
+    alt_settings = load_strategy_settings("OKX_MIN_BUY_ORDER_VALUE", 1.0)
+    btc_settings = load_btc_trend_settings()
+    targets = [
+        ("ma_crossover_bot", settings.okx_symbols),
+        ("upbit_ma_crossover_bot", settings.upbit_symbols),
+        ("okx_btc_ema_trend_bot", ["BTC/USDT"]),
+        ("upbit_btc_ema_trend_bot", ["BTC/KRW"]),
+    ]
+    rows: list[dict[str, object]] = []
+    for program_name, symbols in targets:
+        strategy_type = PROGRAM_STRATEGY_TYPES.get(program_name, "alt")
+        recovered = restore_program_position_states(program_name, symbols)
+        daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(program_name)
+        for symbol, state in recovered.items():
+            if state.average_entry_price is None:
+                continue
+            if strategy_type == "btc":
+                base_cooldown_remaining = max(
+                    0.0,
+                    btc_settings.min_trade_interval_sec - (now_ts - state.last_trade_at_ts),
+                )
+                stop_cooldown_remaining = max(
+                    0.0,
+                    btc_settings.stop_loss_reentry_cooldown_sec - (now_ts - state.last_stop_loss_at_ts),
+                )
+                profit_cooldown_remaining = max(
+                    0.0,
+                    btc_settings.profit_exit_reentry_cooldown_sec - (now_ts - state.last_profit_exit_at_ts),
+                )
+                cooldown_remaining = max(
+                    base_cooldown_remaining,
+                    stop_cooldown_remaining,
+                    profit_cooldown_remaining,
+                )
+            else:
+                trade_cooldown_remaining = max(
+                    0.0,
+                    alt_settings.min_trade_interval_sec - (now_ts - state.last_trade_at_ts),
+                )
+                partial_tp_cooldown_remaining = max(
+                    0.0,
+                    alt_settings.partial_take_profit_reentry_cooldown_sec
+                    - (now_ts - state.last_partial_take_profit_at_ts),
+                ) if state.last_partial_take_profit_at_ts > 0 else 0.0
+                cooldown_remaining = max(
+                    trade_cooldown_remaining,
+                    partial_tp_cooldown_remaining,
+                )
+            rows.append(
+                {
+                    "program_name": program_name,
+                    "label": PROGRAM_LABELS.get(program_name, program_name),
+                    "exchange": PROGRAM_EXCHANGES.get(program_name, ""),
+                    "strategy_type": strategy_type,
+                    "symbol": symbol,
+                    "average_entry_price": state.average_entry_price,
+                    "cycle_buy_count": state.cycle_buy_count,
+                    "opened_at_ts": state.opened_at_ts,
+                    "highest_price_since_entry": state.highest_price_since_entry,
+                    "lowest_price_since_entry": state.lowest_price_since_entry,
+                    "partial_take_profit_done": state.partial_take_profit_done,
+                    "partial_stop_loss_done": state.partial_stop_loss_done,
+                    "trailing_armed": state.trailing_armed,
+                    "trailing_activation_price": state.trailing_activation_price,
+                    "cooldown_remaining_sec": cooldown_remaining,
+                    "daily_realized_pnl_quote": daily_realized_pnl_quote,
+                }
+            )
+    rows.sort(key=lambda row: (str(row["label"]), str(row["symbol"])))
+    return rows
+
+
+def build_recovered_position_state_text(settings: ListenerSettings, limit: int = 8) -> str:
+    """복구 포지션 상태와 주요 제약을 텔레그램용 문구로 만든다."""
+    rows = load_recovered_position_rows(settings)
+    if not rows:
+        return "복구 상태 요약\n- 현재 체결 이력 기준으로 복구된 활성 포지션 상태가 없습니다."
+
+    lines = ["복구 상태 요약"]
+    for row in rows[:limit]:
+        symbol = str(row["symbol"])
+        quote = symbol.split("/", 1)[1] if "/" in symbol else ""
+        decimals = 0 if quote == "KRW" else 4
+        avg_entry_price = float(row["average_entry_price"])
+        highest_price = safe_float(row.get("highest_price_since_entry"))
+        lowest_price = safe_float(row.get("lowest_price_since_entry"))
+        cooldown_remaining_sec = int(float(row.get("cooldown_remaining_sec") or 0.0))
+        daily_realized_pnl_quote = float(row["daily_realized_pnl_quote"])
+        detail_parts = [
+            f"avg {format_number(avg_entry_price, decimals)}",
+            f"활성 레그 {int(row['cycle_buy_count'])}회",
+            f"오늘 손익 {format_number_trunc(daily_realized_pnl_quote, decimals)} {quote}",
+        ]
+        if highest_price is not None and lowest_price is not None:
+            detail_parts.append(
+                f"고저 {format_number(highest_price, decimals)} / {format_number(lowest_price, decimals)}"
+            )
+        if row["strategy_type"] == "btc":
+            detail_parts.append(
+                f"트레일링 {'ON' if row['trailing_armed'] else 'OFF'}"
+            )
+            trailing_activation_price = safe_float(row.get("trailing_activation_price"))
+            if trailing_activation_price is not None:
+                detail_parts.append(
+                    f"활성가 {format_number(trailing_activation_price, decimals)}"
+                )
+        else:
+            detail_parts.append(
+                f"부분익절 {'완료' if row['partial_take_profit_done'] else '대기'}"
+            )
+            if row["partial_stop_loss_done"]:
+                detail_parts.append("부분손절 완료")
+        if cooldown_remaining_sec > 0:
+            detail_parts.append(f"쿨다운 {cooldown_remaining_sec}초 남음")
+        lines.append(f"- {row['label']} | {symbol} | " + " | ".join(detail_parts))
+    return "\n".join(lines)
+
+
+def build_runtime_guard_status_text(settings: ListenerSettings) -> str:
+    """복구 포지션 수와 일일 손실 제한 상태를 요약한다."""
+    rows = load_recovered_position_rows(settings)
+    rows_by_program: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        rows_by_program.setdefault(str(row["program_name"]), []).append(row)
+
+    config_rows = [
+        ("ma_crossover_bot", "OKX 알트", "USDT", float(os.getenv("OKX_MAX_DAILY_LOSS_QUOTE", "5.0"))),
+        ("upbit_ma_crossover_bot", "업비트 알트", "KRW", float(os.getenv("UPBIT_MAX_DAILY_LOSS_QUOTE", "5000"))),
+        ("okx_btc_ema_trend_bot", "OKX BTC", "USDT", float(os.getenv("OKX_MAX_DAILY_LOSS_QUOTE", "5.0"))),
+        ("upbit_btc_ema_trend_bot", "업비트 BTC", "KRW", float(os.getenv("UPBIT_MAX_DAILY_LOSS_QUOTE", "5000"))),
+    ]
+
+    lines = ["운영 제한 요약"]
+    for program_name, label, quote, max_daily_loss_quote in config_rows:
+        active_rows = rows_by_program.get(program_name, [])
+        active_count = len(active_rows)
+        daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(program_name)
+        limit_reached = daily_realized_pnl_quote <= -max_daily_loss_quote
+        decimals = 0 if quote == "KRW" else 4
+        lines.append(
+            f"- {label} | 복구 포지션 {active_count}개 | "
+            f"오늘 손익 {format_number_trunc(daily_realized_pnl_quote, decimals)} {quote} | "
+            f"손실 제한 {'도달' if limit_reached else '정상'} "
+            f"(기준 -{format_number(max_daily_loss_quote, decimals)} {quote})"
+        )
+    return "\n".join(lines)
+
+
+def load_latest_backtest_comparison_rows(settings: ListenerSettings) -> list[dict[str, object]]:
+    """관리 심볼 기준 최신 백테스트 비교 결과를 읽는다."""
+    managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
+    comparison_paths = iter_files("reports/backtests", "comparison.json")
+    latest_by_key: dict[tuple[str, str], tuple[float, dict[str, object]]] = {}
+    for path in comparison_paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        filters = payload.get("filters", {})
+        if not isinstance(filters, dict):
+            continue
+        symbol = str(filters.get("symbol", "")).strip()
+        program_name = str(filters.get("program_name", "")).strip()
+        if not symbol or symbol not in managed_symbols:
+            continue
+        if not program_name:
+            continue
+        key = (program_name, symbol)
+        mtime = path.stat().st_mtime
+        current = latest_by_key.get(key)
+        if current is None or mtime > current[0]:
+            latest_by_key[key] = (mtime, payload)
+
+    rows = [item[1] for item in latest_by_key.values()]
+    rows.sort(
+        key=lambda payload: (
+            str(payload.get("filters", {}).get("program_name", "")),
+            str(payload.get("filters", {}).get("symbol", "")),
+        )
+    )
+    return rows
+
+
+def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -> str:
+    """백테스트 대비 실거래 설명 섹션을 만든다."""
+    rows = load_latest_backtest_comparison_rows(settings)
+    if not rows:
+        return (
+            "백테스트 대비 실거래 설명\n"
+            "- 아직 comparison.json 이 없습니다. backtest_replay.py 와 compare_backtest_to_live.py 를 먼저 실행해 주세요."
+        )
+
+    lines = ["백테스트 대비 실거래 설명"]
+    covered_symbols: set[str] = set()
+    for payload in rows[:limit]:
+        filters = payload.get("filters", {}) if isinstance(payload.get("filters"), dict) else {}
+        backtest = payload.get("backtest", {}) if isinstance(payload.get("backtest"), dict) else {}
+        live = payload.get("live", {}) if isinstance(payload.get("live"), dict) else {}
+        comments = payload.get("comments", []) if isinstance(payload.get("comments"), list) else []
+        symbol = str(filters.get("symbol", ""))
+        program_name = str(filters.get("program_name", ""))
+        covered_symbols.add(symbol)
+        label = PROGRAM_LABELS.get(program_name, program_name)
+        backtest_sell_count = int(backtest.get("sell_count", 0) or 0)
+        live_sell_count = int(live.get("sell_count", 0) or 0)
+        backtest_win_rate = float(backtest.get("win_rate_pct", 0.0) or 0.0)
+        live_win_rate = float(live.get("win_rate_pct", 0.0) or 0.0)
+        backtest_avg_pnl = float(backtest.get("avg_net_realized_pnl_pct", 0.0) or 0.0)
+        live_avg_pnl = float(live.get("avg_net_realized_pnl_pct", 0.0) or 0.0)
+        backtest_total_quote = float(backtest.get("total_net_realized_pnl_quote", 0.0) or 0.0)
+        live_total_quote = float(live.get("total_net_realized_pnl_quote", 0.0) or 0.0)
+        backtest_top_reason = (
+            backtest.get("top_exit_reasons", [("-", 0)])[0][0]
+            if backtest.get("top_exit_reasons")
+            else "-"
+        )
+        live_top_reason = (
+            live.get("top_exit_reasons", [("-", 0)])[0][0]
+            if live.get("top_exit_reasons")
+            else "-"
+        )
+        lines.append(
+            f"- {label} | {symbol} | "
+            f"백테스트 매도 {backtest_sell_count}건 / 실거래 매도 {live_sell_count}건 | "
+            f"승률 차이 {live_win_rate - backtest_win_rate:+.2f}%p | "
+            f"평균 순손익률 차이 {live_avg_pnl - backtest_avg_pnl:+.4f}%p"
+        )
+        lines.append(
+            f"  성과: 백테스트 총 순손익 {backtest_total_quote:.4f}, "
+            f"실거래 총 순손익 {live_total_quote:.4f}"
+        )
+        lines.append(
+            f"  종료 사유: 백테스트 대표 `{backtest_top_reason}` / "
+            f"실거래 대표 `{live_top_reason}`"
+        )
+        if comments:
+            lines.append(f"  해석: {' / '.join(str(comment) for comment in comments[:4])}")
+    missing_symbols = sorted(set(settings.okx_symbols + settings.upbit_symbols) - covered_symbols)
+    if missing_symbols:
+        lines.append(f"- 비교 결과가 아직 없는 심볼: {', '.join(missing_symbols[:6])}")
+    return "\n".join(lines)
 
 
 def load_latest_entry_prices() -> dict[tuple[str, str], float]:
@@ -548,6 +823,14 @@ def build_okx_positions_text(symbols: list[str]) -> str:
         config = load_okx_config()
         exchange = create_okx_client(config)
         latest_entry_prices = load_latest_entry_prices()
+        recovered_entry_prices: dict[str, float] = {}
+        for program_name, target_symbols in (
+            ("ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/USDT"]),
+            ("okx_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/USDT"]),
+        ):
+            for symbol, state in restore_program_position_states(program_name, target_symbols).items():
+                if state.average_entry_price is not None:
+                    recovered_entry_prices[symbol] = state.average_entry_price
         lines = ["[OKX]"]
         seen_quotes: set[str] = set()
         meaningful_position_count = 0
@@ -587,7 +870,9 @@ def build_okx_positions_text(symbols: list[str]) -> str:
                     f"현재가 {format_number(last_close, 4)} | "
                     f"평가 {format_number(estimated_value, 4)} {quote}"
                 )
-                entry_price = latest_entry_prices.get(("OKX", symbol))
+                entry_price = recovered_entry_prices.get(symbol)
+                if entry_price is None:
+                    entry_price = latest_entry_prices.get(("OKX", symbol))
                 if entry_price and entry_price > 0:
                     pnl_pct = ((last_close - entry_price) / entry_price) * 100
                     line += (
@@ -609,6 +894,14 @@ def build_upbit_positions_text(symbols: list[str]) -> str:
         config = load_upbit_config()
         exchange = create_upbit_client(config)
         latest_entry_prices = load_latest_entry_prices()
+        recovered_entry_prices: dict[str, float] = {}
+        for program_name, target_symbols in (
+            ("upbit_ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/KRW"]),
+            ("upbit_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/KRW"]),
+        ):
+            for symbol, state in restore_program_position_states(program_name, target_symbols).items():
+                if state.average_entry_price is not None:
+                    recovered_entry_prices[symbol] = state.average_entry_price
         lines = ["[UPBIT]"]
         seen_quotes: set[str] = set()
         meaningful_position_count = 0
@@ -648,7 +941,9 @@ def build_upbit_positions_text(symbols: list[str]) -> str:
                     f"현재가 {format_number(last_close, 0)} | "
                     f"평가 {format_number(estimated_value, 0)} {quote}"
                 )
-                entry_price = latest_entry_prices.get(("UPBIT", symbol))
+                entry_price = recovered_entry_prices.get(symbol)
+                if entry_price is None:
+                    entry_price = latest_entry_prices.get(("UPBIT", symbol))
                 if entry_price and entry_price > 0:
                     pnl_pct = ((last_close - entry_price) / entry_price) * 100
                     line += (
@@ -901,6 +1196,8 @@ def build_analysis_text(settings: ListenerSettings) -> str:
     sections = [
         build_market_analysis_text(settings),
         build_current_market_strategy_text(settings),
+        build_recovered_position_state_text(settings),
+        build_backtest_comparison_text(settings),
         build_strategy_funnel_text(),
         build_trade_quality_text(settings),
         build_profit_protect_text(),
@@ -1205,7 +1502,9 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
             "주간 리포트",
             f"집계 구간: {start} ~ {end}",
             build_period_pnl_text(7, title="최근 7일 누적 실현 손익"),
+            build_positions_text(settings),
             build_current_market_strategy_text(settings),
+            build_backtest_comparison_text(settings),
             build_weekly_trade_quality_text(7),
             build_weekly_profit_protect_text(7),
             build_weekly_funnel_text(7),
@@ -2063,7 +2362,12 @@ def build_last_logs_text(settings: ListenerSettings) -> str:
 def build_response_text(command: str, settings: ListenerSettings) -> str:
     """명령에 맞는 응답 문자열을 만든다."""
     if command == "/status":
-        return bot_manager.build_status_text(use_color=False, exclude_current=False)
+        return "\n\n".join(
+            [
+                bot_manager.build_status_text(use_color=False, exclude_current=False),
+                build_runtime_guard_status_text(settings),
+            ]
+        )
     if command == "/test":
         return "텔레그램 테스트 메시지입니다. 현재 알림과 명령 응답이 정상 동작 중입니다."
     if command == "/positions":

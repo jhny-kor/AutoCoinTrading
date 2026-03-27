@@ -58,6 +58,10 @@ from market_regime_guard import (
     update_regime_state,
 )
 from portfolio_allocator import PortfolioAllocator
+from state_recovery import (
+    load_program_daily_realized_pnl_quote,
+    restore_program_position_states,
+)
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
 from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
@@ -386,8 +390,6 @@ def run_bot():
     entry_count = {}
     # 심볼별 마지막 거래 시각 저장 (과매매 방지용)
     last_trade_at = {}
-    # 일일 누적 실현 손익(quote 기준)
-    daily_realized_pnl_quote = 0.0
     daily_pnl_date = datetime.now().date()
     logger = BotLogger("ma_crossover_bot")
     structured_logger = StructuredLogManager("ma_crossover_bot")
@@ -398,10 +400,64 @@ def run_bot():
         quote_currency="USDT",
         tracked_symbols=load_managed_symbols("okx"),
     )
-    daily_limit_notified = False
-
     # BTC 는 전용 EMA 봇으로 분리했으므로 기존 OKX 봇은 알트만 담당한다.
     markets = load_alt_markets("okx")
+    recovered_states = restore_program_position_states(
+        "ma_crossover_bot",
+        [market["symbol"] for market in markets],
+    )
+    entry_price = {
+        symbol: state.average_entry_price
+        for symbol, state in recovered_states.items()
+        if state.average_entry_price is not None
+    }
+    entry_opened_at = {
+        symbol: state.opened_at_ts
+        for symbol, state in recovered_states.items()
+        if state.opened_at_ts is not None
+    }
+    highest_price_since_entry = {
+        symbol: state.highest_price_since_entry
+        for symbol, state in recovered_states.items()
+        if state.highest_price_since_entry is not None
+    }
+    lowest_price_since_entry = {
+        symbol: state.lowest_price_since_entry
+        for symbol, state in recovered_states.items()
+        if state.lowest_price_since_entry is not None
+    }
+    partial_take_profit_done = {
+        symbol: state.partial_take_profit_done
+        for symbol, state in recovered_states.items()
+        if state.partial_take_profit_done
+    }
+    partial_stop_loss_done = {
+        symbol: state.partial_stop_loss_done
+        for symbol, state in recovered_states.items()
+        if state.partial_stop_loss_done
+    }
+    partial_take_profit_last_at = {
+        symbol: state.last_partial_take_profit_at_ts
+        for symbol, state in recovered_states.items()
+        if state.last_partial_take_profit_at_ts > 0
+    }
+    entry_count = {
+        symbol: state.cycle_buy_count
+        for symbol, state in recovered_states.items()
+        if state.cycle_buy_count > 0
+    }
+    last_trade_at = {
+        symbol: state.last_trade_at_ts
+        for symbol, state in recovered_states.items()
+        if state.last_trade_at_ts > 0
+    }
+    daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+        "ma_crossover_bot",
+        daily_pnl_date,
+    )
+    daily_limit_notified = (
+        daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+    )
 
     timeframe = "1m"
     ma_period = 20
@@ -413,6 +469,15 @@ def run_bot():
     log(f"테스트넷 모드: {'ON' if config['sandbox'] else 'OFF'}")
     log(f"한 번에 사용하는 계좌 비율: {config['risk_per_trade']}")
     log(f"일일 최대 손실 제한: {config['max_daily_loss_quote']} USDT")
+    log(f"복구된 당일 실현 손익: {daily_realized_pnl_quote:.4f} USDT")
+    if recovered_states:
+        recovered_summary = ", ".join(
+            f"{symbol}(avg={state.average_entry_price:.4f}, entries={state.cycle_buy_count})"
+            for symbol, state in recovered_states.items()
+            if state.average_entry_price is not None
+        )
+        if recovered_summary:
+            log(f"복구된 포지션 상태: {recovered_summary}")
     structured_logger.log_system(
         level="INFO",
         event="bot_started",
@@ -430,7 +495,10 @@ def run_bot():
         today = datetime.now().date()
         if today != daily_pnl_date:
             daily_pnl_date = today
-            daily_realized_pnl_quote = 0.0
+            daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+                "ma_crossover_bot",
+                daily_pnl_date,
+            )
             daily_limit_notified = False
             log("일자가 변경되어 일일 손익 누적값을 초기화합니다.")
             structured_logger.log_system(

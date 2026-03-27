@@ -65,6 +65,20 @@
 - [analyze_strategy_logs.py](/Users/plo/Documents/auto_coin_bot/analyze_strategy_logs.py)
   - 구조화 전략 로그와 체결 로그를 함께 읽어 퍼널 병목, 거래 품질, 시간대 성과를 집계
 
+- [backtest_replay.py](/Users/plo/Documents/auto_coin_bot/backtest_replay.py)
+  - 공개 OHLCV 저장용 `fetch` 서브커맨드 제공
+  - 로컬 OHLCV 파일 기준 오프라인 전략 리플레이 실행
+  - 알트 MA 전략과 BTC EMA 전략의 요약/거래 로그 출력
+
+- [backtest_report_runner.py](/Users/plo/Documents/auto_coin_bot/backtest_report_runner.py)
+  - 주간 배치 백테스트와 설정 변경 전후 비교를 묶어서 실행
+  - fetch -> run -> compare 흐름을 심볼별로 자동 수행
+  - 배치 요약과 전후 diff 요약 Markdown/JSON 생성
+
+- [compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/compare_backtest_to_live.py)
+  - 백테스트 결과와 실거래 체결 이력을 같은 기준으로 비교
+  - 승률, 순손익, 평균 손익률, 종료 사유를 함께 요약
+
 ## 3. 공통 운영 / 제어 모듈
 
 ### 봇 제어
@@ -96,6 +110,10 @@
   - 목표 비중 기반 신규 매수 예산 제한
   - 누적 투입 원가 기준 포트폴리오 계산
   - 거래량 강세 시 보수적 동적 오버웨이트
+
+- [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
+  - trade_history 기준 평균 진입가와 내부 상태 복구
+  - 프로그램별 당일 실현 손익 재계산 helper 제공
 
 ## 5. 거래소별 모듈
 
