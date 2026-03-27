@@ -54,6 +54,8 @@ from pathlib import Path
 
 from log_path_utils import dated_path
 
+ROOT_DIR = Path(__file__).resolve().parent
+
 PROGRAMS = {
     "okx": "ma_crossover_bot.py",
     "upbit": "upbit_ma_crossover_bot.py",
@@ -187,8 +189,16 @@ def command_matches_script(command: str, script: str) -> bool:
     except ValueError:
         tokens = command.split()
 
+    expected_path = (ROOT_DIR / script).resolve()
     for token in tokens:
-        if Path(token).name == script:
+        token_path = Path(token)
+        if token_path.is_absolute() or len(token_path.parts) > 1:
+            try:
+                if token_path.resolve() == expected_path:
+                    return True
+            except OSError:
+                continue
+        elif token_path.name == Path(script).name:
             return True
     return False
 

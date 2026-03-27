@@ -1,6 +1,7 @@
 """
 텔레그램 알림 유틸
 
+- 텔레그램 전송 실패 시 DNS 조회 실패, 연결 종료, 네트워크 미도달 같은 원인을 한국어로 더 분명하게 진단하도록 개선했다.
 - 날짜를 제외한 텔레그램 숫자 포맷이 %, 초, 개, bp, ms 같은 단위가 붙어도 세 자리 쉼표가 적용되도록 보완했다.
 - 오류 알림에 인시던트 ID 와 승인형 버튼(재기동/상세/수정 요청/무시)을 함께 보낼 수 있도록 확장했다.
 - 날짜 표기는 유지하고, 그 밖의 숫자는 텔레그램 전송 직전에 세 자리마다 쉼표가 들어가도록 공통 포맷을 적용했다.
@@ -15,9 +16,11 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -60,11 +63,27 @@ def format_telegram_request_error(exc: Exception) -> str:
 
     if isinstance(exc, urllib.error.URLError):
         reason = exc.reason
-        if isinstance(reason, TimeoutError):
+        if isinstance(reason, (TimeoutError, socket.timeout)):
             return "요청 시간이 초과되었습니다."
+        if isinstance(reason, socket.gaierror):
+            return (
+                "DNS 조회 실패: api.telegram.org 주소를 찾지 못했습니다. "
+                f"네트워크 또는 DNS 설정을 확인하세요. ({reason})"
+            )
+        if isinstance(reason, ConnectionResetError):
+            return f"연결이 전송 중 끊어졌습니다. ({reason})"
+        if isinstance(reason, ConnectionRefusedError):
+            return f"원격 서버가 연결을 거부했습니다. ({reason})"
+        if isinstance(reason, OSError):
+            if reason.errno == errno.ENETUNREACH:
+                return f"네트워크에 연결할 수 없습니다. ({reason})"
+            if reason.errno == errno.EHOSTUNREACH:
+                return f"대상 호스트에 도달할 수 없습니다. ({reason})"
+            if reason.errno == errno.ECONNRESET:
+                return f"연결이 전송 중 끊어졌습니다. ({reason})"
         return f"네트워크 오류: {reason}"
 
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, (TimeoutError, socket.timeout)):
         return "요청 시간이 초과되었습니다."
 
     if isinstance(exc, ValueError):
