@@ -404,6 +404,21 @@
   - `ETH/USDT` 는 상위 하락 추세 역행 진입을 더 강하게 차단하는 편이 맞음
   - BTC 는 이미 많이 보수화된 상태라, 추가 조정은 `CHOPPY` 구간 거래량 기준만 소폭 높이는 정도가 적절하다고 판단
 
+### 24. ETH/USDT 수익 보호 조기화 (2026-03-29, eth usdt profit protection tighten)
+
+- 변경 내용:
+  - `ETH/USDT` 는 순익 보호 익절 기준을 더 낮추고, 브레이크이븐 가드는 더 빨리 켜되 순익 바닥은 더 높게 요구하도록 조정
+- 변경 전 -> 변경 후:
+  - `STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT_MAP`: `ETH/USDT 0.12 -> 0.08`
+  - `STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP`: `ETH/USDT 0.18 -> 0.12`
+  - `STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP`: `ETH/USDT 0.08 -> 0.20`
+- 근거 로그:
+  - `2026-03-28 ETH/USDT` 실거래는 장중 `MFE +4.53%`까지 갔지만 최종 `-0.2781%` 순손실로 종료
+  - 같은 날짜 백테스트는 `break_even_guard_exit` 로 `+0.0374%`로 마감
+- 해석:
+  - 실거래는 수익 보호 신호가 너무 늦어 장중 수익 대부분을 되돌렸다고 판단
+  - 따라서 `ETH/USDT` 는 다른 알트보다 더 빠르게 보호를 켜고, 음수로 내려가기 전 더 높은 순익 구간에서 정리하는 편이 맞음
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
