@@ -48,6 +48,7 @@ from datetime import datetime
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
 from core.execution.common import log_order_failure
+from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_btc_allocations
@@ -56,6 +57,11 @@ from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.btc_position import (
     build_btc_exit_prices,
     evaluate_btc_open_position,
+)
+from core.strategy.funnels import (
+    build_btc_add_on_steps,
+    build_btc_entry_steps,
+    build_btc_exit_steps,
 )
 from market_regime_guard import (
     build_regime_change_message,
@@ -679,72 +685,72 @@ def run_bot():
             )
             estimated_exit_amount = safe_amount_to_precision(exchange, symbol, base_free)
 
-            common_metrics = {
-                "strategy_name": "okx_btc_ema_trend",
-                "strategy_version": settings.version,
-                "symbol": symbol,
-                "timeframe": settings.timeframe,
-                "confirm_timeframe": settings.confirm_timeframe,
-                "price": last_close,
-                "prev_fast_ema": prev_fast,
-                "prev_slow_ema": prev_slow,
-                "last_fast_ema": last_fast,
-                "last_slow_ema": last_slow,
-                "ema_aligned": ema_aligned,
-                "price_above_fast": price_above_fast,
-                "ema_spread_pct": ema_spread_pct,
-                "effective_min_ema_spread_pct": effective_min_ema_spread_pct,
-                "trend_follow_entry": trend_follow_entry,
-                "entry_signal": entry_signal,
-                "volume_ratio": volume_ratio,
-                "effective_min_volume_ratio": effective_min_volume_ratio,
-                "atr_value": atr_value,
-                "atr_pct": atr_pct,
-                "effective_min_atr_pct": effective_min_atr_pct,
-                "confirm_bullish": confirm_bullish,
-                "base_free": base_free,
-                "quote_free": quote_free,
-                "position_ratio": position_ratio,
-                "has_position": has_position,
-                "daily_realized_pnl_quote": daily_realized_pnl_quote,
-                "portfolio_base_target_pct": allocation_decision.base_target_pct * 100,
-                "portfolio_effective_target_pct": allocation_decision.effective_target_pct * 100,
-                "portfolio_dynamic_bonus_pct": allocation_decision.dynamic_bonus_pct * 100,
-                "portfolio_dynamic_bonus_applied": allocation_decision.dynamic_bonus_applied,
-                "portfolio_total_budget_quote": allocation_decision.total_portfolio_quote,
-                "portfolio_current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
-                "portfolio_remaining_budget_quote": allocation_decision.remaining_budget_quote,
-                "pnl_pct": pnl_pct,
-                "net_pnl_pct_estimate": current_net_realized_pnl_pct,
-                "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
-                "bull_pullback_hold_active": bull_pullback_hold_active,
-                "bull_pullback_tolerance_pct": settings.bull_pullback_tolerance_pct,
-                "bull_pullback_min_spread_pct": settings.bull_pullback_min_spread_pct,
-                "min_order_amount": settings.min_order_amount,
-                "position_id": position_id,
-                "highest_price_since_entry": highest_price_since_entry,
-                "lowest_price_since_entry": lowest_price_since_entry,
-                "trailing_armed": trailing_armed,
-                "partial_take_profit_done": partial_take_profit_done,
-                "partial_take_profit_triggered": partial_take_profit_triggered,
-                "drawdown_from_high_pct": drawdown_from_high_pct,
-                "trailing_activation_price": trailing_activation_price,
-                "mfe_pct": mfe_pct,
-                "mae_pct": mae_pct,
-                "add_on_count": add_on_count,
-                "pyramid_add_on_enabled": settings.enable_pyramid_add_on,
-                "pyramid_trigger_profit_pct": settings.pyramid_trigger_profit_pct,
-                "pyramid_max_add_ons": settings.pyramid_max_add_ons,
-                "profit_protect_triggered": profit_protect_triggered,
-                "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
-                "low_energy_guard_active": low_energy_guard_active,
-                "low_energy_avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
-                "low_energy_avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
-                "low_energy_ready_count": low_energy_snapshot.ready_count,
-                "symbol_regime": symbol_regime,
-                "symbol_regime_blocks_entry": symbol_regime_blocks_entry,
-                "symbol_regime_requires_fresh_cross": symbol_regime_requires_fresh_cross,
-            }
+            common_metrics = build_btc_common_metrics(
+                strategy_name="okx_btc_ema_trend",
+                strategy_version=settings.version,
+                symbol=symbol,
+                timeframe=settings.timeframe,
+                confirm_timeframe=settings.confirm_timeframe,
+                price=last_close,
+                prev_fast_ema=prev_fast,
+                prev_slow_ema=prev_slow,
+                last_fast_ema=last_fast,
+                last_slow_ema=last_slow,
+                ema_aligned=ema_aligned,
+                price_above_fast=price_above_fast,
+                ema_spread_pct=ema_spread_pct,
+                effective_min_ema_spread_pct=effective_min_ema_spread_pct,
+                trend_follow_entry=trend_follow_entry,
+                entry_signal=entry_signal,
+                volume_ratio=volume_ratio,
+                effective_min_volume_ratio=effective_min_volume_ratio,
+                atr_value=atr_value,
+                atr_pct=atr_pct,
+                effective_min_atr_pct=effective_min_atr_pct,
+                confirm_bullish=confirm_bullish,
+                base_free=base_free,
+                quote_free=quote_free,
+                position_ratio=position_ratio,
+                has_position=has_position,
+                daily_realized_pnl_quote=daily_realized_pnl_quote,
+                portfolio_base_target_pct=allocation_decision.base_target_pct * 100,
+                portfolio_effective_target_pct=allocation_decision.effective_target_pct * 100,
+                portfolio_dynamic_bonus_pct=allocation_decision.dynamic_bonus_pct * 100,
+                portfolio_dynamic_bonus_applied=allocation_decision.dynamic_bonus_applied,
+                portfolio_total_budget_quote=allocation_decision.total_portfolio_quote,
+                portfolio_current_cost_basis_quote=allocation_decision.current_cost_basis_quote,
+                portfolio_remaining_budget_quote=allocation_decision.remaining_budget_quote,
+                pnl_pct=pnl_pct,
+                net_pnl_pct_estimate=current_net_realized_pnl_pct,
+                fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
+                bull_pullback_hold_active=bull_pullback_hold_active,
+                bull_pullback_tolerance_pct=settings.bull_pullback_tolerance_pct,
+                bull_pullback_min_spread_pct=settings.bull_pullback_min_spread_pct,
+                min_order_amount=settings.min_order_amount,
+                position_id=position_id,
+                highest_price_since_entry=highest_price_since_entry,
+                lowest_price_since_entry=lowest_price_since_entry,
+                trailing_armed=trailing_armed,
+                partial_take_profit_done=partial_take_profit_done,
+                partial_take_profit_triggered=partial_take_profit_triggered,
+                drawdown_from_high_pct=drawdown_from_high_pct,
+                trailing_activation_price=trailing_activation_price,
+                mfe_pct=mfe_pct,
+                mae_pct=mae_pct,
+                add_on_count=add_on_count,
+                pyramid_add_on_enabled=settings.enable_pyramid_add_on,
+                pyramid_trigger_profit_pct=settings.pyramid_trigger_profit_pct,
+                pyramid_max_add_ons=settings.pyramid_max_add_ons,
+                profit_protect_triggered=profit_protect_triggered,
+                profit_exit_cooldown_remaining_sec=profit_exit_cooldown_remaining,
+                low_energy_guard_active=low_energy_guard_active,
+                low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
+                low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
+                low_energy_ready_count=low_energy_snapshot.ready_count,
+                symbol_regime=symbol_regime,
+                symbol_regime_blocks_entry=symbol_regime_blocks_entry,
+                symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
+            )
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
                 f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
@@ -757,141 +763,46 @@ def run_bot():
                     f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
                 )
 
-            entry_steps = [
-                FunnelStep(
-                    stage="trend",
-                    passed=entry_signal,
-                    reason="no_entry_signal",
-                    actual={
-                        "bullish_signal": bullish,
-                        "trend_follow_entry": trend_follow_entry,
-                        "ema_aligned": ema_aligned,
-                        "price_above_fast": price_above_fast,
-                        "ema_spread_pct": ema_spread_pct,
-                    },
-                    required={
-                        "bullish_signal_or_trend_follow_entry": True,
-                        "min_ema_spread_pct": effective_min_ema_spread_pct,
-                    },
-                ),
-                FunnelStep(
-                    stage="position",
-                    passed=not has_position,
-                    reason="position_exists",
-                    actual={"has_position": has_position},
-                    required={"has_position": False},
-                ),
-                FunnelStep(
-                    stage="cooldown",
-                    passed=not in_cooldown,
-                    reason="cooldown_active",
-                    actual={
-                        "cooldown_remaining_sec": cooldown_remaining,
-                        "base_cooldown_remaining_sec": base_cooldown_remaining,
-                        "stop_loss_cooldown_remaining_sec": stop_loss_cooldown_remaining,
-                        "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
-                    },
-                    required={
-                        "base_min_trade_interval_sec": settings.min_trade_interval_sec,
-                        "stop_loss_reentry_cooldown_sec": settings.stop_loss_reentry_cooldown_sec,
-                        "profit_exit_reentry_cooldown_sec": settings.profit_exit_reentry_cooldown_sec,
-                        "cooldown_inactive": True,
-                    },
-                ),
-                FunnelStep(
-                    stage="market_regime",
-                    passed=not low_energy_guard_active,
-                    reason="low_energy_market",
-                    actual={
-                        "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
-                        "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
-                        "ready_count": low_energy_snapshot.ready_count,
-                    },
-                    required={"low_energy_market_inactive": True},
-                ),
-                FunnelStep(
-                    stage="symbol_regime",
-                    passed=not symbol_regime_blocks_entry,
-                    reason="symbol_regime_blocks_entry",
-                    actual={"symbol_regime": symbol_regime},
-                    required={"symbol_regime_allows_entry": True},
-                ),
-                FunnelStep(
-                    stage="regime_entry_signal",
-                    passed=(not symbol_regime_requires_fresh_cross or bullish),
-                    reason="regime_requires_fresh_cross",
-                    actual={
-                        "symbol_regime": symbol_regime,
-                        "bullish_signal": bullish,
-                    },
-                    required={"fresh_bullish_cross_required": True},
-                ),
-                FunnelStep(
-                    stage="volume",
-                    passed=volume_filter_passed,
-                    reason="volume_low" if volume_ratio is not None else "volume_data_missing",
-                    actual={"volume_ratio": volume_ratio},
-                    required={"min_volume_ratio": effective_min_volume_ratio},
-                ),
-                FunnelStep(
-                    stage="atr",
-                    passed=atr_filter_passed,
-                    reason=choose_atr_reason(
-                        atr_pct,
-                        min_value=effective_min_atr_pct,
-                        max_value=settings.max_atr_pct,
-                    ),
-                    actual={"atr_pct": atr_pct},
-                    required={
-                        "min_atr_pct": effective_min_atr_pct,
-                        "max_atr_pct": settings.max_atr_pct,
-                    },
-                ),
-                FunnelStep(
-                    stage="higher_timeframe",
-                    passed=(
-                        not settings.enable_confirm_timeframe_filter or confirm_bullish
-                    ),
-                    reason="higher_timeframe_not_bullish",
-                    actual={"confirm_bullish": confirm_bullish},
-                    required={"confirm_bullish": True},
-                ),
-                FunnelStep(
-                    stage="risk_limit",
-                    passed=not daily_loss_limit_reached,
-                    reason="daily_loss_limit_reached",
-                    actual={"daily_realized_pnl_quote": daily_realized_pnl_quote},
-                    required={
-                        "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
-                    },
-                ),
-                FunnelStep(
-                    stage="portfolio_budget",
-                    passed=allocation_decision.remaining_budget_quote > 0,
-                    reason="portfolio_budget_exhausted",
-                    actual={
-                        "current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
-                        "remaining_budget_quote": allocation_decision.remaining_budget_quote,
-                    },
-                    required={
-                        "portfolio_target_budget_quote": allocation_decision.target_budget_quote,
-                    },
-                ),
-                FunnelStep(
-                    stage="order_value",
-                    passed=order_value > min_buy_order_value,
-                    reason="order_value_too_small",
-                    actual={"order_value_quote": order_value},
-                    required={"min_buy_order_value": min_buy_order_value},
-                ),
-                FunnelStep(
-                    stage="order_amount",
-                    passed=estimated_entry_amount >= settings.min_order_amount,
-                    reason="order_amount_too_small",
-                    actual={"order_amount": estimated_entry_amount},
-                    required={"min_order_amount": settings.min_order_amount},
-                ),
-            ]
+            entry_steps = build_btc_entry_steps(
+                entry_signal=entry_signal,
+                bullish=bullish,
+                trend_follow_entry=trend_follow_entry,
+                ema_aligned=ema_aligned,
+                price_above_fast=price_above_fast,
+                ema_spread_pct=ema_spread_pct,
+                effective_min_ema_spread_pct=effective_min_ema_spread_pct,
+                has_position=has_position,
+                in_cooldown=in_cooldown,
+                cooldown_remaining=cooldown_remaining,
+                base_cooldown_remaining=base_cooldown_remaining,
+                stop_loss_cooldown_remaining=stop_loss_cooldown_remaining,
+                profit_exit_cooldown_remaining=profit_exit_cooldown_remaining,
+                low_energy_guard_active=low_energy_guard_active,
+                low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
+                low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
+                low_energy_ready_count=low_energy_snapshot.ready_count,
+                symbol_regime_blocks_entry=symbol_regime_blocks_entry,
+                symbol_regime=symbol_regime,
+                symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
+                volume_filter_passed=volume_filter_passed,
+                volume_ratio=volume_ratio,
+                effective_min_volume_ratio=effective_min_volume_ratio,
+                atr_filter_passed=atr_filter_passed,
+                atr_pct=atr_pct,
+                effective_min_atr_pct=effective_min_atr_pct,
+                max_atr_pct=settings.max_atr_pct,
+                confirm_bullish=(not settings.enable_confirm_timeframe_filter or confirm_bullish),
+                daily_loss_limit_reached=daily_loss_limit_reached,
+                daily_realized_pnl_quote=daily_realized_pnl_quote,
+                max_daily_loss_quote=config["max_daily_loss_quote"],
+                remaining_budget_quote=allocation_decision.remaining_budget_quote,
+                current_cost_basis_quote=allocation_decision.current_cost_basis_quote,
+                target_budget_quote=allocation_decision.target_budget_quote,
+                order_value=order_value,
+                min_buy_order_value=min_buy_order_value,
+                estimated_entry_amount=estimated_entry_amount,
+                min_order_amount=settings.min_order_amount,
+            )
             entry_ready, _ = structured_logger.run_funnel(
                 symbol=symbol,
                 side="entry",
@@ -913,173 +824,58 @@ def run_bot():
                 add_on_ready, _ = structured_logger.run_funnel(
                     symbol=symbol,
                     side="entry",
-                    steps=[
-                        FunnelStep(
-                            stage="add_on_position",
-                            passed=has_position,
-                            reason="no_position",
-                            actual={"has_position": has_position},
-                            required={"has_position": True},
-                        ),
-                        FunnelStep(
-                            stage="add_on_profit",
-                            passed=add_on_profit_ready,
-                            reason="pyramid_profit_not_reached",
-                            actual={"pnl_pct": pnl_pct},
-                            required={
-                                "min_pnl_pct": settings.pyramid_trigger_profit_pct,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="add_on_limit",
-                            passed=add_on_limit_available,
-                            reason="pyramid_limit_reached",
-                            actual={"add_on_count": add_on_count},
-                            required={
-                                "max_add_ons": settings.pyramid_max_add_ons,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="add_on_trailing",
-                            passed=not trailing_armed,
-                            reason="trailing_already_armed",
-                            actual={"trailing_armed": trailing_armed},
-                            required={"trailing_armed": False},
-                        ),
-                        FunnelStep(
-                            stage="add_on_trend",
-                            passed=entry_signal,
-                            reason="no_entry_signal",
-                            actual={
-                                "bullish_signal": bullish,
-                                "trend_follow_entry": trend_follow_entry,
-                            },
-                            required={
-                                "bullish_signal_or_trend_follow_entry": True,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="add_on_cooldown",
-                            passed=not in_cooldown,
-                            reason="cooldown_active",
-                            actual={
-                                "cooldown_remaining_sec": cooldown_remaining,
-                                "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
-                            },
-                            required={"cooldown_inactive": True},
-                        ),
-                        FunnelStep(
-                            stage="add_on_volume",
-                            passed=volume_filter_passed,
-                            reason="volume_low"
-                            if volume_ratio is not None
-                            else "volume_data_missing",
-                            actual={"volume_ratio": volume_ratio},
-                            required={"min_volume_ratio": effective_min_volume_ratio},
-                        ),
-                        FunnelStep(
-                            stage="add_on_atr",
-                            passed=atr_filter_passed,
-                            reason=choose_atr_reason(
-                                atr_pct,
-                                min_value=settings.min_atr_pct,
-                                max_value=settings.max_atr_pct,
-                            ),
-                            actual={"atr_pct": atr_pct},
-                            required={
-                                "min_atr_pct": settings.min_atr_pct,
-                                "max_atr_pct": settings.max_atr_pct,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="add_on_higher_timeframe",
-                            passed=(
-                                not settings.enable_confirm_timeframe_filter
-                                or confirm_bullish
-                            ),
-                            reason="higher_timeframe_not_bullish",
-                            actual={"confirm_bullish": confirm_bullish},
-                            required={"confirm_bullish": True},
-                        ),
-                        FunnelStep(
-                            stage="add_on_risk_limit",
-                            passed=not daily_loss_limit_reached,
-                            reason="daily_loss_limit_reached",
-                            actual={
-                                "daily_realized_pnl_quote": daily_realized_pnl_quote
-                            },
-                            required={
-                                "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
-                            },
-                        ),
-                        FunnelStep(
-                            stage="add_on_portfolio_budget",
-                            passed=add_on_allocation_decision.remaining_budget_quote > 0,
-                            reason="portfolio_budget_exhausted",
-                            actual={
-                                "current_cost_basis_quote": add_on_allocation_decision.current_cost_basis_quote,
-                                "remaining_budget_quote": add_on_allocation_decision.remaining_budget_quote,
-                            },
-                            required={
-                                "portfolio_target_budget_quote": add_on_allocation_decision.target_budget_quote,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="add_on_order_value",
-                            passed=add_on_order_value > min_buy_order_value,
-                            reason="order_value_too_small",
-                            actual={"order_value_quote": add_on_order_value},
-                            required={"min_buy_order_value": min_buy_order_value},
-                        ),
-                        FunnelStep(
-                            stage="add_on_order_amount",
-                            passed=estimated_add_on_amount >= settings.min_order_amount,
-                            reason="order_amount_too_small",
-                            actual={"order_amount": estimated_add_on_amount},
-                            required={"min_order_amount": settings.min_order_amount},
-                        ),
-                    ],
+                    steps=build_btc_add_on_steps(
+                        has_position=has_position,
+                        add_on_profit_ready=add_on_profit_ready,
+                        pnl_pct=pnl_pct,
+                        min_pnl_pct=settings.pyramid_trigger_profit_pct,
+                        add_on_limit_available=add_on_limit_available,
+                        add_on_count=add_on_count,
+                        max_add_ons=settings.pyramid_max_add_ons,
+                        trailing_armed=trailing_armed,
+                        entry_signal=entry_signal,
+                        bullish=bullish,
+                        trend_follow_entry=trend_follow_entry,
+                        in_cooldown=in_cooldown,
+                        cooldown_remaining=cooldown_remaining,
+                        profit_exit_cooldown_remaining=profit_exit_cooldown_remaining,
+                        volume_filter_passed=volume_filter_passed,
+                        volume_ratio=volume_ratio,
+                        effective_min_volume_ratio=effective_min_volume_ratio,
+                        atr_filter_passed=atr_filter_passed,
+                        atr_pct=atr_pct,
+                        min_atr_pct=settings.min_atr_pct,
+                        max_atr_pct=settings.max_atr_pct,
+                        confirm_bullish=(not settings.enable_confirm_timeframe_filter or confirm_bullish),
+                        daily_loss_limit_reached=daily_loss_limit_reached,
+                        daily_realized_pnl_quote=daily_realized_pnl_quote,
+                        max_daily_loss_quote=config["max_daily_loss_quote"],
+                        remaining_budget_quote=add_on_allocation_decision.remaining_budget_quote,
+                        current_cost_basis_quote=add_on_allocation_decision.current_cost_basis_quote,
+                        target_budget_quote=add_on_allocation_decision.target_budget_quote,
+                        add_on_order_value=add_on_order_value,
+                        min_buy_order_value=min_buy_order_value,
+                        estimated_add_on_amount=estimated_add_on_amount,
+                        min_order_amount=settings.min_order_amount,
+                    ),
                     metrics=common_metrics,
                     ready_stage="add_on_ready",
                     ready_reason="add_on_conditions_met",
                     ready_extra={"entry_type": "add_on_winner"},
                 )
 
-            exit_steps = [
-                FunnelStep(
-                    stage="position",
-                    passed=has_position,
-                    reason="no_position",
-                    actual={"has_position": has_position},
-                    required={"has_position": True},
-                ),
-                FunnelStep(
-                    stage="exit_trigger",
-                    passed=(
-                        stop_triggered
-                        or partial_take_profit_triggered
-                        or profit_protect_triggered
-                        or trailing_stop_triggered
-                        or trend_exit_triggered
-                    ),
-                    reason="no_exit_signal",
-                    actual={
-                        "stop_triggered": stop_triggered,
-                        "partial_take_profit_triggered": partial_take_profit_triggered,
-                        "profit_protect_triggered": profit_protect_triggered,
-                        "trailing_stop_triggered": trailing_stop_triggered,
-                        "trend_exit_triggered": trend_exit_triggered,
-                    },
-                    required={"exit_triggered": True},
-                ),
-                FunnelStep(
-                    stage="amount",
-                    passed=estimated_exit_amount >= settings.min_order_amount,
-                    reason="sell_amount_too_small",
-                    actual={"sell_amount": estimated_exit_amount},
-                    required={"min_order_amount": settings.min_order_amount},
-                ),
-            ]
+            exit_steps = build_btc_exit_steps(
+                has_position=has_position,
+                stop_triggered=stop_triggered,
+                partial_take_profit_triggered=partial_take_profit_triggered,
+                profit_protect_triggered=profit_protect_triggered,
+                trailing_stop_triggered=trailing_stop_triggered,
+                trend_exit_triggered=trend_exit_triggered,
+                estimated_exit_amount=estimated_exit_amount,
+                min_order_amount=settings.min_order_amount,
+                sell_order_value_quote=estimated_exit_amount * last_close,
+                min_sell_order_value=min_buy_order_value,
+            )
             exit_ready, _ = structured_logger.run_funnel(
                 symbol=symbol,
                 side="exit",

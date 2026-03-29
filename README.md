@@ -21,6 +21,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `SWING_BOT_DESIGN.md`: 장타/스윙 전용 새 폴더 설계, 공통 모듈 재사용 후보, 초기 전략안을 정리합니다.
 
 즉 현재 상태를 빠르게 확인할 때는 `README.md`, 변경 이력을 추적할 때는 `STRATEGY_DECISIONS.md`, 아직 확정되지 않은 아이디어와 과거 검토 흐름은 `PLANS.md`를 우선 참고하면 됩니다.
+루트 호환 래퍼 유지 기준은 [ROOT_WRAPPER_POLICY.md](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329/ROOT_WRAPPER_POLICY.md)에 정리합니다.
 
 ## 대화 요약
 
