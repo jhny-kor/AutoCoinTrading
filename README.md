@@ -23,6 +23,13 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 즉 현재 상태를 빠르게 확인할 때는 `README.md`, 변경 이력을 추적할 때는 `STRATEGY_DECISIONS.md`, 아직 확정되지 않은 아이디어와 과거 검토 흐름은 `PLANS.md`를 우선 참고하면 됩니다.
 루트 호환 래퍼 유지 기준은 [ROOT_WRAPPER_POLICY.md](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329/ROOT_WRAPPER_POLICY.md)에 정리합니다.
 
+## 설치와 빌드
+
+- 실행 전용 의존성 설치: `.venv/bin/pip install -r requirements.txt`
+- 개발/빌드 의존성까지 설치: `.venv/bin/pip install -r requirements-dev.txt`
+- 현재 `requirements.txt` 는 런타임만, `requirements-dev.txt` 는 `PyInstaller` 같은 개발/빌드 도구까지 포함합니다.
+- 앱 빌드 예시: `.venv/bin/pyinstaller build.spec`
+
 ## 대화 요약
 
 - OKX 봇에서 `Parameter sz error`가 발생해 주문 파라미터를 수정했습니다.
