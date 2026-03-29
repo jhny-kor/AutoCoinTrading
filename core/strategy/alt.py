@@ -1,3 +1,9 @@
+"""
+작업 요약
+- 알트 신호 계산과 평균단가 대비 추가매수 허용 여부를 공통 함수로 분리했다.
+- 골든/데드크로스와 trend-follow 진입 계산을 한 곳으로 모았다.
+"""
+
 from __future__ import annotations
 
 
@@ -45,4 +51,3 @@ def compute_can_average_down(
         or average_entry_price is None
         or last_close <= average_entry_price * (1 - averaging_down_gap_pct / 100)
     )
-

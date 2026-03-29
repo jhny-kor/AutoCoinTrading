@@ -1,3 +1,5 @@
+"""BTC 보유 포지션 평가와 익절가 계산에 대한 개발 테스트."""
+
 import unittest
 from types import SimpleNamespace
 

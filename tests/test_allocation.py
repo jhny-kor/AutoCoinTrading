@@ -1,3 +1,5 @@
+"""포트폴리오 배분 래퍼 호출 구조에 대한 개발 테스트."""
+
 import unittest
 
 from core.risk.allocation import build_alt_allocation, build_btc_allocations
@@ -63,4 +65,3 @@ class AllocationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

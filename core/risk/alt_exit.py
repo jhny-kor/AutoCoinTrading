@@ -1,3 +1,9 @@
+"""
+작업 요약
+- 알트 포지션의 수익률/순익률/MFE/MAE 계산과 청산 보호 판단을 공통화했다.
+- 브레이크이븐 가드와 순익 보호 익절 계산을 한 곳으로 모았다.
+"""
+
 from __future__ import annotations
 
 from trade_history_logger import estimate_round_trip_net_pnl

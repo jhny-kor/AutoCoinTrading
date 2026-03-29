@@ -1,3 +1,9 @@
+"""
+작업 요약
+- OKX 설정 로드, 조회 재시도, 잔고 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
+- 알트/BTC 봇이 같은 OKX 실행 경로를 재사용하도록 정리했다.
+"""
+
 from __future__ import annotations
 
 import os
@@ -168,4 +174,3 @@ def place_market_order_okx(
     if tgt_ccy is not None:
         payload["tgtCcy"] = tgt_ccy
     return exchange.privatePostTradeOrder(payload)
-

@@ -22,6 +22,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 즉 현재 상태를 빠르게 확인할 때는 `README.md`, 변경 이력을 추적할 때는 `STRATEGY_DECISIONS.md`, 아직 확정되지 않은 아이디어와 과거 검토 흐름은 `PLANS.md`를 우선 참고하면 됩니다.
 루트 호환 래퍼 유지 기준은 [ROOT_WRAPPER_POLICY.md](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329/ROOT_WRAPPER_POLICY.md)에 정리합니다.
+2026-03-29 기준 구조 리팩토링 단계 기록은 [docs/refactor_20260329](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329) 아래에 순서대로 정리합니다.
 
 ## 설치와 빌드
 
@@ -184,6 +185,9 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
   - 알트 청산 보호 계산
   - BTC 포지션 평가
   - 상태 복구
+  - 퍼널 생성기
+  - 포트폴리오 배분 래퍼
+  - 운영 헬스체크 리포트
 
 ## 운영 헬스체크
 

@@ -1,3 +1,5 @@
+"""알트 청산 보호 계산에 대한 개발 테스트."""
+
 import unittest
 
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
@@ -67,4 +69,3 @@ class AltExitRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

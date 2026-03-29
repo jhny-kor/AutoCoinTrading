@@ -1,3 +1,5 @@
+"""알트 신호 계산과 평균단가 추가매수 조건에 대한 개발 테스트."""
+
 import unittest
 
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
@@ -55,4 +57,3 @@ class AltSignalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,3 +1,5 @@
+"""알트/BTC 퍼널 step 생성기 구조에 대한 개발 테스트."""
+
 import unittest
 
 from core.strategy.funnels import (
@@ -169,4 +171,3 @@ class FunnelBuilderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,3 +1,5 @@
+"""OKX 알트 봇 실행 진입점 래퍼."""
+
 from pathlib import Path
 import runpy
 import sys

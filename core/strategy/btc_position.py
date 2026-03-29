@@ -1,3 +1,9 @@
+"""
+작업 요약
+- BTC 보유 포지션의 손절가/익절가, 순익률, 부분익절, 트레일링 활성화 판단을 공통화했다.
+- BTC 두 거래소 봇의 보유 포지션 평가 블록 중복을 제거했다.
+"""
+
 from __future__ import annotations
 
 from trade_history_logger import estimate_round_trip_net_pnl

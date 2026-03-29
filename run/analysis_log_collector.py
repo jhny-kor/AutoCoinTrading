@@ -1,3 +1,5 @@
+"""분석 로그 수집기 실행 진입점 래퍼."""
+
 from pathlib import Path
 import runpy
 import sys

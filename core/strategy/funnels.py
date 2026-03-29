@@ -1,3 +1,9 @@
+"""
+작업 요약
+- 알트/BTC 진입, 추가매수, 청산 퍼널 step 생성기를 공통 모듈로 분리했다.
+- reason 코드와 단계 구성을 한 곳에서 유지하도록 정리했다.
+"""
+
 from __future__ import annotations
 
 from structured_log_manager import FunnelStep

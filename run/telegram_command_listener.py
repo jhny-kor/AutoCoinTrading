@@ -1,3 +1,5 @@
+"""텔레그램 명령 리스너 실행 진입점 래퍼."""
+
 from pathlib import Path
 import runpy
 import sys

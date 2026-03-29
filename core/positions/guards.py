@@ -1,3 +1,9 @@
+"""
+작업 요약
+- 복구 불가 포지션을 현재가로 bootstrap 하지 않고 보류하는 가드를 공통화했다.
+- 포지션 상태 복구 실패 시 경고 로그를 한 곳에서 남기도록 정리했다.
+"""
+
 from __future__ import annotations
 
 
@@ -31,4 +37,3 @@ def handle_unrecoverable_position(
     if not has_position:
         warned_symbols.discard(symbol)
     return False
-

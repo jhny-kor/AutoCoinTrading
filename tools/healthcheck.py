@@ -1,3 +1,9 @@
+"""
+작업 요약
+- 관리 대상 프로세스와 최신 로그 갱신 상태를 점검하는 운영 헬스체크를 추가했다.
+- collector/telegram 특성에 맞는 로그 판정 기준을 포함해 JSON/텍스트 출력이 가능하도록 구성했다.
+"""
+
 from __future__ import annotations
 
 import argparse

@@ -1,3 +1,9 @@
+"""
+작업 요약
+- BTC 진입 신호와 기본 청산 플래그 계산을 공통 함수로 분리했다.
+- EMA 정렬, spread, 손절/트레일링/순익 보호 판단을 한 곳으로 모았다.
+"""
+
 from __future__ import annotations
 
 
@@ -84,4 +90,3 @@ def compute_btc_exit_flags(
         "profit_protect_triggered": profit_protect_triggered,
         "trend_exit_triggered": trend_exit_triggered,
     }
-

@@ -1,3 +1,5 @@
+"""trade_history 기반 상태 복구와 당일 순손익 재계산에 대한 개발 테스트."""
+
 import unittest
 from unittest.mock import patch
 
@@ -59,4 +61,3 @@ class StateRecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,3 +1,9 @@
+"""
+작업 요약
+- 봇 공통 주문 실패 기록을 한 곳으로 모았다.
+- strategy/system 로그에 같은 실패 문맥을 일관되게 남기도록 정리했다.
+"""
+
 from __future__ import annotations
 
 
@@ -36,4 +42,3 @@ def log_order_failure(
             "error": repr(error),
         },
     )
-
