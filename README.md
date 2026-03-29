@@ -60,15 +60,15 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 ## 현재 파일 구성
 
-- `ma_crossover_bot.py`: OKX 알트 현물용 봇
-- `upbit_ma_crossover_bot.py`: 업비트 알트 원화마켓용 봇
+- `run/ma_crossover_bot.py`: OKX 알트 현물용 실행 진입점
+- `run/upbit_ma_crossover_bot.py`: 업비트 알트 원화마켓용 실행 진입점
 - `strategy_settings.py`: `.env`에서 공통 전략 값을 읽는 모듈
 - `bot_logger.py`: 터미널 출력과 파일 로그를 함께 처리하는 모듈
 - `bot_manager.py`: 실행 중인 봇 상태 확인 및 전체 중지 도구
-- `analysis_log_collector.py`: 분석용 구조화 로그 수집기
+- `run/analysis_log_collector.py`: 분석용 구조화 로그 수집기 실행 진입점
 - `analyze_logs.py`: 수집된 분석 로그 요약 도구
 - `telegram_notifier.py`: 텔레그램 메시지 전송 유틸
-- `telegram_command_listener.py`: 텔레그램 명령 수신 및 상태 응답 리스너
+- `run/telegram_command_listener.py`: 텔레그램 명령 수신 및 상태 응답 리스너 실행 진입점
 - `trade_history_logger.py`: 체결 결과를 JSONL 로 구조화 저장하는 로거
 - `structured_log_manager.py`: system / strategy / trade 구조화 로그와 퍼널 요약을 관리하는 로거
 - `analyze_strategy_logs.py`: 구조화 전략 로그의 퍼널 병목과 차단 사유를 집계하는 도구
@@ -82,8 +82,8 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `migrate_logs_to_dated_dirs.py`: 기존 평면 로그를 날짜별 폴더 구조로 옮기는 마이그레이션 도구
 - `log_archive_manager.py`: 최근 7일 원본 유지 후 오래된 로그를 날짜별 `tar.gz`로 압축하는 도구
 - `btc_trend_settings.py`: BTC 전용 EMA 추세추종 설정 로더
-- `okx_btc_ema_trend_bot.py`: OKX BTC 전용 EMA+ATR 추세추종 실험 봇
-- `upbit_btc_ema_trend_bot.py`: 업비트 BTC 전용 EMA+ATR 추세추종 실험 봇
+- `run/okx_btc_ema_trend_bot.py`: OKX BTC 전용 EMA+ATR 추세추종 실행 진입점
+- `run/upbit_btc_ema_trend_bot.py`: 업비트 BTC 전용 EMA+ATR 추세추종 실행 진입점
 - `.env`: API 키, 거래소별 설정, 공통 전략 설정
 
 ## 로그 파일
@@ -133,7 +133,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 텔레그램 리스너만 중지: `.venv/bin/python bot_manager.py stop telegram`
 - 강제 종료: `.venv/bin/python bot_manager.py stop --force`
 
-위 도구는 `ma_crossover_bot.py`, `upbit_ma_crossover_bot.py`, `okx_btc_ema_trend_bot.py`, `upbit_btc_ema_trend_bot.py`, `analysis_log_collector.py`, `telegram_command_listener.py` 상태를 함께 확인하고 관리합니다.
+위 도구는 `run/ma_crossover_bot.py`, `run/upbit_ma_crossover_bot.py`, `run/okx_btc_ema_trend_bot.py`, `run/upbit_btc_ema_trend_bot.py`, `run/analysis_log_collector.py`, `run/telegram_command_listener.py` 상태를 함께 확인하고 관리합니다.
 현재 기준으로 `start all`은 매일 돌려야 하는 프로그램 전체를 모두 시작하고, `stop all`은 이 관리 대상 전체를 모두 중지합니다.
 부팅 직후 `launchd` 환경에서는 `ps` 조회 권한이 막히는 경우가 있어, 현재는 `bot_manager.py` 가 `logs/pids/*.pid` 를 함께 관리해 자동 시작 시 중복 실행 확인과 상태 추적을 이어가도록 보완되어 있습니다.
 
@@ -145,12 +145,12 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 여기에는 아래 프로그램이 모두 포함됩니다.
 
-- OKX 알트 봇: `ma_crossover_bot.py`
-- 업비트 알트 봇: `upbit_ma_crossover_bot.py`
-- OKX BTC 봇: `okx_btc_ema_trend_bot.py`
-- 업비트 BTC 봇: `upbit_btc_ema_trend_bot.py`
-- 시장 분석 수집기: `analysis_log_collector.py`
-- 텔레그램 명령 리스너: `telegram_command_listener.py`
+- OKX 알트 봇: `run/ma_crossover_bot.py`
+- 업비트 알트 봇: `run/upbit_ma_crossover_bot.py`
+- OKX BTC 봇: `run/okx_btc_ema_trend_bot.py`
+- 업비트 BTC 봇: `run/upbit_btc_ema_trend_bot.py`
+- 시장 분석 수집기: `run/analysis_log_collector.py`
+- 텔레그램 명령 리스너: `run/telegram_command_listener.py`
 
 ### 수시 확인
 
@@ -223,7 +223,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 ## 분석용 로그 수집
 
-- 실행: `.venv/bin/python analysis_log_collector.py`
+- 실행: `.venv/bin/python run/analysis_log_collector.py`
 - 저장 위치: `analysis_logs/YYYY-MM-DD/*.jsonl`
 
 이 수집기는 거래를 하지 않고, 시세/이동평균/신호 상태를 구조화된 JSONL 형식으로 저장합니다.
@@ -266,7 +266,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 매수/매도 체결 알림에 체결 금액, 체결 단가, 체결 수량 표시
 - BTC/USDT 는 심볼별 진입 필터를 더 엄격하게, ETH/KRW 는 브레이크이븐 가드로 수익 보호를 더 빠르게 적용
 
-알림은 `ma_crossover_bot.py`, `upbit_ma_crossover_bot.py`, `okx_btc_ema_trend_bot.py`, `upbit_btc_ema_trend_bot.py` 실행 중 자동으로 전송됩니다.
+알림은 `run/ma_crossover_bot.py`, `run/upbit_ma_crossover_bot.py`, `run/okx_btc_ema_trend_bot.py`, `run/upbit_btc_ema_trend_bot.py` 실행 중 자동으로 전송됩니다.
 즉시 확인 요청을 수동으로 보내고 싶으면 아래 명령을 사용할 수 있습니다.
 
 - 일반 메시지: `.venv/bin/python telegram_notifier.py --message "운영 점검 시작"`
@@ -302,7 +302,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 즉시 테스트 메시지를 터미널에서 보내고 싶으면 아래 명령을 사용할 수 있습니다.
 
-- `.venv/bin/python telegram_command_listener.py --send-test`
+- `.venv/bin/python run/telegram_command_listener.py --send-test`
 
 ## 텔레그램 일일 리포트
 
@@ -370,8 +370,8 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 BTC는 현재 1분봉 다중코인 전략보다 더 느린 추세형 접근이 맞을 수 있어서 별도 실험 파일을 추가했습니다.
 
-- OKX: `.venv/bin/python okx_btc_ema_trend_bot.py`
-- 업비트: `.venv/bin/python upbit_btc_ema_trend_bot.py`
+- OKX: `.venv/bin/python run/okx_btc_ema_trend_bot.py`
+- 업비트: `.venv/bin/python run/upbit_btc_ema_trend_bot.py`
 
 이 전략은 `5분봉/15분봉`, `EMA`, `거래량 확인`, `ATR 기반 변동성 필터`, `보수적 1회 추가매수 허용`, `ATR 또는 최근 스윙 기반 손절`, `익절 구간 도달 후 전량 트레일링 청산`, `수수료 반영 순익 보호 익절` 구조를 사용합니다.
 기존 BTC 포함 봇과 동시에 실행하면 같은 BTC 심볼을 중복 매매할 수 있으니 함께 실행하지 않는 것이 안전합니다.

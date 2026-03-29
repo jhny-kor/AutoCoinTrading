@@ -59,12 +59,12 @@ ROOT_DIR = Path(__file__).resolve().parent
 PREFERRED_PYTHON = ROOT_DIR / ".venv" / "bin" / "python"
 
 PROGRAMS = {
-    "okx": "ma_crossover_bot.py",
-    "upbit": "upbit_ma_crossover_bot.py",
-    "okx_btc": "okx_btc_ema_trend_bot.py",
-    "upbit_btc": "upbit_btc_ema_trend_bot.py",
-    "collector": "analysis_log_collector.py",
-    "telegram": "telegram_command_listener.py",
+    "okx": "run/ma_crossover_bot.py",
+    "upbit": "run/upbit_ma_crossover_bot.py",
+    "okx_btc": "run/okx_btc_ema_trend_bot.py",
+    "upbit_btc": "run/upbit_btc_ema_trend_bot.py",
+    "collector": "run/analysis_log_collector.py",
+    "telegram": "run/telegram_command_listener.py",
 }
 
 SECTION_TITLES = {
