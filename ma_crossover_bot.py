@@ -51,6 +51,22 @@ import ccxt
 from dotenv import load_dotenv
 
 from bot_logger import BLUE, RED, BotLogger
+from core.execution.common import log_order_failure
+from core.execution.okx import (
+    create_okx_client as create_okx_client_core,
+    fetch_ohlcv_okx as fetch_ohlcv_okx_core,
+    get_spot_balances_okx as get_spot_balances_okx_core,
+    load_okx_config as load_okx_config_core,
+    place_market_order_okx as place_market_order_okx_core,
+    safe_amount_to_precision_okx as safe_amount_to_precision_okx_core,
+)
+from core.positions.lifecycle import clear_alt_position_state
+from core.positions.guards import handle_unrecoverable_position
+from core.risk.allocation import build_alt_allocation
+from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
+from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
+from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
+from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from market_regime_guard import (
     build_regime_change_message,
     classify_symbol_regime,
@@ -74,66 +90,12 @@ from trade_history_logger import (
 
 def load_config() -> dict:
     """환경 변수와 기본 설정 로드."""
-    load_dotenv()
-
-    api_key = os.getenv("OKX_API_KEY")
-    api_secret = os.getenv("OKX_API_SECRET")
-    api_passphrase = os.getenv("OKX_API_PASSPHRASE")
-
-    if not api_key or not api_secret or not api_passphrase:
-        raise RuntimeError(
-            "OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE 가 .env 에 설정되어 있지 않습니다."
-        )
-
-    sandbox = os.getenv("OKX_SANDBOX", "true").lower() == "true"
-    # OKX 전용 리스크 비율 (기본 5%)
-    risk_per_trade = float(os.getenv("OKX_TRADE_RISK_PER_TRADE", "0.05"))
-    fee_rate_pct = float(os.getenv("OKX_FEE_RATE_PCT", "1.0"))
-    max_daily_loss_quote = float(os.getenv("OKX_MAX_DAILY_LOSS_QUOTE", "5.0"))
-    request_retry_count = int(os.getenv("OKX_REQUEST_RETRY_COUNT", "2"))
-    request_retry_delay_sec = float(os.getenv("OKX_REQUEST_RETRY_DELAY_SEC", "1.0"))
-    timeout_ms = int(os.getenv("OKX_REQUEST_TIMEOUT_MS", "15000"))
-
-    return {
-        "api_key": api_key,
-        "api_secret": api_secret,
-        "api_passphrase": api_passphrase,
-        "sandbox": sandbox,
-        "risk_per_trade": risk_per_trade,
-        "fee_rate_pct": fee_rate_pct,
-        "max_daily_loss_quote": max_daily_loss_quote,
-        "request_retry_count": request_retry_count,
-        "request_retry_delay_sec": request_retry_delay_sec,
-        "timeout_ms": timeout_ms,
-    }
+    return load_okx_config_core()
 
 
 def create_okx_client(config: dict) -> ccxt.okx:
     """OKX 클라이언트 생성 (테스트넷/실거래 모두 지원)."""
-    exchange = ccxt.okx(
-        {
-            "apiKey": config["api_key"],
-            "secret": config["api_secret"],
-            "password": config["api_passphrase"],
-            "enableRateLimit": True,
-            "timeout": config["timeout_ms"],
-            "options": {
-                # 현물만 사용하도록 명시
-                "defaultType": "spot",
-                # 일부 환경에서 OKX 마켓 전체를 불러오다 에러가 나는 이슈가 있어
-                # fetchMarkets 대상을 spot 으로만 제한
-                "fetchMarkets": ["spot"],
-                "okx_request_retry_count": config["request_retry_count"],
-                "okx_request_retry_delay_sec": config["request_retry_delay_sec"],
-            },
-        }
-    )
-
-    # 테스트넷 모드
-    if config["sandbox"]:
-        exchange.set_sandbox_mode(True)
-
-    return exchange
+    return create_okx_client_core(config)
 
 
 def is_okx_retryable_error(exc: Exception) -> bool:
@@ -169,60 +131,7 @@ def call_okx_with_retry(exchange: ccxt.okx, func, *args, **kwargs):
 def fetch_ohlcv(
     exchange: ccxt.okx, symbol: str, timeframe: str = "1m", limit: int = 200
 ):
-    """
-    과거 캔들 데이터를 가져온다.
-
-    주의: 현재 ccxt + OKX 조합에서 load_markets() 중
-    base/quote 가 None 이 되는 버그가 있어, 통합 fetch_ohlcv 대신
-    OKX 원시(public) 캔들 API 를 직접 호출해서 사용한다.
-    """
-    # symbol "BTC/USDT" -> OKX instId "BTC-USDT" 로 변환
-    inst_id = symbol.replace("/", "-")
-
-    # ccxt 의 okx 래퍼가 제공하는 원시 public 엔드포인트 사용
-    # https://www.okx.com/docs-v5/ko/#public-data-rest-api-get-candlesticks
-    timeframe_map = {
-        "1m": "1m",
-        "3m": "3m",
-        "5m": "5m",
-        "15m": "15m",
-        "30m": "30m",
-        "1h": "1H",
-        "4h": "4H",
-        "1d": "1D",
-    }
-    bar = timeframe_map.get(timeframe, "1m")
-
-    # OKX 는 최신 → 과거 순으로 내려오므로, ccxt ohlcv 포맷에 맞게 정렬
-    res = call_okx_with_retry(
-        exchange,
-        exchange.publicGetMarketCandles,
-        {
-            "instId": inst_id,
-            "bar": bar,
-            "limit": limit,
-        },
-    )
-
-    # res["data"] 형식:
-    # [
-    #   [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm, ...],
-    #   ...
-    # ]
-    data = res.get("data", []) if isinstance(res, dict) else res
-    ohlcv = []
-    for item in data:
-        ts = int(item[0])
-        o = float(item[1])
-        h = float(item[2])
-        l = float(item[3])
-        c = float(item[4])
-        v = float(item[5])
-        ohlcv.append([ts, o, h, l, c, v])
-
-    # 오래된 → 최신 순으로 정렬
-    ohlcv.sort(key=lambda x: x[0])
-    return ohlcv
+    return fetch_ohlcv_okx_core(exchange, symbol, timeframe=timeframe, limit=limit)
 
 
 def calc_sma(prices, period: int) -> float:
@@ -260,45 +169,11 @@ def detect_crossover(
 
 
 def get_spot_balances(exchange: ccxt.okx, base: str, quote: str) -> Tuple[float, float]:
-    """
-    현물 지갑에서 base/quote 코인의 잔고를 가져온다.
-
-    주의: ccxt 의 okx.fetch_balance() 는 내부에서 load_markets() 를 호출하면서
-    앞서 본 것과 같은 base/quote NoneType 버그에 걸릴 수 있어,
-    여기서는 OKX 계정 원시 API 를 직접 사용한다.
-    """
-    # https://www.okx.com/docs-v5/ko/#trading-account-rest-api-get-balance
-    res = call_okx_with_retry(exchange, exchange.privateGetAccountBalance, {})
-
-    data = res.get("data", []) if isinstance(res, dict) else res
-    if not data:
-        return 0.0, 0.0
-
-    details = data[0].get("details", [])
-    base_free = 0.0
-    quote_free = 0.0
-
-    for d in details:
-        ccy = d.get("ccy")
-        avail = float(d.get("availBal", 0.0))
-        if ccy == base:
-            base_free = avail
-        elif ccy == quote:
-            quote_free = avail
-
-    return float(base_free), float(quote_free)
+    return get_spot_balances_okx_core(exchange, base, quote)
 
 
 def safe_amount_to_precision(exchange: ccxt.okx, symbol: str, amount: float) -> float:
-    """
-    amount_to_precision 을 시도하되, 마켓 정보가 로드되지 않은 경우
-    단순 소수점 9자리까지 자르는 방식으로 폴백한다.
-    """
-    try:
-        return float(exchange.amount_to_precision(symbol, amount))
-    except Exception:
-        # fallback: 대략적인 정규화 (거래소에서 추가로 거절/조정할 수 있음)
-        return float(f"{amount:.9f}")
+    return safe_amount_to_precision_okx_core(exchange, symbol, amount)
 
 
 def calc_volume_ratio(ohlcv, lookback: int) -> float | None:
@@ -340,26 +215,7 @@ def calc_avg_abs_change_pct(closes, lookback: int) -> float | None:
 def place_market_order_okx(
     exchange: ccxt.okx, symbol: str, side: str, size: float, tgt_ccy: str | None = None
 ):
-    """
-    ccxt 의 create_order 가 load_markets() 를 내부에서 호출하면서
-    base/quote NoneType 버그가 발생하므로, OKX 원시 주문 API 를 직접 호출한다.
-    """
-    inst_id = symbol.replace("/", "-")  # "BTC/USDT" -> "BTC-USDT"
-    side = side.lower()
-    if side not in ("buy", "sell"):
-        raise ValueError("side 는 'buy' 또는 'sell' 이어야 합니다.")
-
-    # 현물 계좌(tdMode='cash') 시장가 주문
-    payload = {
-        "instId": inst_id,
-        "tdMode": "cash",
-        "side": side,
-        "ordType": "market",
-        "sz": str(size),
-    }
-    if tgt_ccy is not None:
-        payload["tgtCcy"] = tgt_ccy
-    return exchange.privatePostTradeOrder(payload)
+    return place_market_order_okx_core(exchange, symbol, side, size, tgt_ccy=tgt_ccy)
 
 
 def run_bot():
@@ -638,24 +494,20 @@ def run_bot():
                 if symbol_regime_blocks_entry:
                     log(f"[{symbol}] 심볼 레짐 {symbol_regime} 상태라 신규 진입을 보류합니다.")
                 avg_entry_price = entry_price.get(symbol)
-                if has_position and avg_entry_price is None:
-                    if symbol not in unrecoverable_position_warned:
-                        log(
-                            f"[{symbol}] 복구 가능한 진입가 없이 보유 포지션만 감지되었습니다. "
-                            "현재가로 임시 진입가를 만들지 않고 자동 매매를 보류합니다."
-                        )
-                        structured_logger.log_system(
-                            level="WARNING",
-                            event="position_state_unrecoverable",
-                            message="평균 진입가를 복구하지 못한 포지션을 감지해 자동 매매를 보류합니다.",
-                            symbol=symbol,
-                            context={
-                                "base_free": base_free,
-                                "quote_free": quote_free,
-                                "position_threshold": position_threshold,
-                            },
-                        )
-                        unrecoverable_position_warned.add(symbol)
+                if handle_unrecoverable_position(
+                    warned_symbols=unrecoverable_position_warned,
+                    symbol=symbol,
+                    has_position=has_position,
+                    average_entry_price=avg_entry_price,
+                    log=log,
+                    structured_logger=structured_logger,
+                    context={
+                        "base_free": base_free,
+                        "quote_free": quote_free,
+                        "position_threshold": position_threshold,
+                    },
+                    message="평균 진입가를 복구하지 못한 포지션을 감지해 자동 매매를 보류합니다.",
+                ):
                     continue
                 elif not has_position:
                     # 최소 주문 수량 미만 잔량은 신규 포지션으로 다시 진입할 수 있도록 내부 상태를 비운다.
@@ -710,43 +562,40 @@ def run_bot():
                     symbol,
                     config["risk_per_trade"],
                 )
-                signal_is_strong = gap_pct >= min_gap_pct
-                trend_follow_entry = (
-                    strategy.enable_trend_follow_entry
-                    and last_close > last_ma
-                    and (
-                        not strategy.trend_follow_requires_prev_above_ma
-                        or prev_close > prev_ma
-                    )
-                    and (
-                        not strategy.trend_follow_requires_price_rising
-                        or last_close > prev_close
-                    )
+                alt_signal_state = compute_alt_signal_state(
+                    prev_close=prev_close,
+                    prev_ma=prev_ma,
+                    last_close=last_close,
+                    last_ma=last_ma,
+                    min_gap_pct=min_gap_pct,
+                    enable_trend_follow_entry=strategy.enable_trend_follow_entry,
+                    require_prev_above_ma=strategy.trend_follow_requires_prev_above_ma,
+                    require_price_rising=strategy.trend_follow_requires_price_rising,
                 )
-                entry_signal = bullish or trend_follow_entry
-                dynamic_bonus_eligible = (
-                    not has_position
-                    and bullish
-                    and (
-                        not portfolio_allocator.settings.dynamic_require_strong_signal
-                        or signal_is_strong
-                    )
-                    and (
-                        volume_ratio is not None
-                        and volume_ratio >= portfolio_allocator.settings.dynamic_volume_ratio_threshold
-                    )
-                    and (
-                        not portfolio_allocator.settings.dynamic_require_trend_ok
-                        or htf_bullish
-                    )
+                bullish = bool(alt_signal_state["bullish"])
+                bearish = bool(alt_signal_state["bearish"])
+                gap_pct = float(alt_signal_state["gap_pct"])
+                signal_is_strong = bool(alt_signal_state["signal_is_strong"])
+                trend_follow_entry = bool(alt_signal_state["trend_follow_entry"])
+                entry_signal = bool(alt_signal_state["entry_signal"])
+                dynamic_bonus_eligible = is_dynamic_bonus_eligible(
+                    has_position=has_position,
+                    base_signal=bullish,
+                    strong_signal=signal_is_strong,
+                    require_strong_signal=portfolio_allocator.settings.dynamic_require_strong_signal,
+                    volume_ratio=volume_ratio,
+                    volume_threshold=portfolio_allocator.settings.dynamic_volume_ratio_threshold,
+                    trend_ok=htf_bullish,
+                    require_trend_ok=portfolio_allocator.settings.dynamic_require_trend_ok,
+                    enable_dynamic_overweight=portfolio_allocator.settings.enable_dynamic_overweight,
                 )
-                requested_order_value = (
-                    quote_free * position_ratio * strategy.buy_split_ratio
-                )
-                allocation_decision = portfolio_allocator.build_buy_decision(
+                requested_order_value, allocation_decision = build_alt_allocation(
+                    portfolio_allocator=portfolio_allocator,
                     exchange=exchange,
                     symbol=symbol,
-                    requested_order_value_quote=requested_order_value,
+                    quote_free=quote_free,
+                    position_ratio=position_ratio,
+                    buy_split_ratio=strategy.buy_split_ratio,
                     dynamic_bonus_eligible=dynamic_bonus_eligible,
                 )
                 usdt_to_use = allocation_decision.approved_order_value_quote
@@ -819,12 +668,11 @@ def run_bot():
                         f"거래소 최소 주문 수량 {min_order_amount:.4f} {base} 보다 작아 매수를 보류합니다."
                     )
 
-                can_average_down = (
-                    not has_position
-                    or avg_entry_price is None
-                    or last_close
-                    <= avg_entry_price
-                    * (1 - strategy.averaging_down_gap_pct / 100)
+                can_average_down = compute_can_average_down(
+                    has_position=has_position,
+                    average_entry_price=avg_entry_price,
+                    last_close=last_close,
+                    averaging_down_gap_pct=strategy.averaging_down_gap_pct,
                 )
                 if entry_signal and has_position and not can_average_down:
                     log(
@@ -838,25 +686,22 @@ def run_bot():
                 mfe_pct = None
                 mae_pct = None
                 if has_position and avg_entry_price:
-                    highest_price_since_entry[symbol] = max(
-                        highest_price_since_entry.get(symbol, last_close),
-                        last_close,
+                    position_metrics = compute_alt_position_metrics(
+                        has_position=has_position,
+                        average_entry_price=avg_entry_price,
+                        last_close=last_close,
+                        base_free=base_free,
+                        fee_rate_pct=config["fee_rate_pct"],
+                        highest_price_since_entry=highest_price_since_entry.get(symbol),
+                        lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                     )
-                    lowest_price_since_entry[symbol] = min(
-                        lowest_price_since_entry.get(symbol, last_close),
-                        last_close,
-                    )
-                    pnl_pct = (last_close - avg_entry_price) / avg_entry_price * 100
-                    mfe_pct = (
-                        (highest_price_since_entry[symbol] - avg_entry_price)
-                        / avg_entry_price
-                        * 100
-                    )
-                    mae_pct = (
-                        (lowest_price_since_entry[symbol] - avg_entry_price)
-                        / avg_entry_price
-                        * 100
-                    )
+                    highest_price_since_entry[symbol] = position_metrics["highest_price_since_entry"]
+                    lowest_price_since_entry[symbol] = position_metrics["lowest_price_since_entry"]
+                    pnl_pct = position_metrics["pnl_pct"]
+                    mfe_pct = position_metrics["mfe_pct"]
+                    mae_pct = position_metrics["mae_pct"]
+                    current_net_realized_pnl_quote = position_metrics["net_pnl_quote"]
+                    current_net_realized_pnl_pct = position_metrics["net_pnl_pct"]
                     log(f"[{symbol}] 평균 진입가 대비 현재 수익률: {pnl_pct:.2f}%")
                 elif not has_position:
                     highest_price_since_entry.pop(symbol, None)
@@ -885,17 +730,6 @@ def run_bot():
                     take_profit_pct,
                     effective_min_take_profit_pct,
                 )
-                if has_position and avg_entry_price:
-                    (
-                        _current_fee_quote_estimate,
-                        current_net_realized_pnl_quote,
-                        current_net_realized_pnl_pct,
-                    ) = estimate_round_trip_net_pnl(
-                        entry_price=avg_entry_price,
-                        exit_price=last_close,
-                        amount=base_free,
-                        fee_rate_pct=config["fee_rate_pct"],
-                    )
                 if has_position:
                     log(
                         f"[{symbol}] 적용 익절률: {effective_take_profit_pct:.2f}% "
@@ -907,8 +741,9 @@ def run_bot():
                             f"[{symbol}] 수수료 반영 예상 순익률: {current_net_realized_pnl_pct:.2f}% "
                             f"(보호 익절 기준 {fee_protect_min_net_pnl_pct:.2f}%)"
                         )
-                daily_loss_limit_reached = (
-                    daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+                daily_loss_limit_reached = is_daily_loss_limit_reached(
+                    daily_realized_pnl_quote=daily_realized_pnl_quote,
+                    max_daily_loss_quote=config["max_daily_loss_quote"],
                 )
                 log(
                     f"[{symbol}] 오늘 누적 실현 손익: {daily_realized_pnl_quote:.4f} {quote}"
@@ -925,38 +760,28 @@ def run_bot():
                         )
                         daily_limit_notified = True
 
-                take_profit_ready = (
-                    pnl_pct is not None
-                    and pnl_pct >= effective_take_profit_pct
+                alt_exit_state = compute_alt_exit_decisions(
+                    has_position=has_position,
+                    pnl_pct=pnl_pct,
+                    mfe_pct=mfe_pct,
+                    current_net_realized_pnl_pct=current_net_realized_pnl_pct,
+                    take_profit_pct=take_profit_pct,
+                    stop_loss_pct=stop_loss_pct,
+                    fee_rate_pct=config["fee_rate_pct"],
+                    enable_fee_protect_exit=strategy.enable_fee_protect_exit,
+                    fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
+                    enable_break_even_guard=strategy.enable_break_even_guard,
+                    break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
+                    break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+                    bearish=bearish,
+                    sell_split_ratio=strategy.sell_split_ratio,
                 )
-                stop_loss_triggered = (
-                    pnl_pct is not None
-                    and pnl_pct <= -stop_loss_pct
-                )
-                profit_protect_triggered = (
-                    has_position
-                    and strategy.enable_fee_protect_exit
-                    and current_net_realized_pnl_pct is not None
-                    and current_net_realized_pnl_pct >= fee_protect_min_net_pnl_pct
-                    and bearish
-                    and not stop_loss_triggered
-                )
-                break_even_guard_triggered = (
-                    has_position
-                    and strategy.enable_break_even_guard
-                    and break_even_guard_min_mfe_pct > 0
-                    and mfe_pct is not None
-                    and mfe_pct >= break_even_guard_min_mfe_pct
-                    and current_net_realized_pnl_pct is not None
-                    and current_net_realized_pnl_pct <= break_even_guard_floor_net_pnl_pct
-                    and bearish
-                    and not stop_loss_triggered
-                    and not profit_protect_triggered
-                )
+                take_profit_ready = bool(alt_exit_state["take_profit_ready"])
+                stop_loss_triggered = bool(alt_exit_state["stop_loss_triggered"])
+                profit_protect_triggered = bool(alt_exit_state["profit_protect_triggered"])
+                break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
                 estimated_sell_amount = (
-                    base_free
-                    if (stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered)
-                    else (base_free * strategy.sell_split_ratio)
+                    base_free * float(alt_exit_state["estimated_sell_ratio"])
                 )
                 estimated_sell_amount = safe_amount_to_precision(
                     exchange, symbol, estimated_sell_amount
@@ -1047,179 +872,87 @@ def run_bot():
                     "partial_stop_loss_pending": partial_stop_loss_pending,
                 }
 
-                entry_steps = [
-                    FunnelStep(
-                        stage="trend",
-                        passed=entry_signal,
-                        reason="no_entry_signal",
-                        actual={
-                            "bullish_signal": bullish,
-                            "trend_follow_entry": trend_follow_entry,
-                        },
-                        required={"bullish_or_trend_follow_entry": True},
-                    ),
-                    FunnelStep(
-                        stage="distance",
-                        passed=signal_is_strong,
-                        reason="distance_too_small",
-                        actual={"gap_pct": gap_pct},
-                        required={"min_gap_pct": min_gap_pct},
-                    ),
-                    FunnelStep(
-                        stage="higher_timeframe",
-                        passed=(
-                            not strategy.enable_higher_timeframe_filter or htf_bullish
+                entry_steps = build_alt_entry_steps(
+                    entry_signal=entry_signal,
+                    bullish=bullish,
+                    trend_follow_entry=trend_follow_entry,
+                    signal_is_strong=signal_is_strong,
+                    gap_pct=gap_pct,
+                    min_gap_pct=min_gap_pct,
+                    htf_bullish=(not strategy.enable_higher_timeframe_filter or htf_bullish),
+                    volume_filter_passed=(not strategy.enable_volume_filter or volume_filter_passed),
+                    volume_ratio=volume_ratio,
+                    effective_min_volume_ratio=effective_min_volume_ratio,
+                    volatility_filter_passed=(not strategy.enable_volatility_filter or volatility_filter_passed),
+                    avg_abs_change_pct=avg_abs_change_pct,
+                    min_volatility_pct=strategy.min_volatility_pct,
+                    max_volatility_pct=strategy.max_volatility_pct,
+                    in_cooldown=(in_cooldown or partial_take_profit_cooldown_active),
+                    seconds_since_last_trade=seconds_since_last_trade,
+                    can_average_down=can_average_down,
+                    last_close=last_close,
+                    avg_entry_price=avg_entry_price,
+                    current_entry_count=current_entry_count,
+                    max_entry_count=strategy.max_entry_count,
+                    daily_loss_limit_reached=daily_loss_limit_reached,
+                    daily_realized_pnl_quote=daily_realized_pnl_quote,
+                    max_daily_loss_quote=config["max_daily_loss_quote"],
+                    order_value_quote=usdt_to_use,
+                    min_buy_order_value=strategy.min_buy_order_value,
+                )
+                entry_steps.extend(
+                    [
+                        FunnelStep(
+                            stage="htf_bearish_entry_guard",
+                            passed=not htf_bearish_entry_blocked,
+                            reason="higher_timeframe_bearish_entry_blocked",
+                            actual={"htf_bearish": htf_bearish},
+                            required={"htf_bearish": False},
                         ),
-                        reason="higher_timeframe_not_bullish",
-                        actual={"htf_bullish": htf_bullish},
-                        required={"htf_bullish": True},
-                    ),
-                    FunnelStep(
-                        stage="htf_bearish_entry_guard",
-                        passed=not htf_bearish_entry_blocked,
-                        reason="higher_timeframe_bearish_entry_blocked",
-                        actual={"htf_bearish": htf_bearish},
-                        required={"htf_bearish": False},
-                    ),
-                    FunnelStep(
-                        stage="market_regime",
-                        passed=not low_energy_guard_active,
-                        reason="low_energy_market",
-                        actual={
-                            "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
-                            "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
-                            "ready_count": low_energy_snapshot.ready_count,
-                        },
-                        required={"low_energy_market_inactive": True},
-                    ),
-                    FunnelStep(
-                        stage="symbol_regime",
-                        passed=not symbol_regime_blocks_entry,
-                        reason="symbol_regime_blocks_entry",
-                        actual={"symbol_regime": symbol_regime},
-                        required={"symbol_regime_allows_entry": True},
-                    ),
-                    FunnelStep(
-                        stage="regime_signal_strength",
-                        passed=(not symbol_regime_requires_strong_signal or signal_is_strong),
-                        reason="regime_requires_strong_signal",
-                        actual={
-                            "symbol_regime": symbol_regime,
-                            "signal_is_strong": signal_is_strong,
-                        },
-                        required={"strong_signal_required": True},
-                    ),
-                    FunnelStep(
-                        stage="volume",
-                        passed=(
-                            not strategy.enable_volume_filter or volume_filter_passed
+                        FunnelStep(
+                            stage="market_regime",
+                            passed=not low_energy_guard_active,
+                            reason="low_energy_market",
+                            actual={
+                                "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                                "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                                "ready_count": low_energy_snapshot.ready_count,
+                            },
+                            required={"low_energy_market_inactive": True},
                         ),
-                        reason="volume_low",
-                        actual={"volume_ratio": volume_ratio},
-                        required={"min_volume_ratio": effective_min_volume_ratio},
-                    ),
-                    FunnelStep(
-                        stage="volatility",
-                        passed=(
-                            not strategy.enable_volatility_filter
-                            or volatility_filter_passed
+                        FunnelStep(
+                            stage="symbol_regime",
+                            passed=not symbol_regime_blocks_entry,
+                            reason="symbol_regime_blocks_entry",
+                            actual={"symbol_regime": symbol_regime},
+                            required={"symbol_regime_allows_entry": True},
                         ),
-                        reason=choose_volatility_reason(
-                            avg_abs_change_pct,
-                            min_value=strategy.min_volatility_pct,
-                            max_value=strategy.max_volatility_pct,
+                        FunnelStep(
+                            stage="regime_signal_strength",
+                            passed=(not symbol_regime_requires_strong_signal or signal_is_strong),
+                            reason="regime_requires_strong_signal",
+                            actual={"symbol_regime": symbol_regime, "signal_is_strong": signal_is_strong},
+                            required={"strong_signal_required": True},
                         ),
-                        actual={"avg_abs_change_pct": avg_abs_change_pct},
-                        required={
-                            "min_volatility_pct": strategy.min_volatility_pct,
-                            "max_volatility_pct": strategy.max_volatility_pct,
-                        },
-                    ),
-                    FunnelStep(
-                        stage="partial_take_profit_cooldown",
-                        passed=not partial_take_profit_cooldown_active,
-                        reason="partial_take_profit_cooldown_active",
-                        actual={
-                            "cooldown_remaining_sec": partial_take_profit_cooldown_remaining
-                        },
-                        required={"cooldown_inactive": True},
-                    ),
-                    FunnelStep(
-                        stage="cooldown",
-                        passed=not in_cooldown,
-                        reason="cooldown_active",
-                        actual={"seconds_since_last_trade": seconds_since_last_trade},
-                        required={
-                            "min_trade_interval_sec": strategy.min_trade_interval_sec
-                        },
-                    ),
-                    FunnelStep(
-                        stage="position_rule",
-                        passed=can_average_down,
-                        reason="avg_price_rule_block",
-                        actual={
-                            "last_close": last_close,
-                            "avg_entry_price": avg_entry_price,
-                        },
-                        required={
-                            "required_price_lte": (
-                                None
-                                if avg_entry_price is None
-                                else avg_entry_price
-                                * (1 - strategy.averaging_down_gap_pct / 100)
-                            )
-                        },
-                    ),
-                    FunnelStep(
-                        stage="entry_limit",
-                        passed=current_entry_count < strategy.max_entry_count,
-                        reason="max_entry_reached",
-                        actual={"entry_count": current_entry_count},
-                        required={"max_entry_count": strategy.max_entry_count},
-                    ),
-                    FunnelStep(
-                        stage="risk_limit",
-                        passed=not daily_loss_limit_reached,
-                        reason="daily_loss_limit_reached",
-                        actual={
-                            "daily_realized_pnl_quote": daily_realized_pnl_quote
-                        },
-                        required={
-                            "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
-                        },
-                    ),
-                    FunnelStep(
-                        stage="portfolio_budget",
-                        passed=allocation_decision.remaining_budget_quote > 0,
-                        reason="portfolio_budget_exhausted",
-                        actual={
-                            "current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
-                            "remaining_budget_quote": allocation_decision.remaining_budget_quote,
-                        },
-                        required={
-                            "portfolio_target_budget_quote": allocation_decision.target_budget_quote,
-                        },
-                    ),
-                    FunnelStep(
-                        stage="order_value",
-                        passed=usdt_to_use > strategy.min_buy_order_value,
-                        reason="order_value_too_small",
-                        actual={"order_value_quote": usdt_to_use},
-                        required={
-                            "min_buy_order_value": strategy.min_buy_order_value
-                        },
-                    ),
-                    FunnelStep(
-                        stage="order_amount",
-                        passed=(
-                            min_order_amount <= 0
-                            or estimated_buy_amount >= min_order_amount
+                        FunnelStep(
+                            stage="portfolio_budget",
+                            passed=allocation_decision.remaining_budget_quote > 0,
+                            reason="portfolio_budget_exhausted",
+                            actual={
+                                "current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                                "remaining_budget_quote": allocation_decision.remaining_budget_quote,
+                            },
+                            required={"portfolio_target_budget_quote": allocation_decision.target_budget_quote},
                         ),
-                        reason="order_amount_too_small",
-                        actual={"estimated_buy_amount": estimated_buy_amount},
-                        required={"min_order_amount": min_order_amount},
-                    ),
-                ]
+                        FunnelStep(
+                            stage="order_amount",
+                            passed=(min_order_amount <= 0 or estimated_buy_amount >= min_order_amount),
+                            reason="order_amount_too_small",
+                            actual={"estimated_buy_amount": estimated_buy_amount},
+                            required={"min_order_amount": min_order_amount},
+                        ),
+                    ]
+                )
                 entry_ready, _ = structured_logger.run_funnel(
                     symbol=symbol,
                     side="entry",
@@ -1229,93 +962,28 @@ def run_bot():
                     ready_reason="entry_conditions_met",
                 )
 
-                exit_steps = [
-                    FunnelStep(
-                        stage="position",
-                        passed=has_position,
-                        reason="no_position",
-                        actual={"has_position": has_position},
-                        required={"has_position": True},
-                    ),
-                    FunnelStep(
-                        stage="exit_trigger",
-                        passed=(
-                            stop_loss_triggered
-                            or profit_protect_triggered
-                            or break_even_guard_triggered
-                            or bearish
-                        ),
-                        reason="no_exit_signal",
-                        actual={
-                            "stop_loss_triggered": stop_loss_triggered,
-                            "profit_protect_triggered": profit_protect_triggered,
-                            "break_even_guard_triggered": break_even_guard_triggered,
-                            "bearish_signal": bearish,
-                        },
-                        required={
-                            "stop_loss_or_profit_protect_or_break_even_guard_or_bearish_signal": True
-                        },
-                    ),
-                    FunnelStep(
-                        stage="cooldown",
-                        passed=(
-                            stop_loss_triggered
-                            or profit_protect_triggered
-                            or break_even_guard_triggered
-                            or not in_cooldown
-                        ),
-                        reason="cooldown_active",
-                        actual={"seconds_since_last_trade": seconds_since_last_trade},
-                        required={
-                            "min_trade_interval_sec": strategy.min_trade_interval_sec
-                        },
-                    ),
-                    FunnelStep(
-                        stage="distance",
-                        passed=(
-                            stop_loss_triggered
-                            or profit_protect_triggered
-                            or break_even_guard_triggered
-                            or signal_is_strong
-                        ),
-                        reason="distance_too_small",
-                        actual={"gap_pct": gap_pct},
-                        required={"min_gap_pct": min_gap_pct},
-                    ),
-                    FunnelStep(
-                        stage="higher_timeframe",
-                        passed=(
-                            stop_loss_triggered
-                            or profit_protect_triggered
-                            or break_even_guard_triggered
-                            or not strategy.enable_higher_timeframe_filter
-                            or htf_bearish
-                        ),
-                        reason="higher_timeframe_not_bearish",
-                        actual={"htf_bearish": htf_bearish},
-                        required={"htf_bearish": True},
-                    ),
-                    FunnelStep(
-                        stage="take_profit",
-                        passed=(
-                            stop_loss_triggered
-                            or profit_protect_triggered
-                            or break_even_guard_triggered
-                            or take_profit_ready
-                        ),
-                        reason="take_profit_not_reached",
-                        actual={
-                            "pnl_pct": pnl_pct,
-                            "net_pnl_pct_estimate": current_net_realized_pnl_pct,
-                            "mfe_pct": mfe_pct,
-                        },
-                        required={
-                            "min_take_profit_pct": effective_take_profit_pct,
-                            "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
-                            "break_even_guard_min_mfe_pct": break_even_guard_min_mfe_pct,
-                            "break_even_guard_floor_net_pnl_pct": break_even_guard_floor_net_pnl_pct,
-                        },
-                    ),
+                exit_steps = build_alt_exit_steps(
+                    has_position=has_position,
+                    stop_loss_triggered=stop_loss_triggered,
+                    profit_protect_triggered=profit_protect_triggered,
+                    break_even_guard_triggered=break_even_guard_triggered,
+                    bearish=bearish,
+                    in_cooldown=in_cooldown,
+                    seconds_since_last_trade=seconds_since_last_trade,
+                    signal_is_strong=signal_is_strong,
+                    gap_pct=gap_pct,
+                    min_gap_pct=min_gap_pct,
+                    htf_bearish=(not strategy.enable_higher_timeframe_filter or htf_bearish),
+                    take_profit_ready=take_profit_ready,
+                    pnl_pct=pnl_pct,
+                    current_net_realized_pnl_pct=current_net_realized_pnl_pct,
+                    mfe_pct=mfe_pct,
+                    min_take_profit_pct=effective_take_profit_pct,
+                    fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
+                    break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
+                    break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+                )
+                exit_steps.append(
                     FunnelStep(
                         stage="amount",
                         passed=(
@@ -1331,12 +999,9 @@ def run_bot():
                             else "sell_amount_too_small"
                         ),
                         actual={"sell_amount": estimated_sell_amount},
-                        required={
-                            "sell_amount_gt": 0,
-                            "min_order_amount": min_order_amount,
-                        },
-                    ),
-                ]
+                        required={"sell_amount_gt": 0, "min_order_amount": min_order_amount},
+                    )
+                )
                 exit_ready, _ = structured_logger.run_funnel(
                     symbol=symbol,
                     side="exit",
@@ -1384,26 +1049,14 @@ def run_bot():
                                 tgt_ccy="quote_ccy",
                             )
                         except Exception as order_error:
-                            structured_logger.log_strategy(
+                            log_order_failure(
+                                structured_logger=structured_logger,
                                 symbol=symbol,
                                 side="entry",
-                                stage="filled",
-                                result="error",
-                                reason="order_failed",
+                                message="매수 주문 요청이 실패했습니다.",
                                 actual={"order_value_quote": order_value},
                                 metrics=common_metrics,
-                                extra={"error": repr(order_error)},
-                            )
-                            structured_logger.log_system(
-                                level="WARNING",
-                                event="order_failed",
-                                message="매수 주문 요청이 실패했습니다.",
-                                symbol=symbol,
-                                context={
-                                    "side": "buy",
-                                    "order_value_quote": order_value,
-                                    "error": repr(order_error),
-                                },
+                                error=order_error,
                             )
                             continue
                         order_response_received_at = time.time()
@@ -1600,26 +1253,14 @@ def run_bot():
                                 tgt_ccy="base_ccy",
                             )
                         except Exception as order_error:
-                            structured_logger.log_strategy(
+                            log_order_failure(
+                                structured_logger=structured_logger,
                                 symbol=symbol,
                                 side="exit",
-                                stage="filled",
-                                result="error",
-                                reason="order_failed",
+                                message="매도 주문 요청이 실패했습니다.",
                                 actual={"sell_amount": amount},
                                 metrics=common_metrics,
-                                extra={"error": repr(order_error)},
-                            )
-                            structured_logger.log_system(
-                                level="WARNING",
-                                event="order_failed",
-                                message="매도 주문 요청이 실패했습니다.",
-                                symbol=symbol,
-                                context={
-                                    "side": "sell",
-                                    "sell_amount": amount,
-                                    "error": repr(order_error),
-                                },
+                                error=order_error,
                             )
                             continue
                         order_response_received_at = time.time()
@@ -1779,12 +1420,17 @@ def run_bot():
                                 partial_stop_loss_done[symbol] = True
                             # 포지션 청산 후 진입가 제거
                             if remaining_base <= 0.0001:
-                                entry_price.pop(symbol, None)
-                                entry_opened_at.pop(symbol, None)
-                                highest_price_since_entry.pop(symbol, None)
-                                lowest_price_since_entry.pop(symbol, None)
-                                partial_take_profit_done.pop(symbol, None)
-                                partial_stop_loss_done.pop(symbol, None)
+                                clear_alt_position_state(
+                                    symbol=symbol,
+                                    entry_price=entry_price,
+                                    entry_count=entry_count,
+                                    entry_opened_at=entry_opened_at,
+                                    highest_price_since_entry=highest_price_since_entry,
+                                    lowest_price_since_entry=lowest_price_since_entry,
+                                    partial_take_profit_done=partial_take_profit_done,
+                                    partial_stop_loss_done=partial_stop_loss_done,
+                                    unrecoverable_position_warned=unrecoverable_position_warned,
+                                )
                         else:
                             structured_logger.log_strategy(
                                 symbol=symbol,

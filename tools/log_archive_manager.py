@@ -1,0 +1,376 @@
+"""
+수정 요약
+- 압축본이 이미 있는 오래된 날짜 폴더에 `.DS_Store` 같은 잔재만 남아 있어도 자동으로 삭제되도록 정리 로직을 보강
+- 배치나 수동 실행에서 같은 보관 정책을 재사용할 수 있도록 공용 유지보수 함수와 결과 요약을 추가
+- 최근 7일 로그는 원본 그대로 유지하고, 그 이전 로그는 날짜별 tar.gz 로 묶어 보관하도록 개선
+- 루트별 _archive 폴더를 사용해 logs / analysis_logs / trade_logs / structured_logs 를 분리 보관
+- status 로 압축 대상 날짜 묶음을 미리 보고, compress 로 실제 압축 실행을 수행하도록 정리
+
+로그 압축/보관 관리자
+
+- logs, analysis_logs, trade_logs, structured_logs 아래의 오래된 로그를 찾아 날짜별 tar.gz 로 압축한다.
+- 최근 7일 로그는 활성 분석용 원본으로 유지하고, 7일을 초과한 로그만 압축 대상으로 본다.
+- status 로 후보를 미리 보고, compress 로 실제 압축을 수행할 수 있다.
+
+사용 예시
+- .venv/bin/python log_archive_manager.py status
+- .venv/bin/python log_archive_manager.py compress
+- .venv/bin/python log_archive_manager.py status --keep-days 14
+"""
+
+from __future__ import annotations
+
+import argparse
+import tarfile
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+
+LOG_ROOTS = [
+    Path("logs"),
+    Path("analysis_logs"),
+    Path("trade_logs"),
+    Path("structured_logs"),
+]
+
+TARGET_SUFFIXES = {".log", ".jsonl", ".json"}
+IGNORABLE_STALE_FILENAMES = {".DS_Store"}
+
+
+@dataclass(frozen=True)
+class ArchiveCandidate:
+    path: Path
+    root: Path
+    size_bytes: int
+    modified_at: float
+    archive_day_text: str
+
+    @property
+    def archive_day(self) -> str:
+        """압축 묶음 기준 날짜 키를 반환한다."""
+        return self.archive_day_text
+
+
+@dataclass(frozen=True)
+class ArchiveGroup:
+    root: Path
+    archive_day: str
+    files: tuple[ArchiveCandidate, ...]
+
+    @property
+    def total_size_bytes(self) -> int:
+        return sum(item.size_bytes for item in self.files)
+
+    @property
+    def archive_path(self) -> Path:
+        return self.root / "_archive" / f"{self.archive_day}.tar.gz"
+
+
+@dataclass(frozen=True)
+class ArchiveMaintenanceResult:
+    groups: tuple[ArchiveGroup, ...]
+    removed_dirs: int
+    removed_files: int
+
+
+def iter_candidates(keep_days: int) -> list[ArchiveCandidate]:
+    """압축 가능한 로그 후보를 수집한다."""
+    today = datetime.now().date()
+    candidates: list[ArchiveCandidate] = []
+
+    for root in LOG_ROOTS:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if "_archive" in path.parts:
+                continue
+            if path.suffix == ".gz":
+                continue
+            if path.suffix not in TARGET_SUFFIXES:
+                continue
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+
+            archive_day = resolve_archive_day(path, root, stat.st_mtime)
+            if archive_day is None:
+                continue
+            if not should_archive_day(archive_day, today, keep_days):
+                continue
+            candidates.append(
+                ArchiveCandidate(
+                    path=path,
+                    root=root,
+                    size_bytes=stat.st_size,
+                    modified_at=stat.st_mtime,
+                    archive_day_text=archive_day.isoformat(),
+                )
+            )
+    return sorted(candidates, key=lambda item: (str(item.path), item.modified_at))
+
+
+def resolve_archive_day(path: Path, root: Path, modified_at: float) -> date | None:
+    """날짜 폴더가 있으면 그 날짜를, 없으면 수정 시각 날짜를 사용한다."""
+    relative_parts = path.relative_to(root).parts[:-1]
+    for part in relative_parts:
+        parsed = try_parse_date(part)
+        if parsed is not None:
+            return parsed
+    return datetime.fromtimestamp(modified_at).date()
+
+
+def try_parse_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def should_archive_day(target_day: date, today: date, keep_days: int) -> bool:
+    """최근 keep_days 는 유지하고, 그 이전 날짜만 압축 대상으로 본다."""
+    age_days = (today - target_day).days
+    return age_days > keep_days
+
+
+def group_candidates(candidates: list[ArchiveCandidate]) -> list[ArchiveGroup]:
+    """압축 후보를 루트/날짜별로 묶는다."""
+    grouped: dict[tuple[Path, str], list[ArchiveCandidate]] = {}
+    for item in candidates:
+        key = (item.root, item.archive_day)
+        grouped.setdefault(key, []).append(item)
+
+    groups: list[ArchiveGroup] = []
+    for (root, archive_day), items in sorted(grouped.items(), key=lambda entry: (str(entry[0][0]), entry[0][1])):
+        groups.append(
+            ArchiveGroup(
+                root=root,
+                archive_day=archive_day,
+                files=tuple(sorted(items, key=lambda candidate: str(candidate.path))),
+            )
+        )
+    return groups
+
+
+def format_bytes(size: int) -> str:
+    """바이트 단위를 보기 쉽게 포맷한다."""
+    units = ["B", "KB", "MB", "GB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{size}B"
+
+
+def show_status(candidates: list[ArchiveCandidate]) -> None:
+    """압축 후보를 요약해서 보여준다."""
+    total_size = sum(item.size_bytes for item in candidates)
+    print("=== 로그 압축 후보 ===")
+    print(f"후보 파일 수: {len(candidates)}")
+    print(f"총 원본 크기: {format_bytes(total_size)}")
+    for item in candidates[:50]:
+        age_hours = (time.time() - item.modified_at) / 3600
+        print(f"- {item.path} | {format_bytes(item.size_bytes)} | 마지막 수정 {age_hours:.1f}시간 전")
+    if len(candidates) > 50:
+        print(f"... 외 {len(candidates) - 50}개")
+
+
+def show_group_status(groups: list[ArchiveGroup], keep_days: int) -> None:
+    """날짜별 압축 후보 묶음을 보여준다."""
+    total_files = sum(len(group.files) for group in groups)
+    total_size = sum(group.total_size_bytes for group in groups)
+    print("=== 날짜별 로그 압축 후보 ===")
+    print(f"원본 유지 기간: 최근 {keep_days}일")
+    print(f"후보 날짜 묶음 수: {len(groups)}")
+    print(f"후보 파일 수: {total_files}")
+    print(f"총 원본 크기: {format_bytes(total_size)}")
+    for group in groups[:50]:
+        print(
+            f"- {group.root}/{group.archive_day}.tar.gz 예정 | "
+            f"{len(group.files)}개 파일 | {format_bytes(group.total_size_bytes)}"
+        )
+    if len(groups) > 50:
+        print(f"... 외 {len(groups) - 50}개 날짜 묶음")
+
+
+def compress_groups(groups: list[ArchiveGroup]) -> None:
+    """후보 파일을 날짜별 tar.gz 로 압축하고 원본을 제거한다."""
+    compressed_group_count = 0
+    compressed_file_count = 0
+    original_total = 0
+    compressed_total = 0
+    cleaned_dir_count = 0
+
+    for group in groups:
+        archive_path = group.archive_path
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for item in group.files:
+                arcname = item.path.relative_to(group.root)
+                tar.add(item.path, arcname=str(arcname))
+
+        for item in group.files:
+            item.path.unlink()
+            cleaned_dir_count += remove_empty_parent_dirs(item.path.parent, stop_at=group.root)
+
+        compressed_size = archive_path.stat().st_size
+        compressed_group_count += 1
+        compressed_file_count += len(group.files)
+        original_total += group.total_size_bytes
+        compressed_total += compressed_size
+        print(
+            f"[압축 완료] {archive_path} | "
+            f"{len(group.files)}개 파일 | "
+            f"{format_bytes(group.total_size_bytes)} -> {format_bytes(compressed_size)}"
+        )
+
+    print("=== 로그 압축 결과 ===")
+    print(f"압축 묶음 수: {compressed_group_count}")
+    print(f"압축 파일 수: {compressed_file_count}")
+    print(f"원본 총 크기: {format_bytes(original_total)}")
+    print(f"압축 총 크기: {format_bytes(compressed_total)}")
+    print(f"정리한 빈 폴더 수: {cleaned_dir_count}")
+    if original_total > 0:
+        saved = original_total - compressed_total
+        print(f"절감 크기: {format_bytes(saved)}")
+
+
+def remove_empty_parent_dirs(start_dir: Path, stop_at: Path) -> int:
+    """압축 후 비게 된 날짜 폴더를 루트 전까지만 정리한다."""
+    removed = 0
+    current = start_dir
+    stop_at = stop_at.resolve()
+    while True:
+        try:
+            current_resolved = current.resolve()
+        except FileNotFoundError:
+            current_resolved = current
+
+        if current_resolved == stop_at:
+            break
+        if not current.exists():
+            current = current.parent
+            continue
+        if any(current.iterdir()):
+            break
+        current.rmdir()
+        removed += 1
+        current = current.parent
+    return removed
+
+
+def is_stale_junk_file(path: Path) -> bool:
+    """오래된 날짜 폴더 정리 시 무시 가능한 잔재 파일인지 확인한다."""
+    return path.name in IGNORABLE_STALE_FILENAMES
+
+
+def iter_stale_date_dirs(root: Path, keep_days: int) -> list[tuple[date, Path]]:
+    """유지 기간을 지난 날짜 폴더 목록을 찾는다."""
+    today = datetime.now().date()
+    date_dirs: list[tuple[date, Path]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_dir():
+            continue
+        if "_archive" in path.parts:
+            continue
+        parsed = try_parse_date(path.name)
+        if parsed is None:
+            continue
+        if not should_archive_day(parsed, today, keep_days):
+            continue
+        date_dirs.append((parsed, path))
+    return date_dirs
+
+
+def prune_stale_date_dirs(keep_days: int) -> tuple[int, int]:
+    """압축본이 있는 오래된 날짜 폴더에서 잔재 파일과 빈 폴더를 정리한다."""
+    removed_dir_count = 0
+    removed_file_count = 0
+
+    for root in LOG_ROOTS:
+        if not root.exists():
+            continue
+        for archive_day, date_dir in iter_stale_date_dirs(root, keep_days):
+            archive_path = root / "_archive" / f"{archive_day.isoformat()}.tar.gz"
+            if not archive_path.exists():
+                continue
+
+            for file_path in sorted(date_dir.rglob("*")):
+                if not file_path.is_file():
+                    continue
+                if not is_stale_junk_file(file_path):
+                    break
+                file_path.unlink(missing_ok=True)
+                removed_file_count += 1
+            else:
+                empty_dirs = sorted(
+                    (path for path in date_dir.rglob("*") if path.is_dir()),
+                    key=lambda item: len(item.parts),
+                    reverse=True,
+                )
+                for empty_dir in empty_dirs:
+                    if empty_dir.exists() and not any(empty_dir.iterdir()):
+                        empty_dir.rmdir()
+                        removed_dir_count += 1
+                if date_dir.exists() and not any(date_dir.iterdir()):
+                    date_dir.rmdir()
+                    removed_dir_count += 1
+
+    return removed_dir_count, removed_file_count
+
+
+def run_archive_maintenance(keep_days: int, *, show_status_only: bool = False) -> ArchiveMaintenanceResult:
+    """로그 압축과 오래된 잔재 폴더 정리를 한 번에 수행한다."""
+    candidates = iter_candidates(keep_days)
+    groups = group_candidates(candidates)
+    if show_status_only:
+        show_group_status(groups, keep_days)
+        return ArchiveMaintenanceResult(
+            groups=tuple(groups),
+            removed_dirs=0,
+            removed_files=0,
+        )
+
+    compress_groups(groups)
+    removed_dirs, removed_files = prune_stale_date_dirs(keep_days)
+    if removed_dirs or removed_files:
+        print("=== 오래된 잔재 폴더 정리 결과 ===")
+        print(f"삭제한 잔재 파일 수: {removed_files}")
+        print(f"삭제한 빈 폴더 수: {removed_dirs}")
+    return ArchiveMaintenanceResult(
+        groups=tuple(groups),
+        removed_dirs=removed_dirs,
+        removed_files=removed_files,
+    )
+
+
+def main() -> None:
+    """CLI 진입점."""
+    parser = argparse.ArgumentParser(description="오래된 로그를 gzip 으로 압축합니다.")
+    parser.add_argument(
+        "command",
+        choices=["status", "compress"],
+        help="status 는 후보 조회, compress 는 실제 압축 실행",
+    )
+    parser.add_argument(
+        "--keep-days",
+        type=int,
+        default=7,
+        help="최근 이 일수만큼은 원본을 유지합니다. 기본값 7일",
+    )
+    args = parser.parse_args()
+    if args.command == "status":
+        run_archive_maintenance(args.keep_days, show_status_only=True)
+        return
+
+    run_archive_maintenance(args.keep_days)
+
+
+if __name__ == "__main__":
+    main()

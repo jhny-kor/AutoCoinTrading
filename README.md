@@ -73,6 +73,12 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `structured_log_manager.py`: system / strategy / trade 구조화 로그와 퍼널 요약을 관리하는 로거
 - `analyze_strategy_logs.py`: 구조화 전략 로그의 퍼널 병목과 차단 사유를 집계하는 도구
 - `log_path_utils.py`: 일자별 로그 경로와 탐색을 공통으로 처리하는 유틸
+- `core/execution/`: 거래소별 주문/조회 공통 로직과 주문 실패 기록 공통 처리
+- `core/positions/`: 복구 불가 포지션 보류 같은 포지션 가드 공통 처리
+- `core/positions/lifecycle.py`: 알트/BTC 포지션 초기화 같은 상태 정리 공통 처리
+- `core/strategy/`: 알트/BTC 신호 계산 공통 처리
+- `core/risk/`: 일일 손실 제한, 동적 오버웨이트 자격 같은 리스크 계산 공통 처리
+- `core/risk/alt_exit.py`: 알트 수익률/순익률/브레이크이븐/순익 보호 익절 계산 공통 처리
 - `migrate_logs_to_dated_dirs.py`: 기존 평면 로그를 날짜별 폴더 구조로 옮기는 마이그레이션 도구
 - `log_archive_manager.py`: 최근 7일 원본 유지 후 오래된 로그를 날짜별 `tar.gz`로 압축하는 도구
 - `btc_trend_settings.py`: BTC 전용 EMA 추세추종 설정 로더

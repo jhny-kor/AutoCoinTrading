@@ -47,6 +47,16 @@ from datetime import datetime
 
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
+from core.execution.common import log_order_failure
+from core.positions.lifecycle import clear_btc_position_state
+from core.positions.guards import handle_unrecoverable_position
+from core.risk.allocation import build_btc_allocations
+from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
+from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
+from core.strategy.btc_position import (
+    build_btc_exit_prices,
+    evaluate_btc_open_position,
+)
 from market_regime_guard import (
     build_regime_change_message,
     classify_symbol_regime,
@@ -170,27 +180,14 @@ def build_exit_prices(
     min_take_profit_pct: float,
     settings,
 ) -> tuple[float, float]:
-    """손절가와 익절가를 계산한다."""
-    if settings.stop_mode == "swing":
-        stop_price = recent_swing_low
-    else:
-        stop_price = entry_price - (atr_value * settings.stop_atr_multiple)
-
-    if settings.take_profit_mode == "swing":
-        take_profit_price = recent_swing_high
-        if take_profit_price <= entry_price:
-            take_profit_price = entry_price + (
-                atr_value * settings.take_profit_atr_multiple
-            )
-    else:
-        take_profit_price = entry_price + (
-            atr_value * settings.take_profit_atr_multiple
-        )
-
-    fee_floor_take_profit_price = entry_price * (1 + (min_take_profit_pct / 100))
-    take_profit_price = max(take_profit_price, fee_floor_take_profit_price)
-
-    return stop_price, take_profit_price
+    return build_btc_exit_prices(
+        entry_price=entry_price,
+        atr_value=atr_value,
+        recent_swing_low=recent_swing_low,
+        recent_swing_high=recent_swing_high,
+        min_take_profit_pct=min_take_profit_pct,
+        settings=settings,
+    )
 
 
 def run_bot():
@@ -353,47 +350,43 @@ def run_bot():
             effective_min_atr_pct = settings.get_min_atr_pct(symbol)
             confirm_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
             confirm_close = confirm_closes[-1]
-            confirm_bullish = confirm_close > confirm_ema
-            ema_aligned = last_fast > last_slow
-            price_above_fast = last_close >= last_fast
-            ema_spread_pct = (
-                ((last_fast - last_slow) / last_slow) * 100 if last_slow else 0.0
-            )
             effective_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
-            trend_follow_entry = (
-                settings.enable_trend_follow_entry
-                and ema_aligned
-                and ema_spread_pct >= effective_min_ema_spread_pct
-                and (
-                    not settings.trend_follow_requires_price_above_fast
-                    or price_above_fast
-                )
+            confirm_bullish = confirm_close > confirm_ema
+            btc_entry_state = compute_btc_entry_state(
+                bullish=bullish,
+                last_fast=last_fast,
+                last_slow=last_slow,
+                last_close=last_close,
+                min_ema_spread_pct=effective_min_ema_spread_pct,
+                enable_trend_follow_entry=settings.enable_trend_follow_entry,
+                require_price_above_fast=settings.trend_follow_requires_price_above_fast,
             )
-            entry_signal = bullish or trend_follow_entry
+            ema_aligned = bool(btc_entry_state["ema_aligned"])
+            price_above_fast = bool(btc_entry_state["price_above_fast"])
+            ema_spread_pct = float(btc_entry_state["ema_spread_pct"])
+            trend_follow_entry = bool(btc_entry_state["trend_follow_entry"])
+            entry_signal = bool(btc_entry_state["entry_signal"])
             recent_swing_low = get_recent_swing_low(ohlcv[:-1], settings.swing_lookback)
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
             base_free, quote_free = get_spot_balances(exchange, base, quote)
             # 최소 주문 수량보다 작은 잔량은 즉시 정리할 수 없으므로 포지션에서 제외한다.
             has_position = base_free >= settings.min_order_amount
-            if has_position and entry_price is None:
-                if not unrecoverable_position_warned:
-                    log(
-                        f"[{symbol}] 복구 가능한 진입가 없이 보유 포지션만 감지되었습니다. "
-                        "현재가로 임시 진입가를 만들지 않고 자동 매매를 보류합니다."
-                    )
-                    structured_logger.log_system(
-                        level="WARNING",
-                        event="position_state_unrecoverable",
-                        message="평균 진입가를 복구하지 못한 BTC 포지션을 감지해 자동 매매를 보류합니다.",
-                        symbol=symbol,
-                        context={
-                            "base_free": base_free,
-                            "quote_free": quote_free,
-                            "min_order_amount": settings.min_order_amount,
-                        },
-                    )
-                    unrecoverable_position_warned = True
+            if handle_unrecoverable_position(
+                warned_symbols={symbol} if unrecoverable_position_warned else set(),
+                symbol=symbol,
+                has_position=has_position,
+                average_entry_price=entry_price,
+                log=log,
+                structured_logger=structured_logger,
+                context={
+                    "base_free": base_free,
+                    "quote_free": quote_free,
+                    "min_order_amount": settings.min_order_amount,
+                },
+                message="평균 진입가를 복구하지 못한 BTC 포지션을 감지해 자동 매매를 보류합니다.",
+            ):
+                unrecoverable_position_warned = True
                 continue
             if not has_position:
                 unrecoverable_position_warned = False
@@ -451,7 +444,10 @@ def run_bot():
                         snapshot=symbol_regime_snapshot,
                     ),
                 )
-            daily_loss_limit_reached = daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+            daily_loss_limit_reached = is_daily_loss_limit_reached(
+                daily_realized_pnl_quote=daily_realized_pnl_quote,
+                max_daily_loss_quote=config["max_daily_loss_quote"],
+            )
 
             log("-" * 60)
             log(f"[{symbol}] 현재 종가: {last_close:.2f}")
@@ -489,49 +485,43 @@ def run_bot():
                 )
 
             if has_position and entry_price is not None:
-                highest_price_since_entry = max(
-                    highest_price_since_entry or last_close,
-                    last_close,
-                )
-                lowest_price_since_entry = min(
-                    lowest_price_since_entry or last_close,
-                    last_close,
-                )
-                stop_price, take_profit_price = build_exit_prices(
+                position_state = evaluate_btc_open_position(
+                    has_position=has_position,
                     entry_price=entry_price,
+                    last_close=last_close,
+                    base_free=base_free,
+                    fee_rate_pct=config["fee_rate_pct"],
                     atr_value=atr_value,
                     recent_swing_low=recent_swing_low,
                     recent_swing_high=recent_swing_high,
-                    min_take_profit_pct=(config["fee_rate_pct"] * 2 * 1.1),
+                    highest_price_since_entry=highest_price_since_entry,
+                    lowest_price_since_entry=lowest_price_since_entry,
+                    trailing_armed=trailing_armed,
+                    trailing_armed_at=trailing_armed_at,
+                    trailing_activation_price=trailing_activation_price,
+                    partial_take_profit_done=partial_take_profit_done,
+                    confirm_bullish=confirm_bullish,
+                    ema_aligned=ema_aligned,
+                    ema_spread_pct=ema_spread_pct,
                     settings=settings,
                 )
-                pnl_pct = (last_close - entry_price) / entry_price * 100
-                (
-                    current_fee_quote_estimate,
-                    current_net_realized_pnl_quote,
-                    current_net_realized_pnl_pct,
-                ) = estimate_round_trip_net_pnl(
-                    entry_price=entry_price,
-                    exit_price=last_close,
-                    amount=base_free,
-                    fee_rate_pct=config["fee_rate_pct"],
-                )
-                partial_take_profit_triggered = (
-                    has_position
-                    and settings.enable_partial_take_profit
-                    and not partial_take_profit_done
-                    and take_profit_price is not None
-                    and last_close >= take_profit_price
-                )
-                if (
-                    not partial_take_profit_triggered
-                    and (not trailing_armed)
-                    and take_profit_price is not None
-                    and last_close >= take_profit_price
-                ):
+                highest_price_since_entry = position_state["highest_price_since_entry"]
+                lowest_price_since_entry = position_state["lowest_price_since_entry"]
+                stop_price = position_state["stop_price"]
+                take_profit_price = position_state["take_profit_price"]
+                pnl_pct = position_state["pnl_pct"]
+                current_fee_quote_estimate = position_state["current_fee_quote_estimate"]
+                current_net_realized_pnl_quote = position_state["current_net_realized_pnl_quote"]
+                current_net_realized_pnl_pct = position_state["current_net_realized_pnl_pct"]
+                partial_take_profit_triggered = position_state["partial_take_profit_triggered"]
+                bull_pullback_hold_active = position_state["bull_pullback_hold_active"]
+                drawdown_from_high_pct = position_state["drawdown_from_high_pct"]
+                mfe_pct = position_state["mfe_pct"]
+                mae_pct = position_state["mae_pct"]
+                if position_state["trailing_armed_just_now"]:
                     trailing_armed = True
                     trailing_armed_at = time.time()
-                    trailing_activation_price = last_close
+                    trailing_activation_price = position_state["trailing_activation_price"]
                     log(
                         f"[{symbol}] 익절 구간에 진입해 트레일링 익절을 활성화합니다. "
                         f"현재 최고가: {highest_price_since_entry:.2f}"
@@ -548,21 +538,10 @@ def run_bot():
                             "trailing_activation_price": trailing_activation_price,
                         },
                     )
-                drawdown_from_high_pct = (
-                    ((highest_price_since_entry - last_close) / highest_price_since_entry) * 100
-                    if highest_price_since_entry
-                    else None
-                )
-                mfe_pct = (
-                    ((highest_price_since_entry - entry_price) / entry_price) * 100
-                    if highest_price_since_entry is not None and entry_price
-                    else None
-                )
-                mae_pct = (
-                    ((lowest_price_since_entry - entry_price) / entry_price) * 100
-                    if lowest_price_since_entry is not None and entry_price
-                    else None
-                )
+                else:
+                    trailing_armed = bool(position_state["trailing_armed"])
+                    trailing_armed_at = position_state["trailing_armed_at"]
+                    trailing_activation_price = position_state["trailing_activation_price"]
                 log(
                     f"[{symbol}] 평균 진입가: {entry_price:.2f}, 현재 수익률: {pnl_pct:.2f}%, "
                     f"손절가: {stop_price:.2f}, 익절가: {take_profit_price:.2f}, "
@@ -590,24 +569,44 @@ def run_bot():
                         f"일시 조정으로 보고 보유를 유지합니다."
                     )
             else:
-                stop_price = None
-                take_profit_price = None
-                pnl_pct = None
-                current_fee_quote_estimate = None
-                current_net_realized_pnl_quote = None
-                current_net_realized_pnl_pct = None
-                partial_take_profit_triggered = False
-                bull_pullback_hold_active = False
-                drawdown_from_high_pct = None
-                mfe_pct = None
-                mae_pct = None
+                position_state = evaluate_btc_open_position(
+                    has_position=has_position,
+                    entry_price=entry_price,
+                    last_close=last_close,
+                    base_free=base_free,
+                    fee_rate_pct=config["fee_rate_pct"],
+                    atr_value=atr_value,
+                    recent_swing_low=recent_swing_low,
+                    recent_swing_high=recent_swing_high,
+                    highest_price_since_entry=highest_price_since_entry,
+                    lowest_price_since_entry=lowest_price_since_entry,
+                    trailing_armed=trailing_armed,
+                    trailing_armed_at=trailing_armed_at,
+                    trailing_activation_price=trailing_activation_price,
+                    partial_take_profit_done=partial_take_profit_done,
+                    confirm_bullish=confirm_bullish,
+                    ema_aligned=ema_aligned,
+                    ema_spread_pct=ema_spread_pct,
+                    settings=settings,
+                )
+                stop_price = position_state["stop_price"]
+                take_profit_price = position_state["take_profit_price"]
+                pnl_pct = position_state["pnl_pct"]
+                current_fee_quote_estimate = position_state["current_fee_quote_estimate"]
+                current_net_realized_pnl_quote = position_state["current_net_realized_pnl_quote"]
+                current_net_realized_pnl_pct = position_state["current_net_realized_pnl_pct"]
+                partial_take_profit_triggered = position_state["partial_take_profit_triggered"]
+                bull_pullback_hold_active = position_state["bull_pullback_hold_active"]
+                drawdown_from_high_pct = position_state["drawdown_from_high_pct"]
+                mfe_pct = position_state["mfe_pct"]
+                mae_pct = position_state["mae_pct"]
                 if not has_position:
-                    highest_price_since_entry = None
-                    lowest_price_since_entry = None
-                    trailing_armed = False
-                    trailing_armed_at = None
-                    trailing_activation_price = None
-                    partial_take_profit_done = False
+                    highest_price_since_entry = position_state["highest_price_since_entry"]
+                    lowest_price_since_entry = position_state["lowest_price_since_entry"]
+                    trailing_armed = bool(position_state["trailing_armed"])
+                    trailing_armed_at = position_state["trailing_armed_at"]
+                    trailing_activation_price = position_state["trailing_activation_price"]
+                    partial_take_profit_done = bool(position_state["partial_take_profit_done"])
                     add_on_count = 0
 
             if daily_loss_limit_reached:
@@ -620,59 +619,50 @@ def run_bot():
                     )
                     daily_limit_notified = True
 
-            stop_triggered = has_position and stop_price is not None and last_close <= stop_price
-            trailing_stop_triggered = (
-                has_position
-                and trailing_armed
-                and drawdown_from_high_pct is not None
-                and drawdown_from_high_pct >= settings.trailing_drawdown_pct
+            btc_exit_flags = compute_btc_exit_flags(
+                has_position=has_position,
+                stop_price=stop_price,
+                take_profit_price=take_profit_price,
+                last_close=last_close,
+                highest_price_since_entry=highest_price_since_entry,
+                trailing_drawdown_pct=settings.trailing_drawdown_pct,
+                trailing_armed=trailing_armed,
+                enable_fee_protect_exit=settings.enable_fee_protect_exit,
+                fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
+                pnl_pct=current_net_realized_pnl_pct,
+                bearish=(bearish or (not ema_aligned) or (not price_above_fast)),
+                confirm_bullish=confirm_bullish and not bull_pullback_hold_active,
             )
-            profit_protect_triggered = (
-                has_position
-                and settings.enable_fee_protect_exit
-                and current_net_realized_pnl_pct is not None
-                and current_net_realized_pnl_pct >= settings.fee_protect_min_net_pnl_pct
-                and (bearish or (not ema_aligned) or (not price_above_fast))
-                and not trailing_stop_triggered
-                and not bull_pullback_hold_active
-            )
-            trend_exit_triggered = (
-                has_position
-                and settings.exit_on_bearish_cross
-                and bearish
-                and not trailing_armed
-                and not profit_protect_triggered
-                and not bull_pullback_hold_active
-            )
+            drawdown_from_high_pct = btc_exit_flags["drawdown_from_high_pct"]
+            stop_triggered = bool(btc_exit_flags["stop_triggered"])
+            trailing_stop_triggered = bool(btc_exit_flags["trailing_stop_triggered"])
+            profit_protect_triggered = bool(btc_exit_flags["profit_protect_triggered"])
+            trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
             position_ratio = settings.get_position_ratio(symbol)
-            requested_order_value = quote_free * config["risk_per_trade"] * position_ratio
-            requested_add_on_order_value = (
-                quote_free * config["risk_per_trade"] * settings.pyramid_position_ratio
+            dynamic_bonus_eligible = is_dynamic_bonus_eligible(
+                has_position=has_position,
+                base_signal=entry_signal and ema_aligned and price_above_fast,
+                strong_signal=True,
+                require_strong_signal=False,
+                volume_ratio=volume_ratio,
+                volume_threshold=portfolio_allocator.settings.dynamic_volume_ratio_threshold,
+                trend_ok=confirm_bullish,
+                require_trend_ok=portfolio_allocator.settings.dynamic_require_trend_ok,
+                enable_dynamic_overweight=portfolio_allocator.settings.enable_dynamic_overweight,
             )
-            dynamic_bonus_eligible = (
-                portfolio_allocator.settings.enable_dynamic_overweight
-                and entry_signal
-                and ema_aligned
-                and price_above_fast
-                and (
-                    volume_ratio is not None
-                    and volume_ratio >= portfolio_allocator.settings.dynamic_volume_ratio_threshold
-                )
-                and (
-                    not portfolio_allocator.settings.dynamic_require_trend_ok
-                    or confirm_bullish
-                )
-            )
-            allocation_decision = portfolio_allocator.build_buy_decision(
+            (
+                requested_order_value,
+                requested_add_on_order_value,
+                allocation_decision,
+                add_on_allocation_decision,
+            ) = build_btc_allocations(
+                portfolio_allocator=portfolio_allocator,
                 exchange=exchange,
                 symbol=symbol,
-                requested_order_value_quote=requested_order_value,
-                dynamic_bonus_eligible=dynamic_bonus_eligible,
-            )
-            add_on_allocation_decision = portfolio_allocator.build_buy_decision(
-                exchange=exchange,
-                symbol=symbol,
-                requested_order_value_quote=requested_add_on_order_value,
+                quote_free=quote_free,
+                risk_per_trade=config["risk_per_trade"],
+                position_ratio=position_ratio,
+                pyramid_position_ratio=settings.pyramid_position_ratio,
                 dynamic_bonus_eligible=dynamic_bonus_eligible,
             )
             order_value = allocation_decision.approved_order_value_quote
@@ -1138,29 +1128,15 @@ def run_bot():
                             tgt_ccy="quote_ccy",
                         )
                     except Exception as order_error:
-                        structured_logger.log_strategy(
+                        log_order_failure(
+                            structured_logger=structured_logger,
                             symbol=symbol,
                             side="entry",
-                            stage="filled",
-                            result="error",
-                            reason="order_failed",
+                            message="BTC 매수 주문 요청이 실패했습니다.",
                             actual={"order_value_quote": order_value},
                             metrics=common_metrics,
-                            extra={
-                                "error": repr(order_error),
-                                "strategy_version": settings.version,
-                            },
-                        )
-                        structured_logger.log_system(
-                            level="WARNING",
-                            event="order_failed",
-                            message="BTC 매수 주문 요청이 실패했습니다.",
-                            symbol=symbol,
-                            context={
-                                "side": "buy",
-                                "order_value_quote": order_value,
-                                "error": repr(order_error),
-                            },
+                            error=order_error,
+                            extra={"strategy_version": settings.version},
                         )
                         continue
                     order_response_received_at = time.time()
@@ -1277,29 +1253,15 @@ def run_bot():
                         tgt_ccy="quote_ccy",
                     )
                 except Exception as order_error:
-                    structured_logger.log_strategy(
+                    log_order_failure(
+                        structured_logger=structured_logger,
                         symbol=symbol,
                         side="entry",
-                        stage="filled",
-                        result="error",
-                        reason="order_failed",
+                        message="BTC 추가매수 주문 요청이 실패했습니다.",
                         actual={"order_value_quote": add_on_order_value},
                         metrics={**common_metrics, "entry_type": "add_on_winner"},
-                        extra={
-                            "error": repr(order_error),
-                            "strategy_version": settings.version,
-                        },
-                    )
-                    structured_logger.log_system(
-                        level="WARNING",
-                        event="order_failed",
-                        message="BTC 추가매수 주문 요청이 실패했습니다.",
-                        symbol=symbol,
-                        context={
-                            "side": "buy",
-                            "order_value_quote": add_on_order_value,
-                            "error": repr(order_error),
-                        },
+                        error=order_error,
+                        extra={"strategy_version": settings.version},
                     )
                     continue
                 order_response_received_at = time.time()
@@ -1479,29 +1441,15 @@ def run_bot():
                             tgt_ccy="base_ccy",
                         )
                     except Exception as order_error:
-                        structured_logger.log_strategy(
+                        log_order_failure(
+                            structured_logger=structured_logger,
                             symbol=symbol,
                             side="exit",
-                            stage="filled",
-                            result="error",
-                            reason="order_failed",
+                            message="BTC 매도 주문 요청이 실패했습니다.",
                             actual={"sell_amount": amount},
                             metrics=common_metrics,
-                            extra={
-                                "error": repr(order_error),
-                                "strategy_version": settings.version,
-                            },
-                        )
-                        structured_logger.log_system(
-                            level="WARNING",
-                            event="order_failed",
-                            message="BTC 매도 주문 요청이 실패했습니다.",
-                            symbol=symbol,
-                            context={
-                                "side": "sell",
-                                "sell_amount": amount,
-                                "error": repr(order_error),
-                            },
+                            error=order_error,
+                            extra={"strategy_version": settings.version},
                         )
                         continue
                     order_response_received_at = time.time()
@@ -1675,16 +1623,17 @@ def run_bot():
                         f"오늘 누적 실현 손익: {daily_realized_pnl_quote:.4f} {quote}"
                     )
                     if sell_reason != "partial_take_profit" or partial_take_profit_full_exit:
-                        entry_price = None
-                        entry_opened_at = None
-                        position_id = None
-                        highest_price_since_entry = None
-                        lowest_price_since_entry = None
-                        trailing_armed = False
-                        trailing_armed_at = None
-                        trailing_activation_price = None
-                        partial_take_profit_done = False
-                        add_on_count = 0
+                        cleared = clear_btc_position_state()
+                        entry_price = cleared["entry_price"]
+                        entry_opened_at = cleared["entry_opened_at"]
+                        position_id = cleared["position_id"]
+                        highest_price_since_entry = cleared["highest_price_since_entry"]
+                        lowest_price_since_entry = cleared["lowest_price_since_entry"]
+                        trailing_armed = bool(cleared["trailing_armed"])
+                        trailing_armed_at = cleared["trailing_armed_at"]
+                        trailing_activation_price = cleared["trailing_activation_price"]
+                        partial_take_profit_done = bool(cleared["partial_take_profit_done"])
+                        add_on_count = int(cleared["add_on_count"])
                 else:
                     log(
                         f"[{symbol}] 추정 매도 수량({amount:.8f} {base})이 "

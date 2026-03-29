@@ -1,0 +1,1712 @@
+"""
+수정 요약
+- BTC 가 CHOPPY 레짐일 때는 심볼별 추가 거래량 기준을 적용해 약한 진입을 더 줄이도록 보수화했다.
+- 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가하고, BTC/KRW 전용 보수화를 위한 심볼별 최소 ATR 기준도 반영했다.
+- BTC/USDT 같은 특정 심볼만 더 엄격하게 보려는 심볼별 EMA 스프레드/거래량 진입 기준을 반영했다.
+- 텔레그램 매수/매도 체결 알림에 실제 체결가와 체결 금액이 함께 보이도록 보강
+- BTC 진입 필터를 조금 더 보수적으로 강화하고, 강한 다중 상승 추세에서는 짧은 조정에 대한 청산을 잠시 보류하도록 조정
+- BTC 익절가 도달 시 1회 부분 익절 후 잔량을 트레일링/순익 보호로 관리하는 구조를 추가
+- BTC 수익성 청산 직후 재진입과 추가매수를 잠시 막는 전용 쿨다운을 추가
+- 거래소 전체 기준 목표 비중과 남아 있는 누적 투입 원가를 바탕으로 BTC 신규 매수 한도를 제한하는 포트폴리오 배분 로직을 추가
+- 수수료를 제하고도 순익이 남는 상태에서 추세가 꺾이면 빠르게 익절하는 순익 보호 청산 규칙을 추가
+- OKX BTC 체결 로그에 주문 ID, API 지연, 체결 비율, 슬리피지 같은 주문 실행 품질 지표를 함께 저장하도록 확장
+- OKX BTC 매도 체결 로그에도 왕복 수수료를 반영한 순손익을 함께 저장해 /pnl 집계가 net 기준으로 가능하도록 보강
+- OKX BTC 에서 최소 주문 수량 미만 잔량은 포지션으로 보지 않아 잔량 보유 중에도 재진입할 수 있게 조정
+- BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운을 추가
+- BTC 는 수익 구간에서 1회만 추가매수하는 보수적 피라미딩을 지원하도록 확장
+- BTC 전략 버전 이름(strategy_version)을 구조화 로그와 체결 이력에 함께 남겨 버전별 비교가 가능하도록 확장
+- BTC 거래 품질 분석용으로 최저가, MFE/MAE, 트레일링 활성화 소요 시간까지 체결 로그에 함께 남기도록 확장
+- 트레일링 익절이 이미 활성화된 뒤에는 trend_exit 가 먼저 포지션을 끊지 않도록 조정
+- BTC 익절 활성화 가격이 왕복 수수료보다 낮아지지 않도록 수수료 하한선을 적용
+- BTC 진입 신호를 골든크로스뿐 아니라 EMA 상승 정렬 유지 구간까지 허용해 진입 기회를 늘리도록 조정
+- BTC 전용 5분봉/15분봉 EMA 추세추종 실험용 봇 추가
+- EMA 골든크로스 진입, 거래량 확인 유지, ATR 기반 변동성 필터 적용
+- 물타기 없이 1회 포지션만 운영하고, 손절/익절은 ATR 또는 최근 스윙 기준으로 계산
+- 손절/익절/추세 종료 청산을 모두 텔레그램과 체결 JSONL 에 기록하도록 연결
+- 전략 판단 로그를 system / strategy / trade JSONL 로 분리 저장하도록 추가
+- 진입/청산 퍼널과 차단 사유를 reason 코드 기준으로 집계 가능하게 기록하도록 추가
+- OKX BTC 최소 주문수량 0.00001 BTC 를 코드에서 먼저 확인해 주문 전 단계에서 차단하도록 추가
+- 거래량 배수 계산을 형성 중인 현재 봉 대신 직전 마감 봉 기준으로 바꿔 BTC 필터 해석을 안정화하도록 조정
+- 익절 구간 도달 후 최고가 대비 되돌림으로 전량 청산하는 트레일링 익절 로직을 추가
+- 포지션 ID, 트레일링 활성화 시각, 최고가 대비 되돌림 같은 분석용 로그 필드를 추가
+
+OKX BTC 전용 EMA 추세추종 봇
+
+- 심볼: BTC/USDT
+- 기본 개념: 5분봉 EMA 추세추종 + 15분봉 확인
+- 진입: 빠른 EMA 가 느린 EMA 를 상향 돌파하거나 상승 정렬 유지 조건을 만족할 때
+- 청산: 손절, 익절, 또는 선택적으로 EMA 하향 추세 종료 시
+"""
+
+from __future__ import annotations
+
+import os
+import time
+import traceback
+from datetime import datetime
+
+from bot_logger import BLUE, RED, BotLogger
+from btc_trend_settings import load_btc_trend_settings
+from market_regime_guard import (
+    build_regime_change_message,
+    classify_symbol_regime,
+    load_latest_symbol_record,
+    load_low_energy_snapshot,
+    update_regime_state,
+)
+from ma_crossover_bot import (
+    create_okx_client,
+    fetch_ohlcv,
+    get_spot_balances,
+    load_config,
+    place_market_order_okx,
+    safe_amount_to_precision,
+)
+from portfolio_allocator import PortfolioAllocator
+from state_recovery import (
+    load_program_daily_realized_pnl_quote,
+    restore_program_position_states,
+)
+from structured_log_manager import FunnelStep, StructuredLogManager, choose_atr_reason
+from strategy_settings import load_managed_symbols
+from telegram_notifier import load_telegram_notifier
+from trade_history_logger import (
+    TradeHistoryLogger,
+    estimate_round_trip_net_pnl,
+    summarize_order_for_notification,
+)
+
+
+def calc_ema_series(prices: list[float], period: int) -> list[float]:
+    """EMA 시리즈를 계산한다."""
+    if len(prices) < period:
+        raise ValueError("EMA 계산에 필요한 가격 데이터가 부족합니다.")
+
+    multiplier = 2 / (period + 1)
+    ema_values = [sum(prices[:period]) / period]
+    for price in prices[period:]:
+        ema_values.append((price - ema_values[-1]) * multiplier + ema_values[-1])
+    return ema_values
+
+
+def detect_ema_crossover(
+    closes: list[float], fast_period: int, slow_period: int
+) -> tuple[bool, bool, float, float, float, float]:
+    """EMA 골든/데드 크로스를 계산한다."""
+    if len(closes) < slow_period + 2:
+        raise ValueError("EMA 크로스를 계산하기 위한 캔들 수가 부족합니다.")
+
+    fast_series = calc_ema_series(closes, fast_period)
+    slow_series = calc_ema_series(closes, slow_period)
+    series_len = min(len(fast_series), len(slow_series))
+    fast_series = fast_series[-series_len:]
+    slow_series = slow_series[-series_len:]
+
+    prev_fast = fast_series[-2]
+    prev_slow = slow_series[-2]
+    last_fast = fast_series[-1]
+    last_slow = slow_series[-1]
+
+    bullish = prev_fast <= prev_slow and last_fast > last_slow
+    bearish = prev_fast >= prev_slow and last_fast < last_slow
+    return bullish, bearish, prev_fast, prev_slow, last_fast, last_slow
+
+
+def calc_volume_ratio(ohlcv: list[list[float]], lookback: int) -> float | None:
+    """직전 마감 봉 거래량이 그 이전 평균 거래량의 몇 배인지 계산한다."""
+    if len(ohlcv) < 3:
+        return None
+    completed = ohlcv[:-1]
+    if len(completed) < 2:
+        return None
+    recent = (
+        completed[-(lookback + 1):-1]
+        if len(completed) >= lookback + 1
+        else completed[:-1]
+    )
+    if not recent:
+        return None
+    avg_volume = sum(row[5] for row in recent) / len(recent)
+    current_volume = completed[-1][5]
+    if avg_volume <= 0:
+        return None
+    return current_volume / avg_volume
+
+
+def calc_atr(ohlcv: list[list[float]], period: int) -> float:
+    """ATR 을 계산한다."""
+    if len(ohlcv) < period + 1:
+        raise ValueError("ATR 계산에 필요한 캔들 수가 부족합니다.")
+
+    trs: list[float] = []
+    for prev, curr in zip(ohlcv[:-1], ohlcv[1:]):
+        high = curr[2]
+        low = curr[3]
+        prev_close = prev[4]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    recent = trs[-period:]
+    return sum(recent) / len(recent)
+
+
+def get_recent_swing_low(ohlcv: list[list[float]], lookback: int) -> float:
+    """최근 스윙 저점을 계산한다."""
+    recent = ohlcv[-lookback:] if len(ohlcv) >= lookback else ohlcv
+    return min(row[3] for row in recent)
+
+
+def get_recent_swing_high(ohlcv: list[list[float]], lookback: int) -> float:
+    """최근 스윙 고점을 계산한다."""
+    recent = ohlcv[-lookback:] if len(ohlcv) >= lookback else ohlcv
+    return max(row[2] for row in recent)
+
+
+def build_exit_prices(
+    *,
+    entry_price: float,
+    atr_value: float,
+    recent_swing_low: float,
+    recent_swing_high: float,
+    min_take_profit_pct: float,
+    settings,
+) -> tuple[float, float]:
+    """손절가와 익절가를 계산한다."""
+    if settings.stop_mode == "swing":
+        stop_price = recent_swing_low
+    else:
+        stop_price = entry_price - (atr_value * settings.stop_atr_multiple)
+
+    if settings.take_profit_mode == "swing":
+        take_profit_price = recent_swing_high
+        if take_profit_price <= entry_price:
+            take_profit_price = entry_price + (
+                atr_value * settings.take_profit_atr_multiple
+            )
+    else:
+        take_profit_price = entry_price + (
+            atr_value * settings.take_profit_atr_multiple
+        )
+
+    fee_floor_take_profit_price = entry_price * (1 + (min_take_profit_pct / 100))
+    take_profit_price = max(take_profit_price, fee_floor_take_profit_price)
+
+    return stop_price, take_profit_price
+
+
+def run_bot():
+    """OKX BTC 전용 EMA 추세추종 봇 메인 루프."""
+    config = load_config()
+    settings = load_btc_trend_settings()
+    exchange = create_okx_client(config)
+    logger = BotLogger("okx_btc_ema_trend_bot")
+    structured_logger = StructuredLogManager("okx_btc_ema_trend_bot")
+    notifier = load_telegram_notifier()
+    trade_history = TradeHistoryLogger()
+    log = logger.log
+
+    symbol = "BTC/USDT"
+    base = "BTC"
+    quote = "USDT"
+    recovered_state = restore_program_position_states(
+        "okx_btc_ema_trend_bot",
+        [symbol],
+    ).get(symbol)
+    portfolio_allocator = PortfolioAllocator(
+        exchange_name="OKX",
+        quote_currency=quote,
+        tracked_symbols=load_managed_symbols("okx"),
+    )
+    entry_price: float | None = (
+        recovered_state.average_entry_price if recovered_state else None
+    )
+    entry_opened_at: float | None = (
+        recovered_state.opened_at_ts if recovered_state else None
+    )
+    position_id: str | None = (
+        f"{symbol}:{int(recovered_state.opened_at_ts)}"
+        if recovered_state and recovered_state.opened_at_ts is not None
+        else None
+    )
+    highest_price_since_entry: float | None = (
+        recovered_state.highest_price_since_entry if recovered_state else None
+    )
+    lowest_price_since_entry: float | None = (
+        recovered_state.lowest_price_since_entry if recovered_state else None
+    )
+    trailing_armed = recovered_state.trailing_armed if recovered_state else False
+    trailing_armed_at: float | None = (
+        recovered_state.trailing_armed_at_ts if recovered_state else None
+    )
+    trailing_activation_price: float | None = (
+        recovered_state.trailing_activation_price if recovered_state else None
+    )
+    partial_take_profit_done = (
+        recovered_state.partial_take_profit_done if recovered_state else False
+    )
+    add_on_count = (
+        max(0, recovered_state.cycle_buy_count - 1) if recovered_state else 0
+    )
+    last_trade_at = (
+        recovered_state.last_trade_at_ts if recovered_state else 0.0
+    )
+    last_stop_loss_at = (
+        recovered_state.last_stop_loss_at_ts if recovered_state else 0.0
+    )
+    last_profit_exit_at = (
+        recovered_state.last_profit_exit_at_ts if recovered_state else 0.0
+    )
+    unrecoverable_position_warned = False
+    daily_pnl_date = datetime.now().date()
+    daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+        "okx_btc_ema_trend_bot",
+        daily_pnl_date,
+    )
+    daily_limit_notified = (
+        daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+    )
+    min_buy_order_value = float(os.getenv("OKX_MIN_BUY_ORDER_VALUE", "1.0"))
+
+    min_ohlcv_limit = max(
+        settings.slow_ema_period + 5,
+        settings.atr_period + 5,
+        settings.volume_lookback + 5,
+        settings.swing_lookback + 5,
+    )
+    confirm_limit = max(settings.confirm_ema_period + 5, settings.slow_ema_period + 5)
+
+    log("=== OKX BTC EMA 추세추종 봇 시작 ===")
+    log(
+        f"메인 타임프레임: {settings.timeframe}, 확인 타임프레임: {settings.confirm_timeframe}"
+    )
+    log(
+        f"EMA: {settings.fast_ema_period}/{settings.slow_ema_period}, "
+        f"확인 EMA: {settings.confirm_ema_period}"
+    )
+    log(
+        f"ATR 기간: {settings.atr_period}, 손절 방식: {settings.stop_mode}, "
+        f"익절 방식: {settings.take_profit_mode}"
+    )
+    log(
+        f"트레일링 되돌림 기준: {settings.trailing_drawdown_pct:.2f}% "
+        f"(익절 구간 도달 후 활성화)"
+    )
+    log(f"최소 주문 수량: {settings.min_order_amount:.5f} {base}")
+    log(f"복구된 당일 실현 손익: {daily_realized_pnl_quote:.4f} {quote}")
+    if recovered_state and recovered_state.average_entry_price is not None:
+        log(
+            f"복구된 BTC 포지션: avg={recovered_state.average_entry_price:.2f}, "
+            f"entries={recovered_state.cycle_buy_count}, "
+            f"partial_tp_done={recovered_state.partial_take_profit_done}, "
+            f"trailing_armed={recovered_state.trailing_armed}"
+        )
+    structured_logger.log_system(
+        level="INFO",
+        event="bot_started",
+        message="OKX BTC EMA 전략 봇을 시작합니다.",
+        symbol=symbol,
+        context={
+            "timeframe": settings.timeframe,
+            "confirm_timeframe": settings.confirm_timeframe,
+            "fast_ema_period": settings.fast_ema_period,
+            "slow_ema_period": settings.slow_ema_period,
+            "atr_period": settings.atr_period,
+        },
+    )
+
+    while True:
+        today = datetime.now().date()
+        if today != daily_pnl_date:
+            daily_pnl_date = today
+            daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
+                "okx_btc_ema_trend_bot",
+                daily_pnl_date,
+            )
+            daily_limit_notified = False
+            log("일자가 변경되어 BTC 전용 봇의 일일 손익을 초기화합니다.")
+            structured_logger.log_system(
+                level="INFO",
+                event="daily_pnl_reset",
+                message="BTC 전용 봇의 일일 손익 누적값을 초기화했습니다.",
+                symbol=symbol,
+            )
+
+        try:
+            ohlcv = fetch_ohlcv(exchange, symbol, timeframe=settings.timeframe, limit=min_ohlcv_limit)
+            confirm_ohlcv = fetch_ohlcv(
+                exchange,
+                symbol,
+                timeframe=settings.confirm_timeframe,
+                limit=confirm_limit,
+            )
+            closes = [row[4] for row in ohlcv]
+            confirm_closes = [row[4] for row in confirm_ohlcv]
+            last_close = closes[-1]
+
+            bullish, bearish, prev_fast, prev_slow, last_fast, last_slow = detect_ema_crossover(
+                closes,
+                settings.fast_ema_period,
+                settings.slow_ema_period,
+            )
+            volume_ratio = calc_volume_ratio(ohlcv, settings.volume_lookback)
+            atr_value = calc_atr(ohlcv, settings.atr_period)
+            atr_pct = (atr_value / last_close * 100) if last_close else 0.0
+            effective_min_atr_pct = settings.get_min_atr_pct(symbol)
+            confirm_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
+            confirm_close = confirm_closes[-1]
+            confirm_bullish = confirm_close > confirm_ema
+            ema_aligned = last_fast > last_slow
+            price_above_fast = last_close >= last_fast
+            ema_spread_pct = (
+                ((last_fast - last_slow) / last_slow) * 100 if last_slow else 0.0
+            )
+            effective_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
+            trend_follow_entry = (
+                settings.enable_trend_follow_entry
+                and ema_aligned
+                and ema_spread_pct >= effective_min_ema_spread_pct
+                and (
+                    not settings.trend_follow_requires_price_above_fast
+                    or price_above_fast
+                )
+            )
+            entry_signal = bullish or trend_follow_entry
+            recent_swing_low = get_recent_swing_low(ohlcv[:-1], settings.swing_lookback)
+            recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
+
+            base_free, quote_free = get_spot_balances(exchange, base, quote)
+            # 최소 주문 수량보다 작은 잔량은 즉시 정리할 수 없으므로 포지션에서 제외한다.
+            has_position = base_free >= settings.min_order_amount
+            if has_position and entry_price is None:
+                if not unrecoverable_position_warned:
+                    log(
+                        f"[{symbol}] 복구 가능한 진입가 없이 보유 포지션만 감지되었습니다. "
+                        "현재가로 임시 진입가를 만들지 않고 자동 매매를 보류합니다."
+                    )
+                    structured_logger.log_system(
+                        level="WARNING",
+                        event="position_state_unrecoverable",
+                        message="평균 진입가를 복구하지 못한 BTC 포지션을 감지해 자동 매매를 보류합니다.",
+                        symbol=symbol,
+                        context={
+                            "base_free": base_free,
+                            "quote_free": quote_free,
+                            "min_order_amount": settings.min_order_amount,
+                        },
+                    )
+                    unrecoverable_position_warned = True
+                continue
+            if not has_position:
+                unrecoverable_position_warned = False
+
+            now_ts = time.time()
+            base_cooldown_remaining = max(0.0, settings.min_trade_interval_sec - (now_ts - last_trade_at))
+            stop_loss_cooldown_remaining = max(
+                0.0,
+                settings.stop_loss_reentry_cooldown_sec - (now_ts - last_stop_loss_at),
+            )
+            profit_exit_cooldown_remaining = max(
+                0.0,
+                settings.profit_exit_reentry_cooldown_sec - (now_ts - last_profit_exit_at),
+            )
+            cooldown_remaining = max(
+                base_cooldown_remaining,
+                stop_loss_cooldown_remaining,
+                profit_exit_cooldown_remaining,
+            )
+            in_cooldown = cooldown_remaining > 0
+            low_energy_snapshot = load_low_energy_snapshot(
+                exchange_name="okx",
+                managed_symbols=load_managed_symbols("okx"),
+            )
+            low_energy_guard_active = low_energy_snapshot.active and not has_position
+            symbol_regime_snapshot = classify_symbol_regime(
+                load_latest_symbol_record(exchange_name="okx", symbol=symbol)
+            )
+            symbol_regime = symbol_regime_snapshot.regime
+            symbol_regime_blocks_entry = (
+                not has_position and symbol_regime in {"LOW_ENERGY", "OVERHEATED", "EXHAUSTION_RISK"}
+            )
+            symbol_regime_requires_fresh_cross = symbol_regime in {"BREAKOUT_ATTEMPT", "CHOPPY"}
+            effective_min_volume_ratio = settings.get_effective_min_volume_ratio(
+                symbol,
+                symbol_regime,
+            )
+            volume_filter_passed = (
+                volume_ratio is not None
+                and volume_ratio >= effective_min_volume_ratio
+            )
+            atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
+            should_alert, previous_regime = update_regime_state(
+                exchange_name="okx",
+                symbol=symbol,
+                new_regime=symbol_regime,
+            )
+            if should_alert:
+                notifier.notify_attention_required(
+                    "REGIME",
+                    build_regime_change_message(
+                        exchange_name="OKX",
+                        symbol=symbol,
+                        previous_regime=previous_regime,
+                        snapshot=symbol_regime_snapshot,
+                    ),
+                )
+            daily_loss_limit_reached = daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
+
+            log("-" * 60)
+            log(f"[{symbol}] 현재 종가: {last_close:.2f}")
+            log(
+                f"[{symbol}] EMA 상태 - 이전 {prev_fast:.2f}/{prev_slow:.2f}, 현재 {last_fast:.2f}/{last_slow:.2f}"
+            )
+            logger.log_signal(symbol, bullish, bearish)
+            log(
+                f"[{symbol}] 거래량 배수: {volume_ratio:.4f}배"
+                if volume_ratio is not None
+                else f"[{symbol}] 거래량 배수 계산 불가"
+            )
+            log(
+                f"[{symbol}] ATR: {atr_value:.2f}, ATR 비율: {atr_pct:.4f}% "
+                f"(허용 {effective_min_atr_pct:.4f}% ~ {settings.max_atr_pct:.4f}%)"
+            )
+            if low_energy_guard_active:
+                log(
+                    f"[{symbol}] 저에너지 장 감지: 평균 거래량 배수 {low_energy_snapshot.avg_volume_ratio:.3f}, "
+                    f"평균 절대 변화율 {low_energy_snapshot.avg_abs_change_pct:.4f}% 로 신규 진입을 보류합니다."
+                )
+            if symbol_regime_blocks_entry:
+                log(f"[{symbol}] 심볼 레짐 {symbol_regime} 상태라 신규 진입을 보류합니다.")
+            log(
+                f"[{symbol}] 확인 타임프레임 종가: {confirm_close:.2f}, "
+                f"확인 EMA: {confirm_ema:.2f}, 상승 추세={confirm_bullish}"
+            )
+            log(
+                f"[{symbol}] EMA 정렬 상태: aligned={ema_aligned}, "
+                f"price_above_fast={price_above_fast}, spread={ema_spread_pct:.4f}%"
+            )
+            if trend_follow_entry and not bullish:
+                log(
+                    f"[{symbol}] 신규 골든크로스는 아니지만 EMA 상승 정렬 유지 조건으로 진입 후보를 허용합니다."
+                )
+
+            if has_position and entry_price is not None:
+                highest_price_since_entry = max(
+                    highest_price_since_entry or last_close,
+                    last_close,
+                )
+                lowest_price_since_entry = min(
+                    lowest_price_since_entry or last_close,
+                    last_close,
+                )
+                stop_price, take_profit_price = build_exit_prices(
+                    entry_price=entry_price,
+                    atr_value=atr_value,
+                    recent_swing_low=recent_swing_low,
+                    recent_swing_high=recent_swing_high,
+                    min_take_profit_pct=(config["fee_rate_pct"] * 2 * 1.1),
+                    settings=settings,
+                )
+                pnl_pct = (last_close - entry_price) / entry_price * 100
+                (
+                    current_fee_quote_estimate,
+                    current_net_realized_pnl_quote,
+                    current_net_realized_pnl_pct,
+                ) = estimate_round_trip_net_pnl(
+                    entry_price=entry_price,
+                    exit_price=last_close,
+                    amount=base_free,
+                    fee_rate_pct=config["fee_rate_pct"],
+                )
+                partial_take_profit_triggered = (
+                    has_position
+                    and settings.enable_partial_take_profit
+                    and not partial_take_profit_done
+                    and take_profit_price is not None
+                    and last_close >= take_profit_price
+                )
+                if (
+                    not partial_take_profit_triggered
+                    and (not trailing_armed)
+                    and take_profit_price is not None
+                    and last_close >= take_profit_price
+                ):
+                    trailing_armed = True
+                    trailing_armed_at = time.time()
+                    trailing_activation_price = last_close
+                    log(
+                        f"[{symbol}] 익절 구간에 진입해 트레일링 익절을 활성화합니다. "
+                        f"현재 최고가: {highest_price_since_entry:.2f}"
+                    )
+                    structured_logger.log_system(
+                        level="INFO",
+                        event="trailing_armed",
+                        message="BTC 트레일링 익절이 활성화되었습니다.",
+                        symbol=symbol,
+                        context={
+                            "entry_price": entry_price,
+                            "take_profit_price": take_profit_price,
+                            "highest_price_since_entry": highest_price_since_entry,
+                            "trailing_activation_price": trailing_activation_price,
+                        },
+                    )
+                drawdown_from_high_pct = (
+                    ((highest_price_since_entry - last_close) / highest_price_since_entry) * 100
+                    if highest_price_since_entry
+                    else None
+                )
+                mfe_pct = (
+                    ((highest_price_since_entry - entry_price) / entry_price) * 100
+                    if highest_price_since_entry is not None and entry_price
+                    else None
+                )
+                mae_pct = (
+                    ((lowest_price_since_entry - entry_price) / entry_price) * 100
+                    if lowest_price_since_entry is not None and entry_price
+                    else None
+                )
+                log(
+                    f"[{symbol}] 평균 진입가: {entry_price:.2f}, 현재 수익률: {pnl_pct:.2f}%, "
+                    f"손절가: {stop_price:.2f}, 익절가: {take_profit_price:.2f}, "
+                    f"최고가: {highest_price_since_entry:.2f}, "
+                    f"최고가 대비 되돌림: {0.0 if drawdown_from_high_pct is None else drawdown_from_high_pct:.2f}%"
+                )
+                if current_net_realized_pnl_pct is not None:
+                    log(
+                        f"[{symbol}] 수수료 반영 예상 순익률: {current_net_realized_pnl_pct:.2f}% "
+                        f"(보호 익절 기준 {settings.fee_protect_min_net_pnl_pct:.2f}%)"
+                    )
+                bull_pullback_hold_active = (
+                    settings.enable_bull_pullback_hold
+                    and confirm_bullish
+                    and ema_aligned
+                    and pnl_pct is not None
+                    and pnl_pct > 0
+                    and drawdown_from_high_pct is not None
+                    and drawdown_from_high_pct <= settings.bull_pullback_tolerance_pct
+                    and ema_spread_pct >= settings.bull_pullback_min_spread_pct
+                )
+                if bull_pullback_hold_active:
+                    log(
+                        f"[{symbol}] 강한 상방 정렬 구간이라 되돌림 {drawdown_from_high_pct:.2f}% 는 "
+                        f"일시 조정으로 보고 보유를 유지합니다."
+                    )
+            else:
+                stop_price = None
+                take_profit_price = None
+                pnl_pct = None
+                current_fee_quote_estimate = None
+                current_net_realized_pnl_quote = None
+                current_net_realized_pnl_pct = None
+                partial_take_profit_triggered = False
+                bull_pullback_hold_active = False
+                drawdown_from_high_pct = None
+                mfe_pct = None
+                mae_pct = None
+                if not has_position:
+                    highest_price_since_entry = None
+                    lowest_price_since_entry = None
+                    trailing_armed = False
+                    trailing_armed_at = None
+                    trailing_activation_price = None
+                    partial_take_profit_done = False
+                    add_on_count = 0
+
+            if daily_loss_limit_reached:
+                log(f"[{symbol}] 일일 최대 손실 제한에 도달하여 신규 진입을 중단합니다.")
+                if not daily_limit_notified:
+                    notifier.notify_daily_loss_limit(
+                        "OKX-BTC",
+                        f"오늘 누적 실현 손익: {daily_realized_pnl_quote:.4f} {quote}\n"
+                        f"손실 제한: -{config['max_daily_loss_quote']:.4f} {quote}",
+                    )
+                    daily_limit_notified = True
+
+            stop_triggered = has_position and stop_price is not None and last_close <= stop_price
+            trailing_stop_triggered = (
+                has_position
+                and trailing_armed
+                and drawdown_from_high_pct is not None
+                and drawdown_from_high_pct >= settings.trailing_drawdown_pct
+            )
+            profit_protect_triggered = (
+                has_position
+                and settings.enable_fee_protect_exit
+                and current_net_realized_pnl_pct is not None
+                and current_net_realized_pnl_pct >= settings.fee_protect_min_net_pnl_pct
+                and (bearish or (not ema_aligned) or (not price_above_fast))
+                and not trailing_stop_triggered
+                and not bull_pullback_hold_active
+            )
+            trend_exit_triggered = (
+                has_position
+                and settings.exit_on_bearish_cross
+                and bearish
+                and not trailing_armed
+                and not profit_protect_triggered
+                and not bull_pullback_hold_active
+            )
+            position_ratio = settings.get_position_ratio(symbol)
+            requested_order_value = quote_free * config["risk_per_trade"] * position_ratio
+            requested_add_on_order_value = (
+                quote_free * config["risk_per_trade"] * settings.pyramid_position_ratio
+            )
+            dynamic_bonus_eligible = (
+                portfolio_allocator.settings.enable_dynamic_overweight
+                and entry_signal
+                and ema_aligned
+                and price_above_fast
+                and (
+                    volume_ratio is not None
+                    and volume_ratio >= portfolio_allocator.settings.dynamic_volume_ratio_threshold
+                )
+                and (
+                    not portfolio_allocator.settings.dynamic_require_trend_ok
+                    or confirm_bullish
+                )
+            )
+            allocation_decision = portfolio_allocator.build_buy_decision(
+                exchange=exchange,
+                symbol=symbol,
+                requested_order_value_quote=requested_order_value,
+                dynamic_bonus_eligible=dynamic_bonus_eligible,
+            )
+            add_on_allocation_decision = portfolio_allocator.build_buy_decision(
+                exchange=exchange,
+                symbol=symbol,
+                requested_order_value_quote=requested_add_on_order_value,
+                dynamic_bonus_eligible=dynamic_bonus_eligible,
+            )
+            order_value = allocation_decision.approved_order_value_quote
+            add_on_order_value = add_on_allocation_decision.approved_order_value_quote
+            estimated_entry_amount = safe_amount_to_precision(
+                exchange,
+                symbol,
+                order_value / last_close if last_close else 0.0,
+            )
+            estimated_add_on_amount = safe_amount_to_precision(
+                exchange,
+                symbol,
+                add_on_order_value / last_close if last_close else 0.0,
+            )
+            estimated_exit_amount = safe_amount_to_precision(exchange, symbol, base_free)
+
+            common_metrics = {
+                "strategy_name": "okx_btc_ema_trend",
+                "strategy_version": settings.version,
+                "symbol": symbol,
+                "timeframe": settings.timeframe,
+                "confirm_timeframe": settings.confirm_timeframe,
+                "price": last_close,
+                "prev_fast_ema": prev_fast,
+                "prev_slow_ema": prev_slow,
+                "last_fast_ema": last_fast,
+                "last_slow_ema": last_slow,
+                "ema_aligned": ema_aligned,
+                "price_above_fast": price_above_fast,
+                "ema_spread_pct": ema_spread_pct,
+                "effective_min_ema_spread_pct": effective_min_ema_spread_pct,
+                "trend_follow_entry": trend_follow_entry,
+                "entry_signal": entry_signal,
+                "volume_ratio": volume_ratio,
+                "effective_min_volume_ratio": effective_min_volume_ratio,
+                "atr_value": atr_value,
+                "atr_pct": atr_pct,
+                "effective_min_atr_pct": effective_min_atr_pct,
+                "confirm_bullish": confirm_bullish,
+                "base_free": base_free,
+                "quote_free": quote_free,
+                "position_ratio": position_ratio,
+                "has_position": has_position,
+                "daily_realized_pnl_quote": daily_realized_pnl_quote,
+                "portfolio_base_target_pct": allocation_decision.base_target_pct * 100,
+                "portfolio_effective_target_pct": allocation_decision.effective_target_pct * 100,
+                "portfolio_dynamic_bonus_pct": allocation_decision.dynamic_bonus_pct * 100,
+                "portfolio_dynamic_bonus_applied": allocation_decision.dynamic_bonus_applied,
+                "portfolio_total_budget_quote": allocation_decision.total_portfolio_quote,
+                "portfolio_current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                "portfolio_remaining_budget_quote": allocation_decision.remaining_budget_quote,
+                "pnl_pct": pnl_pct,
+                "net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
+                "bull_pullback_hold_active": bull_pullback_hold_active,
+                "bull_pullback_tolerance_pct": settings.bull_pullback_tolerance_pct,
+                "bull_pullback_min_spread_pct": settings.bull_pullback_min_spread_pct,
+                "min_order_amount": settings.min_order_amount,
+                "position_id": position_id,
+                "highest_price_since_entry": highest_price_since_entry,
+                "lowest_price_since_entry": lowest_price_since_entry,
+                "trailing_armed": trailing_armed,
+                "partial_take_profit_done": partial_take_profit_done,
+                "partial_take_profit_triggered": partial_take_profit_triggered,
+                "drawdown_from_high_pct": drawdown_from_high_pct,
+                "trailing_activation_price": trailing_activation_price,
+                "mfe_pct": mfe_pct,
+                "mae_pct": mae_pct,
+                "add_on_count": add_on_count,
+                "pyramid_add_on_enabled": settings.enable_pyramid_add_on,
+                "pyramid_trigger_profit_pct": settings.pyramid_trigger_profit_pct,
+                "pyramid_max_add_ons": settings.pyramid_max_add_ons,
+                "profit_protect_triggered": profit_protect_triggered,
+                "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
+                "low_energy_guard_active": low_energy_guard_active,
+                "low_energy_avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                "low_energy_avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                "low_energy_ready_count": low_energy_snapshot.ready_count,
+                "symbol_regime": symbol_regime,
+                "symbol_regime_blocks_entry": symbol_regime_blocks_entry,
+                "symbol_regime_requires_fresh_cross": symbol_regime_requires_fresh_cross,
+            }
+            log(
+                f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
+                f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
+                f"누적 투입 {allocation_decision.current_cost_basis_quote:.4f} {quote} | "
+                f"남은 예산 {allocation_decision.remaining_budget_quote:.4f} {quote}"
+            )
+            if allocation_decision.dynamic_bonus_applied:
+                log(
+                    f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
+                    f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
+                )
+
+            entry_steps = [
+                FunnelStep(
+                    stage="trend",
+                    passed=entry_signal,
+                    reason="no_entry_signal",
+                    actual={
+                        "bullish_signal": bullish,
+                        "trend_follow_entry": trend_follow_entry,
+                        "ema_aligned": ema_aligned,
+                        "price_above_fast": price_above_fast,
+                        "ema_spread_pct": ema_spread_pct,
+                    },
+                    required={
+                        "bullish_signal_or_trend_follow_entry": True,
+                        "min_ema_spread_pct": effective_min_ema_spread_pct,
+                    },
+                ),
+                FunnelStep(
+                    stage="position",
+                    passed=not has_position,
+                    reason="position_exists",
+                    actual={"has_position": has_position},
+                    required={"has_position": False},
+                ),
+                FunnelStep(
+                    stage="cooldown",
+                    passed=not in_cooldown,
+                    reason="cooldown_active",
+                    actual={
+                        "cooldown_remaining_sec": cooldown_remaining,
+                        "base_cooldown_remaining_sec": base_cooldown_remaining,
+                        "stop_loss_cooldown_remaining_sec": stop_loss_cooldown_remaining,
+                        "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
+                    },
+                    required={
+                        "base_min_trade_interval_sec": settings.min_trade_interval_sec,
+                        "stop_loss_reentry_cooldown_sec": settings.stop_loss_reentry_cooldown_sec,
+                        "profit_exit_reentry_cooldown_sec": settings.profit_exit_reentry_cooldown_sec,
+                        "cooldown_inactive": True,
+                    },
+                ),
+                FunnelStep(
+                    stage="market_regime",
+                    passed=not low_energy_guard_active,
+                    reason="low_energy_market",
+                    actual={
+                        "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                        "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                        "ready_count": low_energy_snapshot.ready_count,
+                    },
+                    required={"low_energy_market_inactive": True},
+                ),
+                FunnelStep(
+                    stage="symbol_regime",
+                    passed=not symbol_regime_blocks_entry,
+                    reason="symbol_regime_blocks_entry",
+                    actual={"symbol_regime": symbol_regime},
+                    required={"symbol_regime_allows_entry": True},
+                ),
+                FunnelStep(
+                    stage="regime_entry_signal",
+                    passed=(not symbol_regime_requires_fresh_cross or bullish),
+                    reason="regime_requires_fresh_cross",
+                    actual={
+                        "symbol_regime": symbol_regime,
+                        "bullish_signal": bullish,
+                    },
+                    required={"fresh_bullish_cross_required": True},
+                ),
+                FunnelStep(
+                    stage="volume",
+                    passed=volume_filter_passed,
+                    reason="volume_low" if volume_ratio is not None else "volume_data_missing",
+                    actual={"volume_ratio": volume_ratio},
+                    required={"min_volume_ratio": effective_min_volume_ratio},
+                ),
+                FunnelStep(
+                    stage="atr",
+                    passed=atr_filter_passed,
+                    reason=choose_atr_reason(
+                        atr_pct,
+                        min_value=effective_min_atr_pct,
+                        max_value=settings.max_atr_pct,
+                    ),
+                    actual={"atr_pct": atr_pct},
+                    required={
+                        "min_atr_pct": effective_min_atr_pct,
+                        "max_atr_pct": settings.max_atr_pct,
+                    },
+                ),
+                FunnelStep(
+                    stage="higher_timeframe",
+                    passed=(
+                        not settings.enable_confirm_timeframe_filter or confirm_bullish
+                    ),
+                    reason="higher_timeframe_not_bullish",
+                    actual={"confirm_bullish": confirm_bullish},
+                    required={"confirm_bullish": True},
+                ),
+                FunnelStep(
+                    stage="risk_limit",
+                    passed=not daily_loss_limit_reached,
+                    reason="daily_loss_limit_reached",
+                    actual={"daily_realized_pnl_quote": daily_realized_pnl_quote},
+                    required={
+                        "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
+                    },
+                ),
+                FunnelStep(
+                    stage="portfolio_budget",
+                    passed=allocation_decision.remaining_budget_quote > 0,
+                    reason="portfolio_budget_exhausted",
+                    actual={
+                        "current_cost_basis_quote": allocation_decision.current_cost_basis_quote,
+                        "remaining_budget_quote": allocation_decision.remaining_budget_quote,
+                    },
+                    required={
+                        "portfolio_target_budget_quote": allocation_decision.target_budget_quote,
+                    },
+                ),
+                FunnelStep(
+                    stage="order_value",
+                    passed=order_value > min_buy_order_value,
+                    reason="order_value_too_small",
+                    actual={"order_value_quote": order_value},
+                    required={"min_buy_order_value": min_buy_order_value},
+                ),
+                FunnelStep(
+                    stage="order_amount",
+                    passed=estimated_entry_amount >= settings.min_order_amount,
+                    reason="order_amount_too_small",
+                    actual={"order_amount": estimated_entry_amount},
+                    required={"min_order_amount": settings.min_order_amount},
+                ),
+            ]
+            entry_ready, _ = structured_logger.run_funnel(
+                symbol=symbol,
+                side="entry",
+                steps=entry_steps,
+                metrics=common_metrics,
+                ready_stage="buy_ready",
+                ready_reason="entry_conditions_met",
+            )
+
+            add_on_profit_ready = (
+                has_position
+                and entry_price is not None
+                and pnl_pct is not None
+                and pnl_pct >= settings.pyramid_trigger_profit_pct
+            )
+            add_on_limit_available = add_on_count < settings.pyramid_max_add_ons
+            add_on_ready = False
+            if settings.enable_pyramid_add_on:
+                add_on_ready, _ = structured_logger.run_funnel(
+                    symbol=symbol,
+                    side="entry",
+                    steps=[
+                        FunnelStep(
+                            stage="add_on_position",
+                            passed=has_position,
+                            reason="no_position",
+                            actual={"has_position": has_position},
+                            required={"has_position": True},
+                        ),
+                        FunnelStep(
+                            stage="add_on_profit",
+                            passed=add_on_profit_ready,
+                            reason="pyramid_profit_not_reached",
+                            actual={"pnl_pct": pnl_pct},
+                            required={
+                                "min_pnl_pct": settings.pyramid_trigger_profit_pct,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_limit",
+                            passed=add_on_limit_available,
+                            reason="pyramid_limit_reached",
+                            actual={"add_on_count": add_on_count},
+                            required={
+                                "max_add_ons": settings.pyramid_max_add_ons,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_trailing",
+                            passed=not trailing_armed,
+                            reason="trailing_already_armed",
+                            actual={"trailing_armed": trailing_armed},
+                            required={"trailing_armed": False},
+                        ),
+                        FunnelStep(
+                            stage="add_on_trend",
+                            passed=entry_signal,
+                            reason="no_entry_signal",
+                            actual={
+                                "bullish_signal": bullish,
+                                "trend_follow_entry": trend_follow_entry,
+                            },
+                            required={
+                                "bullish_signal_or_trend_follow_entry": True,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_cooldown",
+                            passed=not in_cooldown,
+                            reason="cooldown_active",
+                            actual={
+                                "cooldown_remaining_sec": cooldown_remaining,
+                                "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
+                            },
+                            required={"cooldown_inactive": True},
+                        ),
+                        FunnelStep(
+                            stage="add_on_volume",
+                            passed=volume_filter_passed,
+                            reason="volume_low"
+                            if volume_ratio is not None
+                            else "volume_data_missing",
+                            actual={"volume_ratio": volume_ratio},
+                            required={"min_volume_ratio": effective_min_volume_ratio},
+                        ),
+                        FunnelStep(
+                            stage="add_on_atr",
+                            passed=atr_filter_passed,
+                            reason=choose_atr_reason(
+                                atr_pct,
+                                min_value=settings.min_atr_pct,
+                                max_value=settings.max_atr_pct,
+                            ),
+                            actual={"atr_pct": atr_pct},
+                            required={
+                                "min_atr_pct": settings.min_atr_pct,
+                                "max_atr_pct": settings.max_atr_pct,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_higher_timeframe",
+                            passed=(
+                                not settings.enable_confirm_timeframe_filter
+                                or confirm_bullish
+                            ),
+                            reason="higher_timeframe_not_bullish",
+                            actual={"confirm_bullish": confirm_bullish},
+                            required={"confirm_bullish": True},
+                        ),
+                        FunnelStep(
+                            stage="add_on_risk_limit",
+                            passed=not daily_loss_limit_reached,
+                            reason="daily_loss_limit_reached",
+                            actual={
+                                "daily_realized_pnl_quote": daily_realized_pnl_quote
+                            },
+                            required={
+                                "min_daily_realized_pnl_quote": -config["max_daily_loss_quote"]
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_portfolio_budget",
+                            passed=add_on_allocation_decision.remaining_budget_quote > 0,
+                            reason="portfolio_budget_exhausted",
+                            actual={
+                                "current_cost_basis_quote": add_on_allocation_decision.current_cost_basis_quote,
+                                "remaining_budget_quote": add_on_allocation_decision.remaining_budget_quote,
+                            },
+                            required={
+                                "portfolio_target_budget_quote": add_on_allocation_decision.target_budget_quote,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="add_on_order_value",
+                            passed=add_on_order_value > min_buy_order_value,
+                            reason="order_value_too_small",
+                            actual={"order_value_quote": add_on_order_value},
+                            required={"min_buy_order_value": min_buy_order_value},
+                        ),
+                        FunnelStep(
+                            stage="add_on_order_amount",
+                            passed=estimated_add_on_amount >= settings.min_order_amount,
+                            reason="order_amount_too_small",
+                            actual={"order_amount": estimated_add_on_amount},
+                            required={"min_order_amount": settings.min_order_amount},
+                        ),
+                    ],
+                    metrics=common_metrics,
+                    ready_stage="add_on_ready",
+                    ready_reason="add_on_conditions_met",
+                    ready_extra={"entry_type": "add_on_winner"},
+                )
+
+            exit_steps = [
+                FunnelStep(
+                    stage="position",
+                    passed=has_position,
+                    reason="no_position",
+                    actual={"has_position": has_position},
+                    required={"has_position": True},
+                ),
+                FunnelStep(
+                    stage="exit_trigger",
+                    passed=(
+                        stop_triggered
+                        or partial_take_profit_triggered
+                        or profit_protect_triggered
+                        or trailing_stop_triggered
+                        or trend_exit_triggered
+                    ),
+                    reason="no_exit_signal",
+                    actual={
+                        "stop_triggered": stop_triggered,
+                        "partial_take_profit_triggered": partial_take_profit_triggered,
+                        "profit_protect_triggered": profit_protect_triggered,
+                        "trailing_stop_triggered": trailing_stop_triggered,
+                        "trend_exit_triggered": trend_exit_triggered,
+                    },
+                    required={"exit_triggered": True},
+                ),
+                FunnelStep(
+                    stage="amount",
+                    passed=estimated_exit_amount >= settings.min_order_amount,
+                    reason="sell_amount_too_small",
+                    actual={"sell_amount": estimated_exit_amount},
+                    required={"min_order_amount": settings.min_order_amount},
+                ),
+            ]
+            exit_ready, _ = structured_logger.run_funnel(
+                symbol=symbol,
+                side="exit",
+                steps=exit_steps,
+                metrics=common_metrics,
+                ready_stage="sell_ready",
+                ready_reason=(
+                    "stop_loss_triggered"
+                    if stop_triggered
+                    else "partial_take_profit_triggered"
+                    if partial_take_profit_triggered
+                    else "profit_protect_triggered"
+                    if profit_protect_triggered
+                    else "trailing_stop_triggered"
+                    if trailing_stop_triggered
+                    else "trend_exit_triggered"
+                ),
+            )
+
+            if entry_ready:
+                if order_value <= min_buy_order_value:
+                    log(f"[{symbol}] 주문 금액이 너무 작아 진입을 생략합니다.")
+                elif estimated_entry_amount < settings.min_order_amount:
+                    log(
+                        f"[{symbol}] 추정 매수 수량({estimated_entry_amount:.8f} {base})이 "
+                        f"최소 주문 수량({settings.min_order_amount:.5f} {base})보다 작아 진입을 생략합니다."
+                    )
+                else:
+                    order_value = float(f"{order_value:.8f}")
+                    structured_logger.log_strategy(
+                        symbol=symbol,
+                        side="entry",
+                        stage="order_requested",
+                        result="requested",
+                        reason="market_buy_requested",
+                        actual={"order_value_quote": order_value},
+                        metrics=common_metrics,
+                    )
+                    order_request_started_at = time.time()
+                    try:
+                        order = place_market_order_okx(
+                            exchange,
+                            symbol,
+                            "buy",
+                            order_value,
+                            tgt_ccy="quote_ccy",
+                        )
+                    except Exception as order_error:
+                        structured_logger.log_strategy(
+                            symbol=symbol,
+                            side="entry",
+                            stage="filled",
+                            result="error",
+                            reason="order_failed",
+                            actual={"order_value_quote": order_value},
+                            metrics=common_metrics,
+                            extra={
+                                "error": repr(order_error),
+                                "strategy_version": settings.version,
+                            },
+                        )
+                        structured_logger.log_system(
+                            level="WARNING",
+                            event="order_failed",
+                            message="BTC 매수 주문 요청이 실패했습니다.",
+                            symbol=symbol,
+                            context={
+                                "side": "buy",
+                                "order_value_quote": order_value,
+                                "error": repr(order_error),
+                            },
+                        )
+                        continue
+                    order_response_received_at = time.time()
+                    estimated_amount = estimated_entry_amount
+                    entry_price = last_close
+                    entry_opened_at = time.time()
+                    position_id = f"{symbol}:{int(entry_opened_at)}"
+                    highest_price_since_entry = last_close
+                    lowest_price_since_entry = last_close
+                    trailing_armed = False
+                    trailing_armed_at = None
+                    trailing_activation_price = None
+                    last_trade_at = time.time()
+                    structured_logger.log_strategy(
+                        symbol=symbol,
+                        side="entry",
+                        stage="filled",
+                        result="filled",
+                        reason="buy_filled",
+                        actual={
+                            "filled_amount": estimated_amount,
+                            "order_value_quote": order_value,
+                        },
+                        metrics={**common_metrics, "estimated_entry_price_after": entry_price},
+                    )
+                    structured_logger.log_trade_event(
+                        symbol=symbol,
+                        side="buy",
+                        reason="entry",
+                        result="filled",
+                        actual={
+                            "filled_amount": estimated_amount,
+                            "order_value_quote": order_value,
+                        },
+                        metrics={**common_metrics, "estimated_entry_price_after": entry_price},
+                    )
+                    logger.log_trade_banner(
+                        RED,
+                        f"[{symbol}] BTC EMA 전략 매수 체결",
+                        f"주문 결과: {order}",
+                    )
+                    buy_summary = summarize_order_for_notification(
+                        raw_order=order,
+                        side="buy",
+                        requested_amount=estimated_amount,
+                        requested_order_value_quote=order_value,
+                        fallback_amount=estimated_amount,
+                        fallback_order_value_quote=order_value,
+                        fallback_price=entry_price,
+                    )
+                    notifier.notify_buy_fill(
+                        "OKX-BTC",
+                        symbol,
+                        f"현재 레짐: {symbol_regime}\n"
+                        f"매수 금액: {buy_summary['executed_order_value_quote']:.8f} {quote}\n"
+                        f"매수 단가: {buy_summary['executed_price']:.2f}\n"
+                        f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
+                    )
+                    trade_history.log_fill(
+                        exchange_name="OKX",
+                        program_name="okx_btc_ema_trend_bot",
+                        strategy_version=settings.version,
+                        symbol=symbol,
+                        side="buy",
+                        reason="entry",
+                        base_currency=base,
+                        quote_currency=quote,
+                        amount=estimated_amount,
+                        order_value_quote=order_value,
+                        reference_price=last_close,
+                        estimated_entry_price=entry_price,
+                        base_free_before=base_free,
+                        quote_free_before=quote_free,
+                        remaining_base_after_estimate=base_free + estimated_amount,
+                        timeframe=settings.timeframe,
+                        ma_period=settings.slow_ema_period,
+                        position_id=position_id,
+                        leg_index=0,
+                        is_final_exit=False,
+                        request_started_at=order_request_started_at,
+                        response_received_at=order_response_received_at,
+                        requested_order_value_quote=order_value,
+                        raw_order=order,
+                        extra={
+                            "strategy_version": settings.version,
+                            "strategy": "btc_ema_trend",
+                            "entry_type": "initial_entry",
+                            "volume_ratio": volume_ratio,
+                            "atr_value": atr_value,
+                            "atr_pct": atr_pct,
+                            "confirm_bullish": confirm_bullish,
+                        },
+                    )
+                    add_on_count = 0
+
+            elif add_on_ready:
+                add_on_order_value = float(f"{add_on_order_value:.8f}")
+                structured_logger.log_strategy(
+                    symbol=symbol,
+                    side="entry",
+                    stage="order_requested",
+                    result="requested",
+                    reason="market_buy_requested",
+                    actual={"order_value_quote": add_on_order_value},
+                    metrics={**common_metrics, "entry_type": "add_on_winner"},
+                )
+                order_request_started_at = time.time()
+                try:
+                    order = place_market_order_okx(
+                        exchange,
+                        symbol,
+                        "buy",
+                        add_on_order_value,
+                        tgt_ccy="quote_ccy",
+                    )
+                except Exception as order_error:
+                    structured_logger.log_strategy(
+                        symbol=symbol,
+                        side="entry",
+                        stage="filled",
+                        result="error",
+                        reason="order_failed",
+                        actual={"order_value_quote": add_on_order_value},
+                        metrics={**common_metrics, "entry_type": "add_on_winner"},
+                        extra={
+                            "error": repr(order_error),
+                            "strategy_version": settings.version,
+                        },
+                    )
+                    structured_logger.log_system(
+                        level="WARNING",
+                        event="order_failed",
+                        message="BTC 추가매수 주문 요청이 실패했습니다.",
+                        symbol=symbol,
+                        context={
+                            "side": "buy",
+                            "order_value_quote": add_on_order_value,
+                            "error": repr(order_error),
+                        },
+                    )
+                    continue
+                order_response_received_at = time.time()
+
+                previous_amount = base_free
+                added_amount = estimated_add_on_amount
+                total_amount = previous_amount + added_amount
+                previous_entry_price = entry_price or last_close
+                if total_amount > 0:
+                    entry_price = (
+                        (previous_entry_price * previous_amount) + (last_close * added_amount)
+                    ) / total_amount
+                else:
+                    entry_price = last_close
+                add_on_count += 1
+                last_trade_at = time.time()
+                highest_price_since_entry = max(highest_price_since_entry or last_close, last_close)
+                lowest_price_since_entry = min(lowest_price_since_entry or last_close, last_close)
+
+                structured_logger.log_strategy(
+                    symbol=symbol,
+                    side="entry",
+                    stage="filled",
+                    result="filled",
+                    reason="buy_add_on_filled",
+                    actual={
+                        "filled_amount": added_amount,
+                        "order_value_quote": add_on_order_value,
+                    },
+                    metrics={
+                        **common_metrics,
+                        "entry_type": "add_on_winner",
+                        "estimated_entry_price_after": entry_price,
+                        "add_on_count_after": add_on_count,
+                    },
+                )
+                structured_logger.log_trade_event(
+                    symbol=symbol,
+                    side="buy",
+                    reason="add_on_winner",
+                    result="filled",
+                    actual={
+                        "filled_amount": added_amount,
+                        "order_value_quote": add_on_order_value,
+                    },
+                    metrics={
+                        **common_metrics,
+                        "entry_type": "add_on_winner",
+                        "estimated_entry_price_after": entry_price,
+                        "add_on_count_after": add_on_count,
+                    },
+                )
+                logger.log_trade_banner(
+                    RED,
+                    f"[{symbol}] BTC EMA 전략 추가매수 체결",
+                    f"주문 결과: {order}",
+                )
+                add_on_summary = summarize_order_for_notification(
+                    raw_order=order,
+                    side="buy",
+                    requested_amount=estimated_add_on_amount,
+                    requested_order_value_quote=add_on_order_value,
+                    fallback_amount=estimated_add_on_amount,
+                    fallback_order_value_quote=add_on_order_value,
+                    fallback_price=entry_price,
+                )
+                notifier.notify_buy_fill(
+                    "OKX-BTC",
+                    symbol,
+                    f"현재 레짐: {symbol_regime}\n"
+                    f"사유: add_on_winner\n"
+                    f"매수 금액: {add_on_summary['executed_order_value_quote']:.8f} {quote}\n"
+                    f"매수 단가: {add_on_summary['executed_price']:.2f}\n"
+                    f"체결 수량: {add_on_summary['executed_amount']:.8f} {base}\n"
+                    f"갱신 평균 진입가: {entry_price:.2f}",
+                )
+                trade_history.log_fill(
+                    exchange_name="OKX",
+                    program_name="okx_btc_ema_trend_bot",
+                    strategy_version=settings.version,
+                    symbol=symbol,
+                    side="buy",
+                    reason="add_on_winner",
+                    base_currency=base,
+                    quote_currency=quote,
+                    amount=added_amount,
+                    order_value_quote=add_on_order_value,
+                    reference_price=last_close,
+                    estimated_entry_price=entry_price,
+                    base_free_before=base_free,
+                    quote_free_before=quote_free,
+                    remaining_base_after_estimate=total_amount,
+                    timeframe=settings.timeframe,
+                    ma_period=settings.slow_ema_period,
+                    position_id=position_id,
+                    leg_index=add_on_count,
+                    is_final_exit=False,
+                    request_started_at=order_request_started_at,
+                    response_received_at=order_response_received_at,
+                    requested_order_value_quote=add_on_order_value,
+                    raw_order=order,
+                    extra={
+                        "strategy_version": settings.version,
+                        "strategy": "btc_ema_trend",
+                        "entry_type": "add_on_winner",
+                        "previous_entry_price": previous_entry_price,
+                        "updated_entry_price": entry_price,
+                        "add_on_count_after": add_on_count,
+                        "volume_ratio": volume_ratio,
+                        "atr_value": atr_value,
+                        "atr_pct": atr_pct,
+                        "confirm_bullish": confirm_bullish,
+                    },
+                )
+
+            elif exit_ready:
+                partial_take_profit_full_exit = False
+                if partial_take_profit_triggered:
+                    partial_amount = safe_amount_to_precision(
+                        exchange,
+                        symbol,
+                        base_free * settings.partial_take_profit_ratio,
+                    )
+                    remaining_after_partial = max(base_free - partial_amount, 0.0)
+                    if (
+                        partial_amount < settings.min_order_amount
+                        or remaining_after_partial < settings.min_order_amount
+                    ):
+                        partial_take_profit_full_exit = True
+                        amount = estimated_exit_amount
+                    else:
+                        amount = partial_amount
+                else:
+                    amount = estimated_exit_amount
+                if amount >= settings.min_order_amount:
+                    if stop_triggered:
+                        sell_reason = "stop_loss"
+                        notify_fn = notifier.notify_stop_loss_fill
+                        title = "BTC EMA 전략 손절 체결"
+                    elif partial_take_profit_triggered:
+                        sell_reason = "partial_take_profit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = (
+                            "BTC EMA 전략 부분 익절 체결"
+                            if not partial_take_profit_full_exit
+                            else "BTC EMA 전략 전량 익절 체결"
+                        )
+                    elif profit_protect_triggered:
+                        sell_reason = "profit_protect_take_profit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = "BTC EMA 전략 순익 보호 익절 체결"
+                    elif trailing_stop_triggered:
+                        sell_reason = "trailing_take_profit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = "BTC EMA 전략 트레일링 익절 체결"
+                    else:
+                        sell_reason = "trend_exit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = "BTC EMA 전략 추세 종료 청산"
+
+                    structured_logger.log_strategy(
+                        symbol=symbol,
+                        side="exit",
+                        stage="order_requested",
+                        result="requested",
+                        reason="market_sell_requested",
+                        actual={"sell_amount": amount},
+                        metrics=common_metrics,
+                    )
+                    order_request_started_at = time.time()
+                    try:
+                        order = place_market_order_okx(
+                            exchange,
+                            symbol,
+                            "sell",
+                            amount,
+                            tgt_ccy="base_ccy",
+                        )
+                    except Exception as order_error:
+                        structured_logger.log_strategy(
+                            symbol=symbol,
+                            side="exit",
+                            stage="filled",
+                            result="error",
+                            reason="order_failed",
+                            actual={"sell_amount": amount},
+                            metrics=common_metrics,
+                            extra={
+                                "error": repr(order_error),
+                                "strategy_version": settings.version,
+                            },
+                        )
+                        structured_logger.log_system(
+                            level="WARNING",
+                            event="order_failed",
+                            message="BTC 매도 주문 요청이 실패했습니다.",
+                            symbol=symbol,
+                            context={
+                                "side": "sell",
+                                "sell_amount": amount,
+                                "error": repr(order_error),
+                            },
+                        )
+                        continue
+                    order_response_received_at = time.time()
+                    realized_pnl_pct = 0.0
+                    realized_pnl_quote = 0.0
+                    fee_quote_estimate = None
+                    net_realized_pnl_quote = None
+                    net_realized_pnl_pct = None
+                    holding_seconds = None
+                    trailing_armed_seconds = None
+                    activation_to_exit_seconds = None
+                    trailing_armed_at_iso = (
+                        datetime.fromtimestamp(trailing_armed_at).astimezone().isoformat()
+                        if trailing_armed_at is not None
+                        else None
+                    )
+                    if entry_opened_at is not None:
+                        holding_seconds = max(0.0, time.time() - entry_opened_at)
+                    if entry_opened_at is not None and trailing_armed_at is not None:
+                        trailing_armed_seconds = max(0.0, trailing_armed_at - entry_opened_at)
+                    if trailing_armed_at is not None:
+                        activation_to_exit_seconds = max(0.0, time.time() - trailing_armed_at)
+                    if entry_price:
+                        realized_pnl_pct = (last_close - entry_price) / entry_price * 100
+                        realized_pnl_quote = (last_close - entry_price) * amount
+                        (
+                            fee_quote_estimate,
+                            net_realized_pnl_quote,
+                            net_realized_pnl_pct,
+                        ) = estimate_round_trip_net_pnl(
+                            entry_price=entry_price,
+                            exit_price=last_close,
+                            amount=amount,
+                            fee_rate_pct=config["fee_rate_pct"],
+                            realized_pnl_quote=realized_pnl_quote,
+                        )
+                        daily_realized_pnl_quote += realized_pnl_quote
+                    if stop_triggered:
+                        last_stop_loss_at = time.time()
+                    elif sell_reason in {
+                        "trailing_take_profit",
+                        "profit_protect_take_profit",
+                        "partial_take_profit",
+                    }:
+                        last_profit_exit_at = time.time()
+                    last_trade_at = time.time()
+                    if sell_reason == "partial_take_profit" and not partial_take_profit_full_exit:
+                        partial_take_profit_done = True
+                        if not trailing_armed:
+                            trailing_armed = True
+                            trailing_armed_at = time.time()
+                            trailing_activation_price = highest_price_since_entry or last_close
+                    structured_logger.log_strategy(
+                        symbol=symbol,
+                        side="exit",
+                        stage="filled",
+                        result="filled",
+                        reason=f"{sell_reason}_filled",
+                        actual={
+                            "filled_amount": amount,
+                            "realized_pnl_pct": realized_pnl_pct,
+                            "realized_pnl_quote": realized_pnl_quote,
+                        },
+                        metrics={**common_metrics, "holding_seconds": holding_seconds},
+                    )
+                    structured_logger.log_trade_event(
+                        symbol=symbol,
+                        side="sell",
+                        reason=sell_reason,
+                        result="filled",
+                        actual={
+                            "filled_amount": amount,
+                            "realized_pnl_pct": realized_pnl_pct,
+                            "realized_pnl_quote": realized_pnl_quote,
+                        },
+                        metrics={**common_metrics, "holding_seconds": holding_seconds},
+                    )
+                    logger.log_trade_banner(
+                        BLUE,
+                        f"[{symbol}] {title}",
+                        f"주문 결과: {order} | 수익률={realized_pnl_pct:.2f}%",
+                    )
+                    sell_summary = summarize_order_for_notification(
+                        raw_order=order,
+                        side="sell",
+                        requested_amount=amount,
+                        requested_order_value_quote=amount * last_close,
+                        fallback_amount=amount,
+                        fallback_order_value_quote=amount * last_close,
+                        fallback_price=last_close,
+                    )
+                    notify_fn(
+                        "OKX-BTC",
+                        symbol,
+                        f"현재 레짐: {symbol_regime}\n"
+                        f"사유: {sell_reason}\n"
+                        f"매도 금액: {sell_summary['executed_order_value_quote']:.4f} {quote}\n"
+                        f"매도 단가: {sell_summary['executed_price']:.2f}\n"
+                        f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
+                        f"수익률: {realized_pnl_pct:.2f}%\n"
+                        f"실현 손익: {realized_pnl_quote:.4f} {quote}",
+                    )
+                    trade_history.log_fill(
+                        exchange_name="OKX",
+                        program_name="okx_btc_ema_trend_bot",
+                        strategy_version=settings.version,
+                        symbol=symbol,
+                        side="sell",
+                        reason=sell_reason,
+                        base_currency=base,
+                        quote_currency=quote,
+                        amount=amount,
+                        order_value_quote=amount * last_close,
+                        reference_price=last_close,
+                        estimated_entry_price=entry_price,
+                        realized_pnl_pct=realized_pnl_pct,
+                        realized_pnl_quote=realized_pnl_quote,
+                        daily_realized_pnl_quote_after=daily_realized_pnl_quote,
+                        base_free_before=base_free,
+                        quote_free_before=quote_free,
+                        remaining_base_after_estimate=0.0,
+                        timeframe=settings.timeframe,
+                        ma_period=settings.slow_ema_period,
+                        position_id=position_id,
+                        leg_index=1,
+                        is_final_exit=(sell_reason != "partial_take_profit" or partial_take_profit_full_exit),
+                        holding_seconds=holding_seconds,
+                        fee_rate_pct=config["fee_rate_pct"],
+                        fee_quote_estimate=fee_quote_estimate,
+                        net_realized_pnl_quote=net_realized_pnl_quote,
+                        net_realized_pnl_pct=net_realized_pnl_pct,
+                        highest_price_since_entry=highest_price_since_entry,
+                        lowest_price_since_entry=lowest_price_since_entry,
+                        mfe_pct=mfe_pct,
+                        mae_pct=mae_pct,
+                        drawdown_from_high_pct=drawdown_from_high_pct,
+                        trailing_armed=trailing_armed,
+                        trailing_armed_at=trailing_armed_at_iso,
+                        trailing_activation_price=trailing_activation_price,
+                        trailing_armed_seconds=trailing_armed_seconds,
+                        activation_to_exit_seconds=activation_to_exit_seconds,
+                        request_started_at=order_request_started_at,
+                        response_received_at=order_response_received_at,
+                        requested_amount=amount,
+                        raw_order=order,
+                        extra={
+                            "strategy_version": settings.version,
+                            "strategy": "btc_ema_trend",
+                            "volume_ratio": volume_ratio,
+                            "atr_value": atr_value,
+                            "atr_pct": atr_pct,
+                            "confirm_bullish": confirm_bullish,
+                            "stop_price": stop_price,
+                            "take_profit_price": take_profit_price,
+                            "partial_take_profit_done": partial_take_profit_done,
+                            "partial_take_profit_triggered": partial_take_profit_triggered,
+                            "partial_take_profit_full_exit": partial_take_profit_full_exit,
+                            "partial_take_profit_ratio": settings.partial_take_profit_ratio,
+                            "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
+                            "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
+                            "profit_protect_triggered": profit_protect_triggered,
+                            "highest_price_since_entry": highest_price_since_entry,
+                            "trailing_armed": trailing_armed,
+                            "drawdown_from_high_pct": drawdown_from_high_pct,
+                            "trend_exit_triggered": trend_exit_triggered,
+                            "holding_seconds": holding_seconds,
+                        },
+                    )
+                    log(
+                        f"[{symbol}] 실현 손익: {realized_pnl_quote:.4f} {quote} | "
+                        f"오늘 누적 실현 손익: {daily_realized_pnl_quote:.4f} {quote}"
+                    )
+                    if sell_reason != "partial_take_profit" or partial_take_profit_full_exit:
+                        entry_price = None
+                        entry_opened_at = None
+                        position_id = None
+                        highest_price_since_entry = None
+                        lowest_price_since_entry = None
+                        trailing_armed = False
+                        trailing_armed_at = None
+                        trailing_activation_price = None
+                        partial_take_profit_done = False
+                        add_on_count = 0
+                else:
+                    log(
+                        f"[{symbol}] 추정 매도 수량({amount:.8f} {base})이 "
+                        f"최소 주문 수량({settings.min_order_amount:.5f} {base})보다 작아 청산을 생략합니다."
+                    )
+            else:
+                log(f"[{symbol}] BTC EMA 전략 조건에 해당하지 않아 대기합니다.")
+
+        except Exception as e:
+            log(f"[{symbol}] 에러 발생: {repr(e)}")
+            log(traceback.format_exc().rstrip())
+            structured_logger.log_system(
+                level="ERROR",
+                event="loop_error",
+                message="BTC 전략 루프 중 예외가 발생했습니다.",
+                symbol=symbol,
+                context={"error": repr(e)},
+            )
+            notifier.notify_error_message("OKX-BTC", symbol, repr(e))
+
+        time.sleep(settings.loop_interval_sec)
+
+
+if __name__ == "__main__":
+    run_bot()
