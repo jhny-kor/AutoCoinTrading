@@ -1,5 +1,6 @@
 """
 수정 요약
+- 배치 실행 전 오래된 로그 압축/잔재 폴더 정리를 먼저 수행해 7일 초과 structured 로그 폴더가 자동으로 정리되도록 연결
 - snapshot 도 기간에 맞춰 fetch 범위를 자동 확장할 수 있도록 보강해 기준선 스냅샷과 주간 배치의 비교 조건을 맞추도록 개선
 - weekly 기본 fetch 범위를 타임프레임과 일수에 맞춰 자동 확장하고, 배치 요약에 실제 데이터 커버 구간과 표본 부족 상태 플래그를 함께 남기도록 보강
 - 관리 심볼 기준 주간 배치 백테스트와 설정 변경 전후 비교를 한 번에 돌리는 러너를 추가
@@ -38,6 +39,7 @@ from backtest_replay import (
     write_jsonl,
 )
 from compare_backtest_to_live import build_comparison_payload, save_comparison_payload
+from log_archive_manager import run_archive_maintenance
 from strategy_settings import load_managed_symbols
 
 
@@ -377,6 +379,14 @@ def collect_result_summaries(root: Path) -> dict[str, dict[str, Any]]:
 
 def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until: str | None) -> int:
     """배치 실행 공통 본문."""
+    maintenance = run_archive_maintenance(keep_days=7)
+    if maintenance.groups or maintenance.removed_dirs or maintenance.removed_files:
+        print(
+            "[로그 정리] "
+            f"압축 묶음 {len(maintenance.groups)}개, "
+            f"잔재 파일 {maintenance.removed_files}개, "
+            f"빈 폴더 {maintenance.removed_dirs}개 정리"
+        )
     targets = resolve_targets(args)
     if not targets:
         raise ValueError("실행 대상 심볼이 없습니다.")
