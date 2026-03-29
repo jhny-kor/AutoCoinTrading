@@ -176,6 +176,22 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 즉 운영 흐름은 `항상 실행 = start all`, `상태 확인 = 텔레그램/ status`, `정기 분석 = analyze_* 스크립트`로 생각하시면 됩니다.
 
+## 개발 테스트
+
+- 전체 개발 테스트: `.venv/bin/python -m unittest discover -s tests -v`
+- 현재 포함 테스트
+  - 알트 신호 계산
+  - 알트 청산 보호 계산
+  - BTC 포지션 평가
+  - 상태 복구
+
+## 운영 헬스체크
+
+- 실행: `.venv/bin/python tools/healthcheck.py`
+- JSON 출력: `.venv/bin/python tools/healthcheck.py --json`
+
+헬스체크는 현재 관리 대상 프로세스 PID, 최신 로그 갱신 시각, 분석 로그/구조화 로그 최근 파일을 기준으로 기본 운영 상태를 점검합니다.
+
 ## 포트폴리오 배분
 
 현재 포트폴리오 배분은 `평가금액 강제 리밸런싱`이 아니라, `신규 매수 허용 금액 제한` 방식으로 동작합니다.
