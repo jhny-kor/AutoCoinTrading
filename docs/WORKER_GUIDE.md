@@ -87,11 +87,25 @@
 - 실제 값 반영: [`.env.example`](/Users/plo/Documents/auto_coin_bot/.env.example), [`.env`](/Users/plo/Documents/auto_coin_bot/.env)
 - 로더 확인: [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py), [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
 
+세부 순서:
+1. 최근 실거래와 백테스트 비교를 먼저 확인합니다.
+2. 바꿀 값이 알트 공통인지, BTC 전용인지 구분합니다.
+3. `.env.example` 와 실제 `.env` 를 같이 갱신합니다.
+4. 로더가 해당 키를 실제로 읽는지 확인합니다.
+5. 변경 근거는 `docs/STRATEGY_DECISIONS.md`, 현재 운영 방향은 `docs/PLANS.md`에 남깁니다.
+
 ### 진입/청산 로직 변경
 
 - 알트: [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py), [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
 - BTC: [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py), [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
 - 공통 계산: [core/strategy](/Users/plo/Documents/auto_coin_bot/core/strategy), [core/risk](/Users/plo/Documents/auto_coin_bot/core/risk)
+
+세부 순서:
+1. 먼저 어느 거래소/전략 파일에서 실제 조건문을 쓰는지 찾습니다.
+2. 같은 규칙이 양 거래소 공통인지 확인합니다.
+3. 공통화 가능한 계산은 `core/strategy` 또는 `core/risk` 로 내릴지 먼저 판단합니다.
+4. 변경 후 `trade_history_logger.py` 와 `structured_log_manager.py` 에 남는 로그 필드가 부족하지 않은지 확인합니다.
+5. 실거래 영향을 주는 경우 최근 로그 해석과 기대 효과를 문서에 남깁니다.
 
 ### 업비트/OKX 주문 지연 문제
 
@@ -99,11 +113,61 @@
 - OKX: [core/execution/okx.py](/Users/plo/Documents/auto_coin_bot/core/execution/okx.py)
 - 체결 품질 확인: [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
 
+세부 순서:
+1. `trade_history.jsonl` 의 `api_latency_ms`, `exchange_ack_latency_ms`, `fill_ratio`, `slippage_bps` 를 먼저 확인합니다.
+2. 지연이 주문 응답 자체인지, 주문 전후 조회 부하인지 구분합니다.
+3. 재시도, 타임아웃, 캐시, websocket 대체 중 어느 층의 문제인지 먼저 정합니다.
+4. 주문 직후 상태가 바뀌는 경로면 캐시 무효화까지 같이 넣습니다.
+5. 변경 후 최소한 `py_compile` 과 최근 체결 로그 확인 기준을 같이 남깁니다.
+
 ### 로그/백테스트/비교
 
 - 로그 구조: [structured_log_manager.py](/Users/plo/Documents/auto_coin_bot/structured_log_manager.py), [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
 - 백테스트 실행: [tools/backtest_replay.py](/Users/plo/Documents/auto_coin_bot/tools/backtest_replay.py), [tools/backtest_report_runner.py](/Users/plo/Documents/auto_coin_bot/tools/backtest_report_runner.py)
 - 실거래 비교: [reporting/compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/reporting/compare_backtest_to_live.py)
+
+세부 순서:
+1. 먼저 비교 대상 기간을 명확히 정합니다.
+2. 가능하면 같은 기간의 실거래와 백테스트를 맞춥니다.
+3. 손절 분석이면 `MFE`, `MAE`, 보유시간, 종료 사유를 같이 봅니다.
+4. 수익 확대 분석이면 `MFE 대비 실현 순익률` 을 같이 봅니다.
+5. 최종 결론은 “손절 방지용”과 “수익 확대용”을 분리해 적습니다.
+
+### 문서 정리
+
+- 운영 기준: [README.md](/Users/plo/Documents/auto_coin_bot/README.md)
+- 현재 계획: [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md)
+- 변경 근거: [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
+- 모듈 안내: [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)
+
+세부 순서:
+1. 현재 상태를 바꿨으면 `docs/PLANS.md`를 갱신합니다.
+2. 왜 바꿨는지 근거가 있으면 `docs/STRATEGY_DECISIONS.md`를 갱신합니다.
+3. 파일 역할이 바뀌었으면 `docs/MODULE_GUIDE.md`를 갱신합니다.
+4. 사용자 관점 실행 흐름이 바뀌었으면 `README.md`를 갱신합니다.
+
+### 운영 재기동
+
+- 프로세스 상태/재기동: [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)
+- launchd 관련 파일: [launchd](/Users/plo/Documents/auto_coin_bot/launchd)
+
+세부 순서:
+1. 현재 실행 상태를 먼저 확인합니다.
+2. 설정 변경이 크면 `stop all` 후 `start all` 로 재기동합니다.
+3. 일부 프로세스만 남으면 개별 `stop --force` 로 정리합니다.
+4. 재기동 후 PID 와 실행시간을 다시 확인합니다.
+5. 설정 반영 여부는 최신 로그 첫 구간에서 확인합니다.
+
+### 테스트와 검증
+
+- 단위 테스트: [tests](/Users/plo/Documents/auto_coin_bot/tests)
+- 빠른 문법 확인: `py_compile`
+
+세부 순서:
+1. 수정 범위가 좁으면 `python3 -m py_compile ...` 를 우선 돌립니다.
+2. 계산 로직을 바꿨으면 관련 테스트를 찾습니다.
+3. 백테스트 툴을 건드렸으면 최소한 최근 결과 파일이 정상 저장되는지 봅니다.
+4. 주문/로그 구조를 바꿨으면 새 필드가 실제 로그에 찍히는지 확인합니다.
 
 ## 5. 지금 기준 핵심 포인트
 
@@ -119,8 +183,34 @@
 
 ## 6. 작업 후 체크리스트
 
-- `.env.example` 도 함께 갱신했는지 확인
+### 공통 체크
+
+- `.env` 와 `.env.example` 반영이 같이 되었는지 확인
 - 수정한 소스 최상단 `수정 요약` 주석을 갱신했는지 확인
 - 한글 설명 주석이 필요한 부분은 한글로 적었는지 확인
-- `py_compile` 또는 관련 테스트로 문법을 확인했는지 확인
-- 문서 반영이 필요하면 `docs/STRATEGY_DECISIONS.md`, `docs/PLANS.md`를 함께 갱신했는지 확인
+- 문서 반영이 필요한지 확인
+
+### 전략/설정 변경 체크
+
+- 알트/BTC 양쪽에 같은 구조로 반영해야 할 내용이 빠지지 않았는지 확인
+- 실제 로더가 새 키를 읽는지 확인
+- 손절 방지용인지, 수익 확대용인지 목적을 분리해 기록했는지 확인
+
+### 실행/지연 변경 체크
+
+- 재시도, 타임아웃, 캐시가 주문 흐름을 망치지 않는지 확인
+- 주문 직후 캐시 무효화가 필요한 경로에 빠짐없이 들어갔는지 확인
+- 실행 품질 로그 필드가 그대로 남는지 확인
+
+### 검증 체크
+
+- `py_compile` 또는 관련 테스트를 돌렸는지 확인
+- 필요하면 `bot_manager.py status` 로 재기동 상태를 확인
+- 백테스트/리포트 변경이면 결과 파일 생성까지 확인
+
+### 문서 체크
+
+- 변경 근거는 `docs/STRATEGY_DECISIONS.md`
+- 현재 운영 방향은 `docs/PLANS.md`
+- 작업자 안내는 `docs/WORKER_GUIDE.md`
+- 모듈 역할 변화는 `docs/MODULE_GUIDE.md`

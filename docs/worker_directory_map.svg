@@ -1,103 +1,140 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f6fbff"/>
+      <stop offset="100%" stop-color="#eef4f8"/>
+    </linearGradient>
+    <linearGradient id="root" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#163a5b"/>
+      <stop offset="100%" stop-color="#2c658f"/>
+    </linearGradient>
+    <linearGradient id="cardA" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f5fbff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#9db3c3" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
   <style>
-    .title { font: 700 34px Arial, sans-serif; fill: #17324d; }
-    .subtitle { font: 500 16px Arial, sans-serif; fill: #49637a; }
-    .box { fill: #f8fbff; stroke: #7aa6c9; stroke-width: 2; rx: 18; ry: 18; }
-    .root { fill: #e8f3ff; stroke: #3e7fb1; stroke-width: 3; rx: 20; ry: 20; }
-    .label { font: 700 20px Arial, sans-serif; fill: #17324d; }
-    .text { font: 500 15px Arial, sans-serif; fill: #2c465d; }
-    .line { stroke: #7aa6c9; stroke-width: 2.5; fill: none; }
+    .title { font: 700 34px Arial, sans-serif; fill: #15324a; }
+    .subtitle { font: 500 16px Arial, sans-serif; fill: #5a7184; }
+    .rootBox { fill: url(#root); rx: 24; ry: 24; filter: url(#shadow); }
+    .card { fill: url(#cardA); stroke: #9ab6cb; stroke-width: 2; rx: 22; ry: 22; filter: url(#shadow); }
+    .cardTitle { font: 700 22px Arial, sans-serif; fill: #14314a; }
+    .cardSub { font: 600 14px Arial, sans-serif; fill: #4d667b; }
+    .item { font: 500 15px Arial, sans-serif; fill: #29475d; }
+    .rootTitle { font: 700 28px Arial, sans-serif; fill: #ffffff; }
+    .rootSub { font: 500 16px Arial, sans-serif; fill: #dbeaf5; }
+    .line { stroke: #87a8bf; stroke-width: 2.5; fill: none; }
+    .badge { fill: #dfeef8; rx: 12; ry: 12; }
+    .badgeText { font: 700 13px Arial, sans-serif; fill: #2e5876; }
+    .foot { font: 500 15px Arial, sans-serif; fill: #537086; }
   </style>
 
-  <rect x="0" y="0" width="1600" height="980" fill="#ffffff"/>
-  <text x="60" y="60" class="title">Auto Coin Bot Directory Map</text>
-  <text x="60" y="90" class="subtitle">Worker view: where to read first and what each directory owns</text>
+  <rect x="0" y="0" width="1600" height="980" fill="url(#bg)"/>
 
-  <rect x="580" y="120" width="440" height="92" class="root"/>
-  <text x="620" y="160" class="label">auto_coin_bot/</text>
-  <text x="620" y="190" class="text">runtime + strategy + docs + reports</text>
+  <text x="60" y="62" class="title">Auto Coin Bot 작업자 디렉토리 맵</text>
+  <text x="60" y="92" class="subtitle">어디를 먼저 보고, 어떤 폴더가 무엇을 맡는지 한눈에 보는 구조도</text>
 
-  <path d="M800 212 L800 260" class="line"/>
-  <path d="M800 260 L250 260 L250 305" class="line"/>
-  <path d="M800 260 L540 260 L540 305" class="line"/>
-  <path d="M800 260 L800 305" class="line"/>
-  <path d="M800 260 L1060 260 L1060 305" class="line"/>
-  <path d="M800 260 L1350 260 L1350 305" class="line"/>
+  <rect x="560" y="125" width="480" height="98" class="rootBox"/>
+  <text x="610" y="164" class="rootTitle">auto_coin_bot/</text>
+  <text x="610" y="195" class="rootSub">실행, 전략, 문서, 로그, 리포트가 함께 있는 운영 루트</text>
 
-  <rect x="80" y="305" width="340" height="185" class="box"/>
-  <text x="110" y="340" class="label">run/</text>
-  <text x="110" y="372" class="text">thin entrypoints used by bot_manager</text>
-  <text x="110" y="402" class="text">- ma_crossover_bot.py</text>
-  <text x="110" y="428" class="text">- upbit_ma_crossover_bot.py</text>
-  <text x="110" y="454" class="text">- okx_btc_ema_trend_bot.py</text>
-  <text x="110" y="480" class="text">- upbit_btc_ema_trend_bot.py</text>
+  <path d="M800 223 L800 268" class="line"/>
+  <path d="M800 268 L230 268 L230 315" class="line"/>
+  <path d="M800 268 L520 268 L520 315" class="line"/>
+  <path d="M800 268 L800 315" class="line"/>
+  <path d="M800 268 L1080 268 L1080 315" class="line"/>
+  <path d="M800 268 L1370 268 L1370 315" class="line"/>
 
-  <rect x="450" y="305" width="340" height="185" class="box"/>
-  <text x="480" y="340" class="label">core/</text>
-  <text x="480" y="372" class="text">shared logic layer</text>
-  <text x="480" y="402" class="text">- execution/ exchange helpers</text>
-  <text x="480" y="428" class="text">- strategy/ signal logic</text>
-  <text x="480" y="454" class="text">- risk/ exit and allocation</text>
-  <text x="480" y="480" class="text">- positions/ lifecycle and guards</text>
+  <rect x="70" y="315" width="320" height="220" class="card"/>
+  <rect x="95" y="336" width="72" height="24" class="badge"/>
+  <text x="110" y="353" class="badgeText">실행</text>
+  <text x="95" y="388" class="cardTitle">run/</text>
+  <text x="95" y="416" class="cardSub">봇과 수집기 실행 진입점</text>
+  <text x="95" y="448" class="item">- bot_manager가 직접 띄우는 스크립트</text>
+  <text x="95" y="474" class="item">- ma / upbit_ma / okx_btc / upbit_btc</text>
+  <text x="95" y="500" class="item">- analysis_log_collector</text>
+  <text x="95" y="526" class="item">- telegram_command_listener</text>
 
-  <rect x="800" y="305" width="340" height="185" class="box"/>
-  <text x="830" y="340" class="label">settings/</text>
-  <text x="830" y="372" class="text">env-backed config loaders</text>
-  <text x="830" y="402" class="text">- strategy_settings.py</text>
-  <text x="830" y="428" class="text">- btc_trend_settings.py</text>
-  <text x="830" y="454" class="text">- market_regime_guard.py</text>
-  <text x="830" y="480" class="text">- portfolio_allocator.py</text>
+  <rect x="430" y="315" width="320" height="220" class="card"/>
+  <rect x="455" y="336" width="72" height="24" class="badge"/>
+  <text x="470" y="353" class="badgeText">공통</text>
+  <text x="455" y="388" class="cardTitle">core/</text>
+  <text x="455" y="416" class="cardSub">중복 로직을 모아둔 계산층</text>
+  <text x="455" y="448" class="item">- execution: 거래소 호출/재시도/캐시</text>
+  <text x="455" y="474" class="item">- strategy: 진입/청산 계산</text>
+  <text x="455" y="500" class="item">- risk: 배분, 보호청산, 제한</text>
+  <text x="455" y="526" class="item">- positions: 상태 복구/가드</text>
 
-  <rect x="1150" y="305" width="340" height="185" class="box"/>
-  <text x="1180" y="340" class="label">docs/</text>
-  <text x="1180" y="372" class="text">current operating docs</text>
-  <text x="1180" y="402" class="text">- WORKER_GUIDE.md</text>
-  <text x="1180" y="428" class="text">- PLANS.md</text>
-  <text x="1180" y="454" class="text">- STRATEGY_DECISIONS.md</text>
-  <text x="1180" y="480" class="text">- MODULE_GUIDE.md</text>
+  <rect x="790" y="315" width="320" height="220" class="card"/>
+  <rect x="815" y="336" width="72" height="24" class="badge"/>
+  <text x="830" y="353" class="badgeText">설정</text>
+  <text x="815" y="388" class="cardTitle">settings/</text>
+  <text x="815" y="416" class="cardSub">.env 값을 구조체로 읽는 곳</text>
+  <text x="815" y="448" class="item">- strategy_settings.py</text>
+  <text x="815" y="474" class="item">- btc_trend_settings.py</text>
+  <text x="815" y="500" class="item">- market_regime_guard.py</text>
+  <text x="815" y="526" class="item">- portfolio_allocator.py</text>
 
-  <rect x="80" y="560" width="340" height="260" class="box"/>
-  <text x="110" y="595" class="label">root strategy files</text>
-  <text x="110" y="627" class="text">real bot bodies live here</text>
-  <text x="110" y="657" class="text">- ma_crossover_bot.py</text>
-  <text x="110" y="683" class="text">- upbit_ma_crossover_bot.py</text>
-  <text x="110" y="709" class="text">- okx_btc_ema_trend_bot.py</text>
-  <text x="110" y="735" class="text">- upbit_btc_ema_trend_bot.py</text>
-  <text x="110" y="761" class="text">also: bot_manager.py, trade_history_logger.py</text>
-  <text x="110" y="787" class="text">and structured_log_manager.py</text>
+  <rect x="1150" y="315" width="320" height="220" class="card"/>
+  <rect x="1175" y="336" width="72" height="24" class="badge"/>
+  <text x="1190" y="353" class="badgeText">문서</text>
+  <text x="1175" y="388" class="cardTitle">docs/</text>
+  <text x="1175" y="416" class="cardSub">작업 기준과 변경 근거 문서</text>
+  <text x="1175" y="448" class="item">- WORKER_GUIDE.md</text>
+  <text x="1175" y="474" class="item">- PLANS.md</text>
+  <text x="1175" y="500" class="item">- STRATEGY_DECISIONS.md</text>
+  <text x="1175" y="526" class="item">- MODULE_GUIDE.md</text>
 
-  <rect x="450" y="560" width="340" height="260" class="box"/>
-  <text x="480" y="595" class="label">tools/</text>
-  <text x="480" y="627" class="text">batch and maintenance tools</text>
-  <text x="480" y="657" class="text">- backtest_replay.py</text>
-  <text x="480" y="683" class="text">- backtest_report_runner.py</text>
-  <text x="480" y="709" class="text">- analysis_log_collector.py</text>
-  <text x="480" y="735" class="text">- log_archive_manager.py</text>
-  <text x="480" y="761" class="text">- healthcheck.py</text>
+  <path d="M230 535 L230 585" class="line"/>
+  <path d="M590 535 L590 585" class="line"/>
+  <path d="M950 535 L950 585" class="line"/>
+  <path d="M1310 535 L1310 585" class="line"/>
 
-  <rect x="800" y="560" width="340" height="260" class="box"/>
-  <text x="830" y="595" class="label">reporting/</text>
-  <text x="830" y="627" class="text">analysis and comparison bodies</text>
-  <text x="830" y="657" class="text">- analyze_logs.py</text>
-  <text x="830" y="683" class="text">- analyze_strategy_logs.py</text>
-  <text x="830" y="709" class="text">- compare_backtest_to_live.py</text>
-  <text x="830" y="735" class="text">- telegram_command_listener.py</text>
-  <text x="830" y="761" class="text">- telegram_notifier.py</text>
+  <rect x="70" y="585" width="320" height="250" class="card"/>
+  <rect x="95" y="606" width="96" height="24" class="badge"/>
+  <text x="111" y="623" class="badgeText">전략 본체</text>
+  <text x="95" y="658" class="cardTitle">루트 전략 파일</text>
+  <text x="95" y="686" class="cardSub">실제 매매 루프가 있는 핵심 파일</text>
+  <text x="95" y="718" class="item">- ma_crossover_bot.py</text>
+  <text x="95" y="744" class="item">- upbit_ma_crossover_bot.py</text>
+  <text x="95" y="770" class="item">- okx_btc_ema_trend_bot.py</text>
+  <text x="95" y="796" class="item">- upbit_btc_ema_trend_bot.py</text>
 
-  <rect x="1150" y="560" width="340" height="260" class="box"/>
-  <text x="1180" y="595" class="label">runtime data</text>
-  <text x="1180" y="627" class="text">- logs/ text logs</text>
-  <text x="1180" y="653" class="text">- analysis_logs/ market snapshots</text>
-  <text x="1180" y="679" class="text">- trade_logs/ fills</text>
-  <text x="1180" y="705" class="text">- structured_logs/ strategy logs</text>
-  <text x="1180" y="731" class="text">- reports/ backtests and comparisons</text>
-  <text x="1180" y="757" class="text">- launchd/ startup jobs</text>
+  <rect x="430" y="585" width="320" height="250" class="card"/>
+  <rect x="455" y="606" width="90" height="24" class="badge"/>
+  <text x="473" y="623" class="badgeText">도구</text>
+  <text x="455" y="658" class="cardTitle">tools/</text>
+  <text x="455" y="686" class="cardSub">백테스트와 유지보수 도구 본체</text>
+  <text x="455" y="718" class="item">- backtest_replay.py</text>
+  <text x="455" y="744" class="item">- backtest_report_runner.py</text>
+  <text x="455" y="770" class="item">- analysis_log_collector.py</text>
+  <text x="455" y="796" class="item">- log_archive_manager.py</text>
 
-  <path d="M250 490 L250 560" class="line"/>
-  <path d="M540 490 L540 560" class="line"/>
-  <path d="M800 490 L800 560" class="line"/>
-  <path d="M1060 490 L1060 560" class="line"/>
+  <rect x="790" y="585" width="320" height="250" class="card"/>
+  <rect x="815" y="606" width="90" height="24" class="badge"/>
+  <text x="831" y="623" class="badgeText">리포트</text>
+  <text x="815" y="658" class="cardTitle">reporting/</text>
+  <text x="815" y="686" class="cardSub">분석, 비교, 텔레그램 리포트 본체</text>
+  <text x="815" y="718" class="item">- analyze_logs.py</text>
+  <text x="815" y="744" class="item">- analyze_strategy_logs.py</text>
+  <text x="815" y="770" class="item">- compare_backtest_to_live.py</text>
+  <text x="815" y="796" class="item">- telegram_command_listener.py</text>
 
-  <text x="60" y="920" class="subtitle">Quick rule: change strategy behavior in root bot files + core/strategy + settings/,</text>
-  <text x="60" y="945" class="subtitle">change execution/latency behavior in core/execution/, and record decisions in docs/.</text>
+  <rect x="1150" y="585" width="320" height="250" class="card"/>
+  <rect x="1175" y="606" width="96" height="24" class="badge"/>
+  <text x="1190" y="623" class="badgeText">운영 데이터</text>
+  <text x="1175" y="658" class="cardTitle">logs / reports / launchd</text>
+  <text x="1175" y="686" class="cardSub">실행 결과와 자동화 설정 저장</text>
+  <text x="1175" y="718" class="item">- logs / analysis_logs / trade_logs</text>
+  <text x="1175" y="744" class="item">- structured_logs / reports</text>
+  <text x="1175" y="770" class="item">- launchd / env_overrides</text>
+  <text x="1175" y="796" class="item">- tests / requirements</text>
+
+  <rect x="60" y="875" width="1480" height="64" fill="#ffffff" stroke="#c6d8e6" stroke-width="1.5" rx="18" ry="18"/>
+  <text x="90" y="905" class="foot">요약: 전략 변경은 루트 전략 파일 + core/strategy + settings/를 먼저 보고,</text>
+  <text x="90" y="929" class="foot">지연/주문 문제는 core/execution/을 먼저 보고, 근거와 계획은 docs/에 같이 남기면 됩니다.</text>
 </svg>
