@@ -137,7 +137,13 @@
   - 업비트 1호가 조회
   - 업비트 OHLCV 조회
   - 업비트 `429` 재시도/backoff
+  - 업비트 잔고/호가 짧은 TTL 캐시와 주문 직후 캐시 무효화
   - 업비트 KRW 주문 버퍼
+
+- [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)
+  - 업비트 공통 실행 유틸
+  - 요청 재시도, KRW 주문 버퍼, 시장가 매수/매도 공통 경로
+  - 잔고/호가 짧은 캐시, 최소 주문 경계 근처 전용 best bid 재조회
   - 업비트 시장가 매수 공통 helper
 
 ## 6. 전략별 본체 모듈

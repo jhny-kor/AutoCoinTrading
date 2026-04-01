@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 잔고/호가 REST 호출을 짧게 캐시하고 최소 주문 경계 근처에서만 호가를 재조회해 지연과 요청 수를 줄이도록 개선
+- 업비트 시장가 매도도 공통 재시도 경로를 사용하고 주문 직후 캐시를 비워 다음 루프가 최신 잔고를 다시 읽도록 보강
 - 혼합 청산 세트를 위해 심볼별 순익 보호 익절 기준을 읽어 ETH/KRW, XRP/KRW, ETH/USDT 같은 심볼별 청산 성격을 분리할 수 있게 확장
 - XRP/KRW 같은 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 보수화했다.
 - 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가했다.
@@ -58,12 +60,16 @@ from core.execution.common import log_order_failure
 from core.execution.upbit import (
     apply_upbit_buy_order_buffer as apply_upbit_buy_order_buffer_core,
     create_market_buy_order_upbit as create_market_buy_order_upbit_core,
+    create_market_sell_order_upbit as create_market_sell_order_upbit_core,
     create_upbit_client as create_upbit_client_core,
     fetch_best_bid_upbit as fetch_best_bid_upbit_core,
     fetch_ohlcv_upbit as fetch_ohlcv_upbit_core,
     get_spot_balances_upbit as get_spot_balances_upbit_core,
+    invalidate_upbit_balance_cache as invalidate_upbit_balance_cache_core,
+    invalidate_upbit_orderbook_cache as invalidate_upbit_orderbook_cache_core,
     load_upbit_config as load_upbit_config_core,
     safe_amount_to_precision_upbit as safe_amount_to_precision_upbit_core,
+    should_refresh_best_bid_upbit as should_refresh_best_bid_upbit_core,
 )
 from core.logging.metrics import build_alt_common_metrics
 from core.positions.lifecycle import clear_alt_position_state
@@ -153,6 +159,15 @@ def create_market_buy_order_upbit(
     return create_market_buy_order_upbit_core(exchange, symbol, cost_to_spend)
 
 
+def create_market_sell_order_upbit(
+    exchange: ccxt.upbit,
+    symbol: str,
+    amount: float,
+):
+    """업비트 시장가 매도 공통 helper."""
+    return create_market_sell_order_upbit_core(exchange, symbol, amount)
+
+
 def fetch_ohlcv(
     exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
 ):
@@ -203,6 +218,32 @@ def safe_amount_to_precision(exchange: ccxt.upbit, symbol: str, amount: float) -
 
 def fetch_best_bid(exchange: ccxt.upbit, symbol: str) -> float | None:
     return fetch_best_bid_upbit_core(exchange, symbol)
+
+
+def invalidate_upbit_balance_cache(exchange: ccxt.upbit) -> None:
+    """업비트 잔고 캐시를 비운다."""
+    invalidate_upbit_balance_cache_core(exchange)
+
+
+def invalidate_upbit_orderbook_cache(exchange: ccxt.upbit, symbol: str | None = None) -> None:
+    """업비트 호가 캐시를 비운다."""
+    invalidate_upbit_orderbook_cache_core(exchange, symbol)
+
+
+def should_refresh_best_bid(
+    *,
+    base_free: float,
+    last_close: float,
+    min_order_value: float,
+    refresh_buffer_pct: float,
+) -> bool:
+    """최소 주문 경계 근처일 때만 최신 매수호가를 다시 조회한다."""
+    return should_refresh_best_bid_upbit_core(
+        base_free=base_free,
+        last_close=last_close,
+        min_order_value=min_order_value,
+        refresh_buffer_pct=refresh_buffer_pct,
+    )
 
 
 def calc_volume_ratio(ohlcv, lookback: int) -> float | None:
@@ -467,7 +508,16 @@ def run_bot():
                 log("잔고 조회 중...")
                 base_free, quote_free = get_spot_balances(exchange, base, quote)
                 log(f"현물 잔고 - {base}: {base_free}, {quote}: {quote_free}")
-                best_bid = fetch_best_bid(exchange, symbol) if base_free > 0 else None
+                best_bid = (
+                    fetch_best_bid(exchange, symbol)
+                    if should_refresh_best_bid(
+                        base_free=base_free,
+                        last_close=last_close,
+                        min_order_value=strategy.min_buy_order_value,
+                        refresh_buffer_pct=config["best_bid_refresh_buffer_pct"],
+                    )
+                    else None
+                )
                 sell_price_reference = best_bid if best_bid and best_bid > 0 else last_close
 
                 position_quote_value = base_free * last_close
@@ -1064,6 +1114,8 @@ def run_bot():
                             )
                             continue
                         order_response_received_at = time.time()
+                        invalidate_upbit_balance_cache(exchange)
+                        invalidate_upbit_orderbook_cache(exchange, symbol)
                         # 시장가 주문 특성상 실제 체결가 대신 현재가로 평균 진입가를 추정
                         if has_position and avg_entry_price and base_free > 0:
                             total_cost = (avg_entry_price * base_free) + (last_close * amount)
@@ -1249,7 +1301,7 @@ def run_bot():
                         log(f"[매도] 시장가 매도 시도: {symbol}, 수량={amount}")
                         order_request_started_at = time.time()
                         try:
-                            order = exchange.create_market_sell_order(symbol, amount)
+                            order = create_market_sell_order_upbit(exchange, symbol, amount)
                         except Exception as order_error:
                             log_order_failure(
                                 structured_logger=structured_logger,
@@ -1263,6 +1315,8 @@ def run_bot():
                             )
                             continue
                         order_response_received_at = time.time()
+                        invalidate_upbit_balance_cache(exchange)
+                        invalidate_upbit_orderbook_cache(exchange, symbol)
                         last_trade_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.00000001:

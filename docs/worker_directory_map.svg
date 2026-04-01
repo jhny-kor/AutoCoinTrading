@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980">
+  <style>
+    .title { font: 700 34px Arial, sans-serif; fill: #17324d; }
+    .subtitle { font: 500 16px Arial, sans-serif; fill: #49637a; }
+    .box { fill: #f8fbff; stroke: #7aa6c9; stroke-width: 2; rx: 18; ry: 18; }
+    .root { fill: #e8f3ff; stroke: #3e7fb1; stroke-width: 3; rx: 20; ry: 20; }
+    .label { font: 700 20px Arial, sans-serif; fill: #17324d; }
+    .text { font: 500 15px Arial, sans-serif; fill: #2c465d; }
+    .line { stroke: #7aa6c9; stroke-width: 2.5; fill: none; }
+  </style>
+
+  <rect x="0" y="0" width="1600" height="980" fill="#ffffff"/>
+  <text x="60" y="60" class="title">Auto Coin Bot Directory Map</text>
+  <text x="60" y="90" class="subtitle">Worker view: where to read first and what each directory owns</text>
+
+  <rect x="580" y="120" width="440" height="92" class="root"/>
+  <text x="620" y="160" class="label">auto_coin_bot/</text>
+  <text x="620" y="190" class="text">runtime + strategy + docs + reports</text>
+
+  <path d="M800 212 L800 260" class="line"/>
+  <path d="M800 260 L250 260 L250 305" class="line"/>
+  <path d="M800 260 L540 260 L540 305" class="line"/>
+  <path d="M800 260 L800 305" class="line"/>
+  <path d="M800 260 L1060 260 L1060 305" class="line"/>
+  <path d="M800 260 L1350 260 L1350 305" class="line"/>
+
+  <rect x="80" y="305" width="340" height="185" class="box"/>
+  <text x="110" y="340" class="label">run/</text>
+  <text x="110" y="372" class="text">thin entrypoints used by bot_manager</text>
+  <text x="110" y="402" class="text">- ma_crossover_bot.py</text>
+  <text x="110" y="428" class="text">- upbit_ma_crossover_bot.py</text>
+  <text x="110" y="454" class="text">- okx_btc_ema_trend_bot.py</text>
+  <text x="110" y="480" class="text">- upbit_btc_ema_trend_bot.py</text>
+
+  <rect x="450" y="305" width="340" height="185" class="box"/>
+  <text x="480" y="340" class="label">core/</text>
+  <text x="480" y="372" class="text">shared logic layer</text>
+  <text x="480" y="402" class="text">- execution/ exchange helpers</text>
+  <text x="480" y="428" class="text">- strategy/ signal logic</text>
+  <text x="480" y="454" class="text">- risk/ exit and allocation</text>
+  <text x="480" y="480" class="text">- positions/ lifecycle and guards</text>
+
+  <rect x="800" y="305" width="340" height="185" class="box"/>
+  <text x="830" y="340" class="label">settings/</text>
+  <text x="830" y="372" class="text">env-backed config loaders</text>
+  <text x="830" y="402" class="text">- strategy_settings.py</text>
+  <text x="830" y="428" class="text">- btc_trend_settings.py</text>
+  <text x="830" y="454" class="text">- market_regime_guard.py</text>
+  <text x="830" y="480" class="text">- portfolio_allocator.py</text>
+
+  <rect x="1150" y="305" width="340" height="185" class="box"/>
+  <text x="1180" y="340" class="label">docs/</text>
+  <text x="1180" y="372" class="text">current operating docs</text>
+  <text x="1180" y="402" class="text">- WORKER_GUIDE.md</text>
+  <text x="1180" y="428" class="text">- PLANS.md</text>
+  <text x="1180" y="454" class="text">- STRATEGY_DECISIONS.md</text>
+  <text x="1180" y="480" class="text">- MODULE_GUIDE.md</text>
+
+  <rect x="80" y="560" width="340" height="260" class="box"/>
+  <text x="110" y="595" class="label">root strategy files</text>
+  <text x="110" y="627" class="text">real bot bodies live here</text>
+  <text x="110" y="657" class="text">- ma_crossover_bot.py</text>
+  <text x="110" y="683" class="text">- upbit_ma_crossover_bot.py</text>
+  <text x="110" y="709" class="text">- okx_btc_ema_trend_bot.py</text>
+  <text x="110" y="735" class="text">- upbit_btc_ema_trend_bot.py</text>
+  <text x="110" y="761" class="text">also: bot_manager.py, trade_history_logger.py</text>
+  <text x="110" y="787" class="text">and structured_log_manager.py</text>
+
+  <rect x="450" y="560" width="340" height="260" class="box"/>
+  <text x="480" y="595" class="label">tools/</text>
+  <text x="480" y="627" class="text">batch and maintenance tools</text>
+  <text x="480" y="657" class="text">- backtest_replay.py</text>
+  <text x="480" y="683" class="text">- backtest_report_runner.py</text>
+  <text x="480" y="709" class="text">- analysis_log_collector.py</text>
+  <text x="480" y="735" class="text">- log_archive_manager.py</text>
+  <text x="480" y="761" class="text">- healthcheck.py</text>
+
+  <rect x="800" y="560" width="340" height="260" class="box"/>
+  <text x="830" y="595" class="label">reporting/</text>
+  <text x="830" y="627" class="text">analysis and comparison bodies</text>
+  <text x="830" y="657" class="text">- analyze_logs.py</text>
+  <text x="830" y="683" class="text">- analyze_strategy_logs.py</text>
+  <text x="830" y="709" class="text">- compare_backtest_to_live.py</text>
+  <text x="830" y="735" class="text">- telegram_command_listener.py</text>
+  <text x="830" y="761" class="text">- telegram_notifier.py</text>
+
+  <rect x="1150" y="560" width="340" height="260" class="box"/>
+  <text x="1180" y="595" class="label">runtime data</text>
+  <text x="1180" y="627" class="text">- logs/ text logs</text>
+  <text x="1180" y="653" class="text">- analysis_logs/ market snapshots</text>
+  <text x="1180" y="679" class="text">- trade_logs/ fills</text>
+  <text x="1180" y="705" class="text">- structured_logs/ strategy logs</text>
+  <text x="1180" y="731" class="text">- reports/ backtests and comparisons</text>
+  <text x="1180" y="757" class="text">- launchd/ startup jobs</text>
+
+  <path d="M250 490 L250 560" class="line"/>
+  <path d="M540 490 L540 560" class="line"/>
+  <path d="M800 490 L800 560" class="line"/>
+  <path d="M1060 490 L1060 560" class="line"/>
+
+  <text x="60" y="920" class="subtitle">Quick rule: change strategy behavior in root bot files + core/strategy + settings/,</text>
+  <text x="60" y="945" class="subtitle">change execution/latency behavior in core/execution/, and record decisions in docs/.</text>
+</svg>

@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 잔고/호가 REST 호출을 짧게 캐시하고 최소 주문 경계 근처에서만 호가를 재조회해 지연 영향을 줄이도록 개선
+- 업비트 BTC 매도도 공통 재시도 경로를 사용하고 주문 직후 캐시를 비워 다음 루프가 최신 잔고를 다시 읽도록 보강
 - BTC 가 CHOPPY 레짐일 때는 심볼별 추가 거래량 기준을 적용해 약한 진입을 더 줄이도록 보수화했다.
 - 저에너지 장에서는 신규 진입을 줄이기 위한 거래소별 저에너지 가드를 추가하고, BTC/KRW 전용 보수화를 위한 심볼별 최소 ATR 기준도 반영했다.
 - 업비트 429 요청 제한에 걸릴 때 짧은 backoff 재시도를 적용하고, KRW 매수 주문에는 안전 버퍼를 두도록 보강했다.
@@ -89,11 +91,15 @@ from upbit_ma_crossover_bot import (
     apply_upbit_buy_order_buffer,
     create_upbit_client,
     create_market_buy_order_upbit,
+    create_market_sell_order_upbit,
     fetch_ohlcv,
     fetch_best_bid,
     get_spot_balances,
+    invalidate_upbit_balance_cache,
+    invalidate_upbit_orderbook_cache,
     load_config,
     safe_amount_to_precision,
+    should_refresh_best_bid,
 )
 
 
@@ -379,7 +385,16 @@ def run_bot():
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
             base_free, quote_free = get_spot_balances(exchange, base, quote)
-            best_bid = fetch_best_bid(exchange, symbol) if base_free > 0 else None
+            best_bid = (
+                fetch_best_bid(exchange, symbol)
+                if should_refresh_best_bid(
+                    base_free=base_free,
+                    last_close=last_close,
+                    min_order_value=min_buy_order_value,
+                    refresh_buffer_pct=config["best_bid_refresh_buffer_pct"],
+                )
+                else None
+            )
             sell_price_reference = best_bid if best_bid and best_bid > 0 else last_close
             position_quote_value = base_free * last_close
             # 업비트는 최소 주문 금액 기준으로 다시 팔 수 없는 잔량은 포지션에서 제외한다.
@@ -939,6 +954,8 @@ def run_bot():
                         )
                         continue
                     order_response_received_at = time.time()
+                    invalidate_upbit_balance_cache(exchange)
+                    invalidate_upbit_orderbook_cache(exchange, symbol)
                     entry_price = last_close
                     entry_opened_at = time.time()
                     position_id = f"{symbol}:{int(entry_opened_at)}"
@@ -1077,6 +1094,8 @@ def run_bot():
                     )
                     continue
                 order_response_received_at = time.time()
+                invalidate_upbit_balance_cache(exchange)
+                invalidate_upbit_orderbook_cache(exchange, symbol)
 
                 previous_amount = base_free
                 added_amount = amount
@@ -1253,7 +1272,7 @@ def run_bot():
                     )
                     order_request_started_at = time.time()
                     try:
-                        order = exchange.create_market_sell_order(symbol, amount)
+                        order = create_market_sell_order_upbit(exchange, symbol, amount)
                     except Exception as order_error:
                         log_order_failure(
                             structured_logger=structured_logger,
@@ -1267,6 +1286,8 @@ def run_bot():
                         )
                         continue
                     order_response_received_at = time.time()
+                    invalidate_upbit_balance_cache(exchange)
+                    invalidate_upbit_orderbook_cache(exchange, symbol)
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
                     holding_seconds = None

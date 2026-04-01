@@ -7,6 +7,8 @@
 업비트는 최근 `429 Too Many Requests` 와 `insufficient_funds_bid` 완화를 위해 공용 재시도/backoff 와 KRW 주문 버퍼를 적용했습니다.
 OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 재시도를 제한적으로 적용했습니다.
 `ETH/KRW` 는 최근 손절 패턴 기준으로 거래량, 최소 이격도, 브레이크이븐 보호 기준을 심볼별로 더 보수적으로 조정했습니다.
+`2026-04-01` 기준으로는 손절이 잦았던 `ETH/USDT`, `ETH/KRW`, `BTC/KRW` 진입을 더 보수화했고, 수익 러너가 비교적 좋았던 `BTC/USDT`, `XRP/KRW`, `XRP/USDT` 는 순익 보호와 부분익절을 조금 늦춰 이익을 더 가져가도록 조정했습니다.
+업비트는 주문 응답 자체의 지연은 남지만, 잔고/호가 중복 REST 조회를 줄이기 위해 짧은 TTL 캐시와 주문 직후 캐시 무효화를 추가했습니다.
 
 <div align="center">  
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>  
@@ -15,12 +17,13 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 ## 문서 역할
 
 - `README.md`: 현재 운영 기준과 현재 구조를 설명합니다.
+- `docs/WORKER_GUIDE.md`: 작업자가 바로 수정 지점을 찾을 수 있게 디렉토리 구조와 파일 역할을 정리합니다.
 - `MODULE_GUIDE.md`: 공통 모듈, 거래소별 모듈, 전략별 모듈을 기능 단위로 정리합니다.
-- `STRATEGY_DECISIONS.md`: 왜 값을 바꿨는지, 어떤 버전과 로그를 근거로 바꿨는지 이력 중심으로 기록합니다.
-- `PLANS.md`: 현재 적용 상태, 과거 검토안, 앞으로 볼 후보안을 함께 정리합니다.
+- `docs/STRATEGY_DECISIONS.md`: 왜 값을 바꿨는지, 어떤 버전과 로그를 근거로 바꿨는지 이력 중심으로 기록합니다.
+- `docs/PLANS.md`: 현재 적용 상태, 과거 검토안, 앞으로 볼 후보안을 함께 정리합니다.
 - `SWING_BOT_DESIGN.md`: 장타/스윙 전용 새 폴더 설계, 공통 모듈 재사용 후보, 초기 전략안을 정리합니다.
 
-즉 현재 상태를 빠르게 확인할 때는 `README.md`, 변경 이력을 추적할 때는 `STRATEGY_DECISIONS.md`, 아직 확정되지 않은 아이디어와 과거 검토 흐름은 `PLANS.md`를 우선 참고하면 됩니다.
+즉 현재 상태를 빠르게 확인할 때는 `README.md`, 변경 이력을 추적할 때는 `docs/STRATEGY_DECISIONS.md`, 아직 확정되지 않은 아이디어와 과거 검토 흐름은 `docs/PLANS.md`를 우선 참고하면 됩니다.
 루트 호환 래퍼 유지 기준은 [ROOT_WRAPPER_POLICY.md](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329/ROOT_WRAPPER_POLICY.md)에 정리합니다.
 2026-03-29 기준 구조 리팩토링 단계 기록은 [docs/refactor_20260329](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329) 아래에 순서대로 정리합니다.
 

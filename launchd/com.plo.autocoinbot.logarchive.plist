@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+수정 요약
+- 로그 압축 배치를 매일 00:10 에 실행하는 전용 launchd 잡 추가
+- 로그 압축 실행 로그를 운영 시작 로그와 분리해 별도 파일로 남기도록 구성
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.plo.autocoinbot.logarchive</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/plo/Documents/auto_coin_bot/scripts/run_log_archive_manager.sh</string>
+    <string>compress</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/plo/Documents/auto_coin_bot</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>KeepAlive</key>
+  <false/>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>0</integer>
+    <key>Minute</key>
+    <integer>10</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/plo/Documents/auto_coin_bot/logs/log_archive_manager.launchd.out</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/plo/Documents/auto_coin_bot/logs/log_archive_manager.launchd.err</string>
+</dict>
+</plist>

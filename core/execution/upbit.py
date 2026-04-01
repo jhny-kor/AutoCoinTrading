@@ -1,5 +1,7 @@
 """
-작업 요약
+수정 요약
+- 업비트 잔고/호가 조회를 짧은 TTL 캐시로 재사용하고 최소 주문 경계 근처에서만 호가를 재조회하도록 지연 완화 경로를 추가했다.
+- 업비트 시장가 매도도 공통 재시도 경로와 캐시 무효화 helper 를 쓰도록 확장했다.
 - 업비트 설정 로드, 429 재시도, 주문 버퍼, 잔고/호가 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
 - 알트/BTC 봇이 같은 업비트 실행 경로를 재사용하도록 정리했다.
 """
@@ -32,6 +34,12 @@ def load_upbit_config() -> dict:
     request_retry_delay_sec = float(os.getenv("UPBIT_REQUEST_RETRY_DELAY_SEC", "1.2"))
     krw_order_buffer_pct = float(os.getenv("UPBIT_KRW_ORDER_BUFFER_PCT", "0.002"))
     krw_order_buffer_krw = float(os.getenv("UPBIT_KRW_ORDER_BUFFER_KRW", "1000"))
+    request_timeout_ms = int(os.getenv("UPBIT_REQUEST_TIMEOUT_MS", "10000"))
+    balance_cache_ttl_sec = float(os.getenv("UPBIT_BALANCE_CACHE_TTL_SEC", "1.0"))
+    orderbook_cache_ttl_sec = float(os.getenv("UPBIT_ORDERBOOK_CACHE_TTL_SEC", "0.8"))
+    best_bid_refresh_buffer_pct = float(
+        os.getenv("UPBIT_BEST_BID_REFRESH_BUFFER_PCT", "0.30")
+    )
 
     return {
         "api_key": api_key,
@@ -43,6 +51,10 @@ def load_upbit_config() -> dict:
         "request_retry_delay_sec": request_retry_delay_sec,
         "krw_order_buffer_pct": krw_order_buffer_pct,
         "krw_order_buffer_krw": krw_order_buffer_krw,
+        "request_timeout_ms": request_timeout_ms,
+        "balance_cache_ttl_sec": balance_cache_ttl_sec,
+        "orderbook_cache_ttl_sec": orderbook_cache_ttl_sec,
+        "best_bid_refresh_buffer_pct": best_bid_refresh_buffer_pct,
     }
 
 
@@ -52,11 +64,54 @@ def create_upbit_client(config: dict) -> ccxt.upbit:
             "apiKey": config["api_key"],
             "secret": config["api_secret"],
             "enableRateLimit": True,
+            "timeout": config["request_timeout_ms"],
             "options": {
                 "adjustForTimeDifference": True,
+                "upbit_request_retry_count": config["request_retry_count"],
+                "upbit_request_retry_delay_sec": config["request_retry_delay_sec"],
+                "upbit_balance_cache_ttl_sec": config["balance_cache_ttl_sec"],
+                "upbit_orderbook_cache_ttl_sec": config["orderbook_cache_ttl_sec"],
+                "upbit_best_bid_refresh_buffer_pct": config["best_bid_refresh_buffer_pct"],
             },
         }
     )
+
+
+def _get_runtime_cache(exchange: ccxt.upbit) -> dict:
+    """클라이언트별 업비트 런타임 캐시 저장소를 반환한다."""
+    return exchange.options.setdefault("upbit_runtime_cache", {})
+
+
+def invalidate_upbit_balance_cache(exchange: ccxt.upbit) -> None:
+    """업비트 잔고 캐시를 비운다."""
+    _get_runtime_cache(exchange).pop("balance", None)
+
+
+def invalidate_upbit_orderbook_cache(
+    exchange: ccxt.upbit,
+    symbol: str | None = None,
+) -> None:
+    """업비트 호가 캐시를 비운다."""
+    cache = _get_runtime_cache(exchange).get("orderbook", {})
+    if symbol is None:
+        cache.clear()
+        return
+    cache.pop(symbol, None)
+
+
+def should_refresh_best_bid_upbit(
+    *,
+    base_free: float,
+    last_close: float,
+    min_order_value: float,
+    refresh_buffer_pct: float,
+) -> bool:
+    """최소 주문 금액 경계 근처일 때만 최신 호가를 다시 조회할지 판단한다."""
+    if base_free <= 0 or last_close <= 0 or min_order_value <= 0:
+        return False
+    approx_position_value = base_free * last_close
+    refresh_threshold = min_order_value * (1 + max(refresh_buffer_pct, 0.0))
+    return approx_position_value <= refresh_threshold
 
 
 def is_upbit_rate_limit_error(exc: Exception) -> bool:
@@ -112,6 +167,20 @@ def create_market_buy_order_upbit(
     )
 
 
+def create_market_sell_order_upbit(
+    exchange: ccxt.upbit,
+    symbol: str,
+    amount: float,
+):
+    """업비트 시장가 매도를 공통 재시도 경로로 감싼다."""
+    return call_upbit_with_retry(
+        exchange,
+        exchange.create_market_sell_order,
+        symbol,
+        amount,
+    )
+
+
 def fetch_ohlcv_upbit(
     exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
 ):
@@ -125,7 +194,20 @@ def fetch_ohlcv_upbit(
 
 
 def get_spot_balances_upbit(exchange: ccxt.upbit, base: str, quote: str) -> Tuple[float, float]:
-    balance = call_upbit_with_retry(exchange, exchange.fetch_balance)
+    cache = _get_runtime_cache(exchange)
+    ttl_sec = float(exchange.options.get("upbit_balance_cache_ttl_sec", 0.0) or 0.0)
+    now_ts = time.time()
+    cached_balance = cache.get("balance")
+    balance = None
+    if (
+        ttl_sec > 0
+        and isinstance(cached_balance, dict)
+        and (now_ts - float(cached_balance.get("ts", 0.0))) <= ttl_sec
+    ):
+        balance = cached_balance.get("payload")
+    if balance is None:
+        balance = call_upbit_with_retry(exchange, exchange.fetch_balance)
+        cache["balance"] = {"ts": now_ts, "payload": balance}
     base_free = balance.get(base, {}).get("free", 0.0)
     quote_free = balance.get(quote, {}).get("free", 0.0)
     return float(base_free), float(quote_free)
@@ -139,8 +221,26 @@ def safe_amount_to_precision_upbit(exchange: ccxt.upbit, symbol: str, amount: fl
 
 
 def fetch_best_bid_upbit(exchange: ccxt.upbit, symbol: str) -> float | None:
+    cache = _get_runtime_cache(exchange).setdefault("orderbook", {})
+    ttl_sec = float(exchange.options.get("upbit_orderbook_cache_ttl_sec", 0.0) or 0.0)
+    now_ts = time.time()
+    cached_orderbook = cache.get(symbol)
+    order_book = None
+    if (
+        ttl_sec > 0
+        and isinstance(cached_orderbook, dict)
+        and (now_ts - float(cached_orderbook.get("ts", 0.0))) <= ttl_sec
+    ):
+        order_book = cached_orderbook.get("payload")
     try:
-        order_book = call_upbit_with_retry(exchange, exchange.fetch_order_book, symbol, limit=1)
+        if order_book is None:
+            order_book = call_upbit_with_retry(
+                exchange,
+                exchange.fetch_order_book,
+                symbol,
+                limit=1,
+            )
+            cache[symbol] = {"ts": now_ts, "payload": order_book}
     except Exception:
         return None
     bids = order_book.get("bids") or []
