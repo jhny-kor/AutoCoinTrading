@@ -18,7 +18,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 - `README.md`: 현재 운영 기준과 현재 구조를 설명합니다.
 - `docs/WORKER_GUIDE.md`: 작업자가 바로 수정 지점을 찾을 수 있게 디렉토리 구조와 파일 역할을 정리합니다.
-- `MODULE_GUIDE.md`: 공통 모듈, 거래소별 모듈, 전략별 모듈을 기능 단위로 정리합니다.
+- `docs/MODULE_GUIDE.md`: 공통 모듈, 거래소별 모듈, 전략별 모듈을 기능 단위로 정리합니다.
 - `docs/STRATEGY_DECISIONS.md`: 왜 값을 바꿨는지, 어떤 버전과 로그를 근거로 바꿨는지 이력 중심으로 기록합니다.
 - `docs/PLANS.md`: 현재 적용 상태, 과거 검토안, 앞으로 볼 후보안을 함께 정리합니다.
 - `SWING_BOT_DESIGN.md`: 장타/스윙 전용 새 폴더 설계, 공통 모듈 재사용 후보, 초기 전략안을 정리합니다.
@@ -86,11 +86,14 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `analyze_strategy_logs.py`: 구조화 전략 로그의 퍼널 병목과 차단 사유를 집계하는 도구
 - `log_path_utils.py`: 일자별 로그 경로와 탐색을 공통으로 처리하는 유틸
 - `core/execution/`: 거래소별 주문/조회 공통 로직과 주문 실패 기록 공통 처리
+- `core/runtime/`: 프로그램 메타데이터와 봇 초기 런타임 bootstrap 공통 처리
 - `core/positions/`: 복구 불가 포지션 보류 같은 포지션 가드 공통 처리
 - `core/positions/lifecycle.py`: 알트/BTC 포지션 초기화 같은 상태 정리 공통 처리
 - `core/strategy/`: 알트/BTC 신호 계산 공통 처리
 - `core/risk/`: 일일 손실 제한, 동적 오버웨이트 자격 같은 리스크 계산 공통 처리
 - `core/risk/alt_exit.py`: 알트 수익률/순익률/브레이크이븐/순익 보호 익절 계산 공통 처리
+- `reporting/listener_runtime.py`: 텔레그램 리스너 설정, polling, offset, 예약 리포트 상태 공통 처리
+- `reporting/position_snapshot.py`: `/positions` 응답용 거래소 포지션 스냅샷과 복구 진입가 요약 공통 처리
 - `migrate_logs_to_dated_dirs.py`: 기존 평면 로그를 날짜별 폴더 구조로 옮기는 마이그레이션 도구
 - `log_archive_manager.py`: 최근 7일 원본 유지 후 오래된 로그를 날짜별 `tar.gz`로 압축하는 도구
 - `btc_trend_settings.py`: BTC 전용 EMA 추세추종 설정 로더
@@ -376,7 +379,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 최근 7일 시간대 성과 요약
 - 최근 1주 거래량 기준 신규 후보 코인
 
-지표 용어와 레짐 기준은 [MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/MODULE_GUIDE.md)에 정리합니다.
+지표 용어와 레짐 기준은 [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)에 정리합니다.
 
 ## 현재 운영 방향
 

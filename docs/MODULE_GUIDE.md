@@ -100,6 +100,16 @@
   - 일일/주간 리포트 자동 전송
   - 현재 시장 해석과 전략 추천 문구 생성
 
+- [reporting/listener_runtime.py](/Users/plo/Documents/auto_coin_bot/reporting/listener_runtime.py)
+  - 텔레그램 리스너 설정 로드
+  - polling, offset 저장, 예약 리포트 상태 저장 공통 처리
+  - 리스너 본체에서 transport/runtime 보조 역할 분리
+
+- [reporting/position_snapshot.py](/Users/plo/Documents/auto_coin_bot/reporting/position_snapshot.py)
+  - `/positions` 응답용 거래소 잔고/평가 요약 공통 처리
+  - 최신 추정 진입가와 복구 진입가 합성
+  - 거래소 조회 실패 진단 문구 공통 처리
+
 - [incident_manager.py](/Users/plo/Documents/auto_coin_bot/incident_manager.py)
   - 에러 인시던트 기록
   - 재기동/상세 보기/수정 요청/무시 상태 관리
@@ -114,6 +124,14 @@
 - [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
   - trade_history 기준 평균 진입가와 내부 상태 복구
   - 프로그램별 당일 실현 손익 재계산 helper 제공
+
+- [core/runtime/bootstrap.py](/Users/plo/Documents/auto_coin_bot/core/runtime/bootstrap.py)
+  - 알트/BTC 봇 초기 런타임 상태 복구 공통 helper
+  - `run_bot()` 시작 구간의 중복 상태 구성 로직 축소
+
+- [core/runtime/program_registry.py](/Users/plo/Documents/auto_coin_bot/core/runtime/program_registry.py)
+  - 관리 대상 프로그램 메타데이터 단일 소스
+  - `bot_manager`, 헬스체크, 텔레그램 리포트가 공유하는 이름/스크립트/레이블 정의
 
 ## 5. 거래소별 모듈
 

@@ -41,6 +41,7 @@
 
 - 거래소 공통 실행, 전략 계산, 리스크 계산, 포지션 수명주기, 공통 메트릭을 둡니다.
 - 최근 업비트 지연 완화는 [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)에 들어갔습니다.
+- 프로그램 메타데이터와 런타임 bootstrap 은 [core/runtime](/Users/plo/Documents/auto_coin_bot/core/runtime)에 있습니다.
 - 새로운 공통 규칙은 먼저 `core/`로 내릴 수 있는지 확인하는 편이 좋습니다.
 
 ### `settings/`
@@ -63,6 +64,8 @@
 ### `reporting/`
 
 - 분석/비교/텔레그램 리포트 본체입니다.
+- 텔레그램 리스너 설정/offset/polling 은 [reporting/listener_runtime.py](/Users/plo/Documents/auto_coin_bot/reporting/listener_runtime.py)에 분리되어 있습니다.
+- `/positions`용 거래소 스냅샷은 [reporting/position_snapshot.py](/Users/plo/Documents/auto_coin_bot/reporting/position_snapshot.py)에 있습니다.
 - 백테스트 대 실거래 비교는 [reporting/compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/reporting/compare_backtest_to_live.py)를 봅니다.
 
 ### `tools/`
