@@ -71,33 +71,32 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from decimal import Decimal, ROUND_DOWN
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-
-import ccxt
-from dotenv import load_dotenv
 
 import analyze_logs
 import analyze_strategy_logs
 import bot_manager
-from core.execution.okx import (
-    create_okx_client,
-    fetch_ohlcv_okx,
-    get_spot_balances_okx,
-    load_okx_config,
-)
-from core.execution.upbit import (
-    create_upbit_client,
-    fetch_ohlcv_upbit,
-    get_spot_balances_upbit,
-    load_upbit_config,
-)
 from core.runtime.program_registry import TRADE_PROGRAM_SPECS
 from btc_trend_settings import load_btc_trend_settings
 from incident_manager import find_incident, update_incident_status
 from bot_logger import BotLogger
 from log_path_utils import iter_files, latest_file, read_all_lines
+from reporting.listener_runtime import (
+    ListenerSettings,
+    get_updates,
+    initialize_offset_if_needed,
+    load_listener_settings,
+    load_report_state,
+    save_offset,
+    save_report_state,
+    telegram_api_request,
+)
+from reporting.position_snapshot import (
+    build_okx_positions_text,
+    build_upbit_positions_text,
+    format_exchange_error_text,
+)
 from market_regime_guard import classify_symbol_regime
 from state_recovery import (
     load_program_daily_realized_pnl_quote,
@@ -172,167 +171,6 @@ WEEKDAY_NAME_TO_INDEX = {
     "SAT": 5,
     "SUN": 6,
 }
-
-
-@dataclass(frozen=True)
-class ListenerSettings:
-    """텔레그램 명령 리스너 설정."""
-
-    poll_interval_sec: int
-    offset_path: Path
-    report_state_path: Path
-    analysis_log_dir: Path
-    okx_symbols: list[str]
-    upbit_symbols: list[str]
-    recent_log_line_count: int
-    daily_report_enabled: bool
-    morning_report_hour: int
-    noon_report_hour: int
-    evening_report_hour: int
-    night_report_hour: int
-    weekly_report_enabled: bool
-    weekly_report_weekday: int
-    weekly_report_hour: int
-
-
-def parse_bool(raw: str | None, default: bool = False) -> bool:
-    """문자열 불리언 값을 파싱한다."""
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def load_listener_settings() -> ListenerSettings:
-    """환경 변수에서 리스너 설정을 읽는다."""
-    load_dotenv()
-
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-
-    return ListenerSettings(
-        poll_interval_sec=int(os.getenv("TELEGRAM_COMMAND_POLL_INTERVAL_SEC", "5")),
-        offset_path=log_dir / "telegram_command_listener.offset",
-        report_state_path=log_dir / "telegram_daily_report_state.json",
-        analysis_log_dir=Path(os.getenv("ANALYSIS_LOG_DIR", "analysis_logs")),
-        okx_symbols=load_managed_symbols("okx"),
-        upbit_symbols=load_managed_symbols("upbit"),
-        recent_log_line_count=int(os.getenv("TELEGRAM_RECENT_LOG_LINE_COUNT", "5")),
-        daily_report_enabled=parse_bool(
-            os.getenv("TELEGRAM_DAILY_REPORT_ENABLED", "true"),
-            default=True,
-        ),
-        morning_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_MORNING_HOUR", "8")),
-        noon_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_NOON_HOUR", "12")),
-        evening_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_EVENING_HOUR", "18")),
-        night_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_NIGHT_HOUR", "21")),
-        weekly_report_enabled=parse_bool(
-            os.getenv("TELEGRAM_WEEKLY_REPORT_ENABLED", "true"),
-            default=True,
-        ),
-        weekly_report_weekday=WEEKDAY_NAME_TO_INDEX.get(
-            os.getenv("TELEGRAM_WEEKLY_REPORT_WEEKDAY", "MON").strip().upper(),
-            0,
-        ),
-        weekly_report_hour=int(os.getenv("TELEGRAM_WEEKLY_REPORT_HOUR", "9")),
-    )
-
-
-def telegram_api_request(
-    bot_token: str,
-    method: str,
-    payload: dict | None = None,
-    timeout: int = 30,
-) -> tuple[dict | None, str | None]:
-    """텔레그램 Bot API 를 호출한다."""
-    url = f"https://api.telegram.org/bot{bot_token}/{method}"
-    data = None
-    headers = {}
-
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-
-    request = urllib.request.Request(
-        url=url,
-        data=data,
-        headers=headers,
-        method="POST" if payload is not None else "GET",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw_body = response.read().decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError) as exc:
-        return None, format_telegram_request_error(exc)
-
-    try:
-        result = json.loads(raw_body)
-    except (ValueError, json.JSONDecodeError) as exc:
-        return None, format_telegram_request_error(exc)
-
-    if isinstance(result, dict) and result.get("ok") is False:
-        description = result.get("description")
-        if isinstance(description, str) and description.strip():
-            return None, description.strip()
-        return None, "텔레그램 API 가 요청을 거부했습니다."
-
-    return result, None
-
-
-def get_updates(
-    bot_token: str, offset: int, timeout: int = 20
-) -> tuple[list[dict], str | None]:
-    """새 텔레그램 업데이트 목록을 가져온다."""
-    query = urllib.parse.urlencode({"offset": offset, "timeout": timeout})
-    result, error = telegram_api_request(
-        bot_token,
-        f"getUpdates?{query}",
-        payload=None,
-        timeout=timeout + 5,
-    )
-    if error:
-        return [], error
-    if not result:
-        return [], "텔레그램 업데이트 응답이 비어 있습니다."
-    return result.get("result", []), None
-
-
-def load_offset(path: Path) -> int:
-    """마지막으로 처리한 update offset 을 읽는다."""
-    if not path.exists():
-        return 0
-    try:
-        return int(path.read_text(encoding="utf-8").strip() or "0")
-    except ValueError:
-        return 0
-
-
-def save_offset(path: Path, offset: int):
-    """마지막으로 처리한 update offset 을 저장한다."""
-    path.write_text(str(offset), encoding="utf-8")
-
-
-def initialize_offset_if_needed(
-    bot_token: str, settings: ListenerSettings, logger: BotLogger
-) -> int:
-    """초기 실행 시 과거 메시지를 건너뛰도록 offset 을 맞춘다."""
-    current_offset = load_offset(settings.offset_path)
-    if current_offset > 0:
-        return current_offset
-
-    updates, error = get_updates(bot_token, offset=0, timeout=0)
-    if error:
-        logger.log(f"초기 텔레그램 offset 조회 실패: {error}")
-        return 0
-    if not updates:
-        return 0
-
-    next_offset = max(update["update_id"] for update in updates) + 1
-    save_offset(settings.offset_path, next_offset)
-    logger.log(
-        f"기존 텔레그램 메시지 {len(updates)}건은 재처리하지 않도록 offset 을 {next_offset} 으로 맞췄습니다."
-    )
-    return next_offset
 
 
 def normalize_command(text: str) -> str:
@@ -430,51 +268,6 @@ def safe_float(value) -> float | None:
         return None
 
 
-def classify_exchange_error(exc: Exception) -> tuple[str, str]:
-    """거래소 예외를 분류하고 점검 포인트를 반환한다."""
-    raw_message = str(exc).strip() or repr(exc)
-    lowered = raw_message.lower()
-
-    if (
-        isinstance(exc, ccxt.PermissionDenied)
-        or "no permission" in lowered
-        or "out_of_scope" in lowered
-        or "권한" in raw_message
-    ):
-        return "권한 부족", "API 키 권한, 계정 권한, IP 화이트리스트를 확인해 주세요."
-
-    if isinstance(exc, ccxt.AuthenticationError):
-        return "인증 실패", "API 키, 시크릿, 패스프레이즈 입력값을 다시 확인해 주세요."
-
-    if isinstance(exc, ccxt.RequestTimeout) or "timed out" in lowered or "timeout" in lowered:
-        return "타임아웃", "거래소 응답 지연 또는 일시적인 네트워크 혼잡 가능성이 큽니다."
-
-    if isinstance(exc, ccxt.NetworkError):
-        return "네트워크", "인터넷 연결 또는 거래소 API 접속 상태를 확인해 주세요."
-
-    return "기타 오류", "원문 에러를 기준으로 해당 거래소 API 상태를 직접 확인해 주세요."
-
-
-def format_exchange_error_text(
-    exchange_name: str,
-    action: str,
-    exc: Exception,
-    *,
-    symbol: str | None = None,
-) -> str:
-    """거래소 조회 실패를 텔레그램 메시지용 진단 문구로 만든다."""
-    error_type, guidance = classify_exchange_error(exc)
-    raw_message = str(exc).strip() or repr(exc)
-    target = f"{symbol} {action}" if symbol else action
-    return "\n".join(
-        [
-            f"- {target} 실패 [{error_type}]",
-            f"원인 추정: {guidance}",
-            f"세부: {raw_message}",
-        ]
-    )
-
-
 def build_help_text() -> str:
     """지원 명령 목록을 반환한다."""
     return (
@@ -517,8 +310,8 @@ def is_in_recent_days(raw: str, days: int, *, now: datetime | None = None) -> bo
 def build_positions_text(settings: ListenerSettings) -> str:
     """현재 거래소별 잔고와 포지션 요약을 만든다."""
     sections = ["현재 포지션 요약"]
-    sections.append(build_okx_positions_text(settings.okx_symbols))
-    sections.append(build_upbit_positions_text(settings.upbit_symbols))
+    sections.append(build_okx_positions_text(settings.okx_symbols, format_number=format_number))
+    sections.append(build_upbit_positions_text(settings.upbit_symbols, format_number=format_number))
     sections.append(build_recovered_position_state_text(settings))
     return "\n\n".join(sections)
 
@@ -806,201 +599,6 @@ def build_latest_tuning_diff_text(limit: int = 6) -> str:
             f"MDD {float(row.get('before_max_drawdown_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_max_drawdown_pct', 0.0) or 0.0):.2f}%"
         )
     return "\n".join(lines)
-
-
-def load_latest_entry_prices() -> dict[tuple[str, str], float]:
-    """체결 이력에서 거래소/심볼별 최신 추정 진입가를 읽는다."""
-    latest_prices: dict[tuple[str, str], float] = {}
-    latest_ts: dict[tuple[str, str], str] = {}
-
-    for path in iter_files("trade_logs", "trade_history.jsonl"):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                record = json.loads(stripped)
-            except (ValueError, json.JSONDecodeError):
-                continue
-
-            exchange = str(record.get("exchange", "")).strip().upper()
-            symbol = str(record.get("symbol", "")).strip()
-            estimated_entry_price = record.get("estimated_entry_price")
-            recorded_at = str(record.get("recorded_at_local", ""))
-
-            if not exchange or not symbol or estimated_entry_price in (None, ""):
-                continue
-
-            try:
-                price = float(estimated_entry_price)
-            except (TypeError, ValueError):
-                continue
-
-            key = (exchange, symbol)
-            if key not in latest_ts or recorded_at >= latest_ts[key]:
-                latest_ts[key] = recorded_at
-                latest_prices[key] = price
-
-    return latest_prices
-
-
-def format_pnl_badge(pnl_pct: float) -> str:
-    """손익률을 텔레그램용 짧은 배지 문자열로 만든다."""
-    if pnl_pct > 0:
-        return f"🔴 +{pnl_pct:.2f}%"
-    if pnl_pct < 0:
-        return f"🔵 {pnl_pct:.2f}%"
-    return "⚪ 0.00%"
-
-
-def load_recovered_entry_prices(
-    targets: tuple[tuple[str, list[str]], ...],
-) -> dict[str, float]:
-    """프로그램별 복구 상태에서 심볼별 평균 진입가를 모은다."""
-    entry_prices: dict[str, float] = {}
-    for program_name, symbols in targets:
-        for symbol, state in restore_program_position_states(program_name, symbols).items():
-            if state.average_entry_price is not None:
-                entry_prices[symbol] = state.average_entry_price
-    return entry_prices
-
-
-def build_okx_positions_text(symbols: list[str]) -> str:
-    """OKX 현재 잔고와 포지션 요약을 만든다."""
-    try:
-        config = load_okx_config()
-        exchange = create_okx_client(config)
-        latest_entry_prices = load_latest_entry_prices()
-        recovered_entry_prices = load_recovered_entry_prices(
-            (
-                ("ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/USDT"]),
-                ("okx_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/USDT"]),
-            )
-        )
-        lines = ["[OKX]"]
-        seen_quotes: set[str] = set()
-        meaningful_position_count = 0
-
-        for symbol in symbols:
-            base, quote = symbol.split("/", 1)
-            try:
-                base_free, quote_free = get_spot_balances_okx(exchange, base, quote)
-            except Exception as exc:
-                lines.append(
-                    format_exchange_error_text("OKX", "잔고 조회", exc, symbol=symbol)
-                )
-                continue
-
-            if quote not in seen_quotes:
-                lines.append(f"- 보유 {quote}: {format_number(quote_free, 4)}")
-                seen_quotes.add(quote)
-
-            try:
-                ticker_ohlcv = fetch_ohlcv_okx(exchange, symbol, timeframe="1m", limit=1)
-                last_close = ticker_ohlcv[-1][4]
-            except Exception as exc:
-                if base_free > 0:
-                    lines.append(
-                        f"- {symbol}: {format_number(base_free, 6)} {base} | 현재가 조회 실패"
-                    )
-                lines.append(
-                    format_exchange_error_text("OKX", "현재가 조회", exc, symbol=symbol)
-                )
-                continue
-
-            estimated_value = base_free * last_close
-            if estimated_value >= 0.1:
-                meaningful_position_count += 1
-                line = (
-                    f"- {symbol}: {format_number(base_free, 6)} {base} | "
-                    f"현재가 {format_number(last_close, 4)} | "
-                    f"평가 {format_number(estimated_value, 4)} {quote}"
-                )
-                entry_price = recovered_entry_prices.get(symbol)
-                if entry_price is None:
-                    entry_price = latest_entry_prices.get(("OKX", symbol))
-                if entry_price and entry_price > 0:
-                    pnl_pct = ((last_close - entry_price) / entry_price) * 100
-                    line += (
-                        f" | 진입가 {format_number(entry_price, 4)} | "
-                        f"현재 손익 {format_pnl_badge(pnl_pct)}"
-                    )
-                lines.append(line)
-
-        if meaningful_position_count == 0:
-            lines.append("- 의미 있는 코인 보유 포지션 없음")
-        return "\n".join(lines)
-    except Exception as exc:
-        return "[OKX]\n" + format_exchange_error_text("OKX", "초기화", exc)
-
-
-def build_upbit_positions_text(symbols: list[str]) -> str:
-    """업비트 현재 잔고와 포지션 요약을 만든다."""
-    try:
-        config = load_upbit_config()
-        exchange = create_upbit_client(config)
-        latest_entry_prices = load_latest_entry_prices()
-        recovered_entry_prices = load_recovered_entry_prices(
-            (
-                ("upbit_ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/KRW"]),
-                ("upbit_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/KRW"]),
-            )
-        )
-        lines = ["[UPBIT]"]
-        seen_quotes: set[str] = set()
-        meaningful_position_count = 0
-
-        for symbol in symbols:
-            base, quote = symbol.split("/", 1)
-            try:
-                base_free, quote_free = get_spot_balances_upbit(exchange, base, quote)
-            except Exception as exc:
-                lines.append(
-                    format_exchange_error_text("UPBIT", "잔고 조회", exc, symbol=symbol)
-                )
-                continue
-
-            if quote not in seen_quotes:
-                lines.append(f"- 보유 {quote}: {format_number(quote_free, 0)}")
-                seen_quotes.add(quote)
-
-            try:
-                ticker_ohlcv = fetch_ohlcv_upbit(exchange, symbol, timeframe="1m", limit=1)
-                last_close = ticker_ohlcv[-1][4]
-            except Exception as exc:
-                if base_free > 0:
-                    lines.append(
-                        f"- {symbol}: {format_number(base_free, 8)} {base} | 현재가 조회 실패"
-                    )
-                lines.append(
-                    format_exchange_error_text("UPBIT", "현재가 조회", exc, symbol=symbol)
-                )
-                continue
-
-            estimated_value = base_free * last_close
-            if estimated_value >= 100:
-                meaningful_position_count += 1
-                line = (
-                    f"- {symbol}: {format_number(base_free, 8)} {base} | "
-                    f"현재가 {format_number(last_close, 0)} | "
-                    f"평가 {format_number(estimated_value, 0)} {quote}"
-                )
-                entry_price = recovered_entry_prices.get(symbol)
-                if entry_price is None:
-                    entry_price = latest_entry_prices.get(("UPBIT", symbol))
-                if entry_price and entry_price > 0:
-                    pnl_pct = ((last_close - entry_price) / entry_price) * 100
-                    line += (
-                        f" | 진입가 {format_number(entry_price, 0)} | "
-                        f"현재 손익 {format_pnl_badge(pnl_pct)}"
-                    )
-                lines.append(line)
-
-        if meaningful_position_count == 0:
-            lines.append("- 의미 있는 코인 보유 포지션 없음")
-        return "\n".join(lines)
-    except Exception as exc:
-        return "[UPBIT]\n" + format_exchange_error_text("UPBIT", "초기화", exc)
 
 
 def build_pnl_text() -> str:
@@ -2623,24 +2221,6 @@ def handle_incident_callback(
         return
 
     answer_callback_query(notifier.bot_token, callback_id, "지원하지 않는 버튼입니다.")
-
-
-def load_report_state(path: Path) -> dict[str, str]:
-    """일일 리포트 전송 상태를 읽는다."""
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, json.JSONDecodeError):
-        return {}
-
-
-def save_report_state(path: Path, state: dict[str, str]):
-    """일일 리포트 전송 상태를 저장한다."""
-    path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
 
 
 def maybe_send_scheduled_reports(
