@@ -77,6 +77,7 @@ from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_alt_allocation
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
+from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from market_regime_guard import (
@@ -302,62 +303,21 @@ def run_bot():
         "upbit_ma_crossover_bot",
         [market["symbol"] for market in markets],
     )
+    runtime_state = build_alt_runtime_state(recovered_states)
 
     timeframe = "1m"
     ma_period = 20
 
-    # 심볼별 평균 진입가 저장 (손익 계산용)
-    entry_price = {
-        symbol: state.average_entry_price
-        for symbol, state in recovered_states.items()
-        if state.average_entry_price is not None
-    }
-    # 심볼별 포지션 시작 시각 저장 (보유 시간 분석용)
-    entry_opened_at = {
-        symbol: state.opened_at_ts
-        for symbol, state in recovered_states.items()
-        if state.opened_at_ts is not None
-    }
-    # 심볼별 진입 후 최고가/최저가 저장 (MFE/MAE 분석용)
-    highest_price_since_entry = {
-        symbol: state.highest_price_since_entry
-        for symbol, state in recovered_states.items()
-        if state.highest_price_since_entry is not None
-    }
-    lowest_price_since_entry = {
-        symbol: state.lowest_price_since_entry
-        for symbol, state in recovered_states.items()
-        if state.lowest_price_since_entry is not None
-    }
-    # 심볼별 부분익절/부분손절 1회 실행 여부 저장
-    partial_take_profit_done = {
-        symbol: state.partial_take_profit_done
-        for symbol, state in recovered_states.items()
-        if state.partial_take_profit_done
-    }
-    partial_stop_loss_done = {
-        symbol: state.partial_stop_loss_done
-        for symbol, state in recovered_states.items()
-        if state.partial_stop_loss_done
-    }
+    entry_price = runtime_state.entry_price
+    entry_opened_at = runtime_state.entry_opened_at
+    highest_price_since_entry = runtime_state.highest_price_since_entry
+    lowest_price_since_entry = runtime_state.lowest_price_since_entry
+    partial_take_profit_done = runtime_state.partial_take_profit_done
+    partial_stop_loss_done = runtime_state.partial_stop_loss_done
     unrecoverable_position_warned: set[str] = set()
-    partial_take_profit_last_at = {
-        symbol: state.last_partial_take_profit_at_ts
-        for symbol, state in recovered_states.items()
-        if state.last_partial_take_profit_at_ts > 0
-    }
-    # 심볼별 분할 진입 횟수 저장
-    entry_count = {
-        symbol: state.cycle_buy_count
-        for symbol, state in recovered_states.items()
-        if state.cycle_buy_count > 0
-    }
-    # 심볼별 마지막 거래 시각 저장
-    last_trade_at = {
-        symbol: state.last_trade_at_ts
-        for symbol, state in recovered_states.items()
-        if state.last_trade_at_ts > 0
-    }
+    partial_take_profit_last_at = runtime_state.partial_take_profit_last_at
+    entry_count = runtime_state.entry_count
+    last_trade_at = runtime_state.last_trade_at
     # 일일 누적 실현 손익(KRW 기준)
     daily_pnl_date = datetime.now().date()
     daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(

@@ -81,16 +81,23 @@ from dotenv import load_dotenv
 import analyze_logs
 import analyze_strategy_logs
 import bot_manager
+from core.execution.okx import (
+    create_okx_client,
+    fetch_ohlcv_okx,
+    get_spot_balances_okx,
+    load_okx_config,
+)
+from core.execution.upbit import (
+    create_upbit_client,
+    fetch_ohlcv_upbit,
+    get_spot_balances_upbit,
+    load_upbit_config,
+)
+from core.runtime.program_registry import TRADE_PROGRAM_SPECS
 from btc_trend_settings import load_btc_trend_settings
 from incident_manager import find_incident, update_incident_status
 from bot_logger import BotLogger
 from log_path_utils import iter_files, latest_file, read_all_lines
-from ma_crossover_bot import (
-    create_okx_client,
-    fetch_ohlcv as fetch_okx_ohlcv,
-    get_spot_balances as get_okx_spot_balances,
-    load_config as load_okx_config,
-)
 from market_regime_guard import classify_symbol_regime
 from state_recovery import (
     load_program_daily_realized_pnl_quote,
@@ -101,12 +108,6 @@ from telegram_notifier import load_telegram_notifier
 from telegram_notifier import format_telegram_request_error
 from telegram_notifier import format_telegram_text_numbers
 from trade_history_logger import estimate_round_trip_net_pnl
-from upbit_ma_crossover_bot import (
-    create_upbit_client,
-    fetch_ohlcv as fetch_upbit_ohlcv,
-    get_spot_balances as get_upbit_spot_balances,
-    load_config as load_upbit_config,
-)
 
 TRADE_EVENT_RE = re.compile(
     r"^\[(?P<ts>[^\]]+)\] \[(?P<symbol>[^\]]+)\] (?P<title>.+주문 체결)$"
@@ -126,39 +127,34 @@ SKIP_REASON_PATTERNS = [
     ("조건 미충족 대기", "BTC EMA 전략 조건에 해당하지 않아 대기합니다."),
 ]
 
-PROGRAM_LOG_SOURCES = [
-    ("OKX 알트", "ma_crossover_bot.log"),
-    ("업비트 알트", "upbit_ma_crossover_bot.log"),
-    ("OKX BTC", "okx_btc_ema_trend_bot.log"),
-    ("업비트 BTC", "upbit_btc_ema_trend_bot.log"),
-]
+PROGRAM_LOG_SOURCES = tuple(
+    (spec.report_label or spec.title, spec.log_name)
+    for spec in TRADE_PROGRAM_SPECS
+    if spec.log_name
+)
 
-PROGRAM_STRUCTURE_SOURCES = [
-    ("OKX 알트", "ma_crossover_bot"),
-    ("업비트 알트", "upbit_ma_crossover_bot"),
-    ("OKX BTC", "okx_btc_ema_trend_bot"),
-    ("업비트 BTC", "upbit_btc_ema_trend_bot"),
-]
+PROGRAM_STRUCTURE_SOURCES = tuple(
+    (spec.report_label or spec.title, spec.structure_name)
+    for spec in TRADE_PROGRAM_SPECS
+    if spec.structure_name
+)
 
 PROGRAM_LABELS = {
-    "ma_crossover_bot": "OKX 알트",
-    "upbit_ma_crossover_bot": "업비트 알트",
-    "okx_btc_ema_trend_bot": "OKX BTC",
-    "upbit_btc_ema_trend_bot": "업비트 BTC",
+    spec.structure_name: (spec.report_label or spec.title)
+    for spec in TRADE_PROGRAM_SPECS
+    if spec.structure_name
 }
 
 PROGRAM_STRATEGY_TYPES = {
-    "ma_crossover_bot": "alt",
-    "upbit_ma_crossover_bot": "alt",
-    "okx_btc_ema_trend_bot": "btc",
-    "upbit_btc_ema_trend_bot": "btc",
+    spec.structure_name: spec.strategy_type
+    for spec in TRADE_PROGRAM_SPECS
+    if spec.structure_name and spec.strategy_type
 }
 
 PROGRAM_EXCHANGES = {
-    "ma_crossover_bot": "OKX",
-    "upbit_ma_crossover_bot": "UPBIT",
-    "okx_btc_ema_trend_bot": "OKX",
-    "upbit_btc_ema_trend_bot": "UPBIT",
+    spec.structure_name: spec.exchange
+    for spec in TRADE_PROGRAM_SPECS
+    if spec.structure_name and spec.exchange
 }
 
 OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SPOT"
@@ -857,20 +853,30 @@ def format_pnl_badge(pnl_pct: float) -> str:
     return "⚪ 0.00%"
 
 
+def load_recovered_entry_prices(
+    targets: tuple[tuple[str, list[str]], ...],
+) -> dict[str, float]:
+    """프로그램별 복구 상태에서 심볼별 평균 진입가를 모은다."""
+    entry_prices: dict[str, float] = {}
+    for program_name, symbols in targets:
+        for symbol, state in restore_program_position_states(program_name, symbols).items():
+            if state.average_entry_price is not None:
+                entry_prices[symbol] = state.average_entry_price
+    return entry_prices
+
+
 def build_okx_positions_text(symbols: list[str]) -> str:
     """OKX 현재 잔고와 포지션 요약을 만든다."""
     try:
         config = load_okx_config()
         exchange = create_okx_client(config)
         latest_entry_prices = load_latest_entry_prices()
-        recovered_entry_prices: dict[str, float] = {}
-        for program_name, target_symbols in (
-            ("ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/USDT"]),
-            ("okx_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/USDT"]),
-        ):
-            for symbol, state in restore_program_position_states(program_name, target_symbols).items():
-                if state.average_entry_price is not None:
-                    recovered_entry_prices[symbol] = state.average_entry_price
+        recovered_entry_prices = load_recovered_entry_prices(
+            (
+                ("ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/USDT"]),
+                ("okx_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/USDT"]),
+            )
+        )
         lines = ["[OKX]"]
         seen_quotes: set[str] = set()
         meaningful_position_count = 0
@@ -878,7 +884,7 @@ def build_okx_positions_text(symbols: list[str]) -> str:
         for symbol in symbols:
             base, quote = symbol.split("/", 1)
             try:
-                base_free, quote_free = get_okx_spot_balances(exchange, base, quote)
+                base_free, quote_free = get_spot_balances_okx(exchange, base, quote)
             except Exception as exc:
                 lines.append(
                     format_exchange_error_text("OKX", "잔고 조회", exc, symbol=symbol)
@@ -890,7 +896,7 @@ def build_okx_positions_text(symbols: list[str]) -> str:
                 seen_quotes.add(quote)
 
             try:
-                ticker_ohlcv = fetch_okx_ohlcv(exchange, symbol, timeframe="1m", limit=1)
+                ticker_ohlcv = fetch_ohlcv_okx(exchange, symbol, timeframe="1m", limit=1)
                 last_close = ticker_ohlcv[-1][4]
             except Exception as exc:
                 if base_free > 0:
@@ -934,14 +940,12 @@ def build_upbit_positions_text(symbols: list[str]) -> str:
         config = load_upbit_config()
         exchange = create_upbit_client(config)
         latest_entry_prices = load_latest_entry_prices()
-        recovered_entry_prices: dict[str, float] = {}
-        for program_name, target_symbols in (
-            ("upbit_ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/KRW"]),
-            ("upbit_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/KRW"]),
-        ):
-            for symbol, state in restore_program_position_states(program_name, target_symbols).items():
-                if state.average_entry_price is not None:
-                    recovered_entry_prices[symbol] = state.average_entry_price
+        recovered_entry_prices = load_recovered_entry_prices(
+            (
+                ("upbit_ma_crossover_bot", [symbol for symbol in symbols if symbol != "BTC/KRW"]),
+                ("upbit_btc_ema_trend_bot", [symbol for symbol in symbols if symbol == "BTC/KRW"]),
+            )
+        )
         lines = ["[UPBIT]"]
         seen_quotes: set[str] = set()
         meaningful_position_count = 0
@@ -949,7 +953,7 @@ def build_upbit_positions_text(symbols: list[str]) -> str:
         for symbol in symbols:
             base, quote = symbol.split("/", 1)
             try:
-                base_free, quote_free = get_upbit_spot_balances(exchange, base, quote)
+                base_free, quote_free = get_spot_balances_upbit(exchange, base, quote)
             except Exception as exc:
                 lines.append(
                     format_exchange_error_text("UPBIT", "잔고 조회", exc, symbol=symbol)
@@ -961,7 +965,7 @@ def build_upbit_positions_text(symbols: list[str]) -> str:
                 seen_quotes.add(quote)
 
             try:
-                ticker_ohlcv = fetch_upbit_ohlcv(exchange, symbol, timeframe="1m", limit=1)
+                ticker_ohlcv = fetch_ohlcv_upbit(exchange, symbol, timeframe="1m", limit=1)
                 last_close = ticker_ohlcv[-1][4]
             except Exception as exc:
                 if base_free > 0:

@@ -1,6 +1,7 @@
 """trade_history 기반 상태 복구와 당일 순손익 재계산에 대한 개발 테스트."""
 
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from settings.state_recovery import (
@@ -55,7 +56,10 @@ class StateRecoveryTests(unittest.TestCase):
             },
         ]
         with patch("settings.state_recovery.read_trade_history", return_value=records):
-            total = load_program_daily_realized_pnl_quote("okx_btc_ema_trend_bot")
+            total = load_program_daily_realized_pnl_quote(
+                "okx_btc_ema_trend_bot",
+                target_date=date(2026, 3, 29),
+            )
         self.assertAlmostEqual(total, 0.75)
 
 

@@ -52,10 +52,25 @@ from datetime import datetime
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
 from core.execution.common import log_order_failure
+from core.execution.upbit import (
+    apply_upbit_buy_order_buffer,
+    create_market_buy_order_upbit,
+    create_market_sell_order_upbit,
+    create_upbit_client,
+    fetch_best_bid_upbit,
+    fetch_ohlcv_upbit,
+    get_spot_balances_upbit,
+    invalidate_upbit_balance_cache,
+    invalidate_upbit_orderbook_cache,
+    load_upbit_config,
+    safe_amount_to_precision_upbit,
+    should_refresh_best_bid_upbit,
+)
 from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_btc_allocations
+from core.runtime.bootstrap import build_btc_runtime_state
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.btc_position import (
@@ -86,20 +101,6 @@ from trade_history_logger import (
     TradeHistoryLogger,
     estimate_round_trip_net_pnl,
     summarize_order_for_notification,
-)
-from upbit_ma_crossover_bot import (
-    apply_upbit_buy_order_buffer,
-    create_upbit_client,
-    create_market_buy_order_upbit,
-    create_market_sell_order_upbit,
-    fetch_ohlcv,
-    fetch_best_bid,
-    get_spot_balances,
-    invalidate_upbit_balance_cache,
-    invalidate_upbit_orderbook_cache,
-    load_config,
-    safe_amount_to_precision,
-    should_refresh_best_bid,
 )
 
 
@@ -208,7 +209,7 @@ def build_exit_prices(
 
 def run_bot():
     """업비트 BTC 전용 EMA 추세추종 봇 메인 루프."""
-    config = load_config()
+    config = load_upbit_config()
     settings = load_btc_trend_settings()
     exchange = create_upbit_client(config)
     logger = BotLogger("upbit_btc_ema_trend_bot")
@@ -224,50 +225,25 @@ def run_bot():
         "upbit_btc_ema_trend_bot",
         [symbol],
     ).get(symbol)
+    runtime_state = build_btc_runtime_state(symbol, recovered_state)
     portfolio_allocator = PortfolioAllocator(
         exchange_name="UPBIT",
         quote_currency=quote,
         tracked_symbols=load_managed_symbols("upbit"),
     )
-    entry_price: float | None = (
-        recovered_state.average_entry_price if recovered_state else None
-    )
-    entry_opened_at: float | None = (
-        recovered_state.opened_at_ts if recovered_state else None
-    )
-    position_id: str | None = (
-        f"{symbol}:{int(recovered_state.opened_at_ts)}"
-        if recovered_state and recovered_state.opened_at_ts is not None
-        else None
-    )
-    highest_price_since_entry: float | None = (
-        recovered_state.highest_price_since_entry if recovered_state else None
-    )
-    lowest_price_since_entry: float | None = (
-        recovered_state.lowest_price_since_entry if recovered_state else None
-    )
-    trailing_armed = recovered_state.trailing_armed if recovered_state else False
-    trailing_armed_at: float | None = (
-        recovered_state.trailing_armed_at_ts if recovered_state else None
-    )
-    trailing_activation_price: float | None = (
-        recovered_state.trailing_activation_price if recovered_state else None
-    )
-    partial_take_profit_done = (
-        recovered_state.partial_take_profit_done if recovered_state else False
-    )
-    add_on_count = (
-        max(0, recovered_state.cycle_buy_count - 1) if recovered_state else 0
-    )
-    last_trade_at = (
-        recovered_state.last_trade_at_ts if recovered_state else 0.0
-    )
-    last_stop_loss_at = (
-        recovered_state.last_stop_loss_at_ts if recovered_state else 0.0
-    )
-    last_profit_exit_at = (
-        recovered_state.last_profit_exit_at_ts if recovered_state else 0.0
-    )
+    entry_price = runtime_state.entry_price
+    entry_opened_at = runtime_state.entry_opened_at
+    position_id = runtime_state.position_id
+    highest_price_since_entry = runtime_state.highest_price_since_entry
+    lowest_price_since_entry = runtime_state.lowest_price_since_entry
+    trailing_armed = runtime_state.trailing_armed
+    trailing_armed_at = runtime_state.trailing_armed_at
+    trailing_activation_price = runtime_state.trailing_activation_price
+    partial_take_profit_done = runtime_state.partial_take_profit_done
+    add_on_count = runtime_state.add_on_count
+    last_trade_at = runtime_state.last_trade_at
+    last_stop_loss_at = runtime_state.last_stop_loss_at
+    last_profit_exit_at = runtime_state.last_profit_exit_at
     unrecoverable_position_warned = False
     daily_pnl_date = datetime.now().date()
     daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
@@ -343,8 +319,8 @@ def run_bot():
             )
 
         try:
-            ohlcv = fetch_ohlcv(exchange, symbol, timeframe=settings.timeframe, limit=min_ohlcv_limit)
-            confirm_ohlcv = fetch_ohlcv(
+            ohlcv = fetch_ohlcv_upbit(exchange, symbol, timeframe=settings.timeframe, limit=min_ohlcv_limit)
+            confirm_ohlcv = fetch_ohlcv_upbit(
                 exchange,
                 symbol,
                 timeframe=settings.confirm_timeframe,
@@ -384,10 +360,10 @@ def run_bot():
             recent_swing_low = get_recent_swing_low(ohlcv[:-1], settings.swing_lookback)
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
-            base_free, quote_free = get_spot_balances(exchange, base, quote)
+            base_free, quote_free = get_spot_balances_upbit(exchange, base, quote)
             best_bid = (
-                fetch_best_bid(exchange, symbol)
-                if should_refresh_best_bid(
+                fetch_best_bid_upbit(exchange, symbol)
+                if should_refresh_best_bid_upbit(
                     base_free=base_free,
                     last_close=last_close,
                     min_order_value=min_buy_order_value,
@@ -809,7 +785,7 @@ def run_bot():
                 target_budget_quote=allocation_decision.target_budget_quote,
                 order_value=order_value,
                 min_buy_order_value=min_buy_order_value,
-                estimated_entry_amount=safe_amount_to_precision(exchange, symbol, order_value / last_close if last_close else 0.0),
+                estimated_entry_amount=safe_amount_to_precision_upbit(exchange, symbol, order_value / last_close if last_close else 0.0),
                 min_order_amount=0.0,
             )
             entry_ready, _ = structured_logger.run_funnel(
@@ -864,7 +840,7 @@ def run_bot():
                         target_budget_quote=add_on_allocation_decision.target_budget_quote,
                         add_on_order_value=add_on_order_value,
                         min_buy_order_value=min_buy_order_value,
-                        estimated_add_on_amount=safe_amount_to_precision(exchange, symbol, add_on_order_value / last_close if last_close else 0.0),
+                        estimated_add_on_amount=safe_amount_to_precision_upbit(exchange, symbol, add_on_order_value / last_close if last_close else 0.0),
                         min_order_amount=0.0,
                     ),
                     metrics=common_metrics,
@@ -880,9 +856,9 @@ def run_bot():
                 profit_protect_triggered=profit_protect_triggered,
                 trailing_stop_triggered=trailing_stop_triggered,
                 trend_exit_triggered=trend_exit_triggered,
-                estimated_exit_amount=safe_amount_to_precision(exchange, symbol, base_free),
+                estimated_exit_amount=safe_amount_to_precision_upbit(exchange, symbol, base_free),
                 min_order_amount=0.0,
-                sell_order_value_quote=(safe_amount_to_precision(exchange, symbol, base_free) * last_close),
+                sell_order_value_quote=(safe_amount_to_precision_upbit(exchange, symbol, base_free) * last_close),
                 min_sell_order_value=min_buy_order_value,
             )
             exit_ready, _ = structured_logger.run_funnel(
@@ -921,7 +897,7 @@ def run_bot():
                             f"{min_buy_order_value:.0f} {quote} 이하라 진입을 생략합니다."
                         )
                         continue
-                    amount = safe_amount_to_precision(exchange, symbol, buffered_order_value / last_close)
+                    amount = safe_amount_to_precision_upbit(exchange, symbol, buffered_order_value / last_close)
                     cost_to_spend = buffered_order_value
                     structured_logger.log_strategy(
                         symbol=symbol,
@@ -1061,7 +1037,7 @@ def run_bot():
                         f"{min_buy_order_value:.0f} {quote} 이하라 추가매수를 생략합니다."
                     )
                     continue
-                amount = safe_amount_to_precision(exchange, symbol, buffered_add_on_order_value / last_close)
+                amount = safe_amount_to_precision_upbit(exchange, symbol, buffered_add_on_order_value / last_close)
                 cost_to_spend = buffered_add_on_order_value
                 structured_logger.log_strategy(
                     symbol=symbol,
@@ -1211,7 +1187,7 @@ def run_bot():
             elif exit_ready:
                 partial_take_profit_full_exit = False
                 if partial_take_profit_triggered:
-                    partial_amount = safe_amount_to_precision(
+                    partial_amount = safe_amount_to_precision_upbit(
                         exchange,
                         symbol,
                         base_free * settings.partial_take_profit_ratio,
@@ -1223,11 +1199,11 @@ def run_bot():
                         or remaining_after_partial * sell_price_reference <= min_buy_order_value
                     ):
                         partial_take_profit_full_exit = True
-                        amount = safe_amount_to_precision(exchange, symbol, base_free)
+                        amount = safe_amount_to_precision_upbit(exchange, symbol, base_free)
                     else:
                         amount = partial_amount
                 else:
-                    amount = safe_amount_to_precision(exchange, symbol, base_free)
+                    amount = safe_amount_to_precision_upbit(exchange, symbol, base_free)
                 sell_order_value_quote = amount * sell_price_reference
                 if amount <= 0:
                     pass

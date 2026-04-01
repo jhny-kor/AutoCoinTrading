@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bot_manager import PROGRAMS, read_pid_file, is_pid_alive
+from bot_manager import read_pid_file, is_pid_alive
+from core.runtime.program_registry import PROGRAMS
 from log_path_utils import current_date_str, latest_file
 
 

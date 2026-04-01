@@ -53,28 +53,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.runtime.program_registry import (
+    PROGRAMS,
+    PROGRAM_CHOICES,
+    PROGRAM_TITLES,
+    START_ALL_ORDER,
+)
 from log_path_utils import dated_path
 
 ROOT_DIR = Path(__file__).resolve().parent
 PREFERRED_PYTHON = ROOT_DIR / ".venv" / "bin" / "python"
-
-PROGRAMS = {
-    "okx": "run/ma_crossover_bot.py",
-    "upbit": "run/upbit_ma_crossover_bot.py",
-    "okx_btc": "run/okx_btc_ema_trend_bot.py",
-    "upbit_btc": "run/upbit_btc_ema_trend_bot.py",
-    "collector": "run/analysis_log_collector.py",
-    "telegram": "run/telegram_command_listener.py",
-}
-
-SECTION_TITLES = {
-    "okx": "OKX 봇",
-    "upbit": "업비트 봇",
-    "okx_btc": "OKX BTC EMA 봇",
-    "upbit_btc": "업비트 BTC EMA 봇",
-    "collector": "분석 수집기",
-    "telegram": "텔레그램 명령 리스너",
-}
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -299,7 +287,7 @@ def build_status_lines(
 
     for name, script in PROGRAMS.items():
         matched = [proc for proc in processes if proc.name == name]
-        section_title = SECTION_TITLES.get(name, name)
+        section_title = PROGRAM_TITLES.get(name, name)
 
         lines.append("")
         if use_color:
@@ -419,17 +407,7 @@ def start_program(name: str) -> int:
 def handle_start(target: str) -> int:
     """시작 명령 처리."""
     if target == "all":
-        codes = [
-            start_program(name)
-            for name in (
-                "collector",
-                "telegram",
-                "okx",
-                "upbit",
-                "okx_btc",
-                "upbit_btc",
-            )
-        ]
+        codes = [start_program(name) for name in START_ALL_ORDER]
         return 0 if all(code == 0 for code in codes) else 1
     return start_program(target)
 
@@ -492,7 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser = subparsers.add_parser("start", help="봇 또는 분석 수집기를 시작합니다.")
     start_parser.add_argument(
         "target",
-        choices=["all", "okx", "upbit", "okx_btc", "upbit_btc", "collector", "telegram"],
+        choices=["all", *PROGRAM_CHOICES],
         help="시작할 대상",
     )
 
@@ -504,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
         "target",
         nargs="?",
         default="all",
-        choices=["all", "okx", "upbit", "okx_btc", "upbit_btc", "collector", "telegram"],
+        choices=["all", *PROGRAM_CHOICES],
         help="중지할 대상 (기본값: all)",
     )
     stop_parser.add_argument(

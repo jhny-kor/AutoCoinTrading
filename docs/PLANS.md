@@ -247,6 +247,27 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
 
 ## 향후 후보안
 
+### 미래 전략 후보 비교표
+
+| 후보 | 핵심 아이디어 | 기대 효과 | 현재 구조 적합도 | 구현 난이도 | 우선순위 |
+| --- | --- | --- | --- | --- | --- |
+| BTC Donchian + ATR 돌파 | `n봉 최고가 돌파 진입 + ATR 손절 + 채널 이탈 청산` | 약한 EMA 크로스 노이즈 축소, 추세 러너 확대 | 높음 | 중간 | 1 |
+| 알트 Bollinger Squeeze 돌파 | 변동성 압축 후 상단 돌파 + 거래량 확장 진입 | 후속 탄력 없는 약한 알트 진입 감소 | 높음 | 중간 | 2 |
+| 레짐 전환형 전략 선택기 | `TRENDING`이면 추세추종, `CHOPPY/LOW_ENERGY`면 진입 중단 또는 다른 규칙 사용 | 장세에 따라 전략을 다르게 써 손절과 과매매 감소 | 높음 | 중간~높음 | 3 |
+| 알트 Cross-Sectional Momentum 로테이션 | 최근 강한 코인 상위 몇 개만 거래 | 상대강도 높은 심볼에 집중 | 중간 | 높음 | 4 |
+| KAMA 적응형 평균 전략 | 고정 MA 대신 적응형 평균으로 노이즈 완화 | ETH 같은 애매한 구간 가짜 돌파 감소 | 중간 | 중간 | 5 |
+| 부분익절 후 잔량 전용 관리 | 부분익절 후 잔량은 별도 트레일링/순익보호 규칙 사용 | BTC/XRP 러너 확대 | 높음 | 낮음~중간 | 6 |
+
+### 미래 전략 설계 메모
+
+- 참고 방향
+  - 추세추종: Turtle/Donchian, Time Series Momentum 계열
+  - 적응형 평균: Perry Kaufman 계열
+  - 변동성 압축 돌파: Bollinger Squeeze 계열
+  - 상대강도 로테이션: Cross-sectional Momentum 계열
+- 현재 코드 기준으로는 `새 지표를 추가해 기존 엔진에 얹는 방식`이 가장 안전합니다.
+- 따라서 완전히 별도 프로젝트를 늘리기보다, 먼저 `core/strategy`, `core/risk`, `settings/` 확장으로 붙일 수 있는 후보부터 검토합니다.
+
 ### 장타/스윙 전용 분리 폴더 구축 (2026-03-21 기준 후보안)
 
 - 방향
@@ -270,6 +291,112 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - 자세한 초안은 `SWING_BOT_DESIGN.md` 참고
 
 ## 앞으로 가능한 전략 개선
+
+### 0. 후보별 구조 기준 설계안
+
+#### A. BTC Donchian + ATR 돌파
+
+- 적용 대상
+  - `BTC/USDT`
+  - `BTC/KRW`
+- 새 설정 후보
+  - `BTC_TREND_ENTRY_MODE=ema|donchian`
+  - `BTC_TREND_DONCHIAN_ENTRY_LOOKBACK=20`
+  - `BTC_TREND_DONCHIAN_EXIT_LOOKBACK=10`
+  - `BTC_TREND_DONCHIAN_CONFIRM_BREAKOUT_CLOSE=true`
+- 코드 시작점
+  - [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
+  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
+  - [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+  - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
+- 설계 포인트
+  - 현재 EMA 진입과 병렬 실험이 가능하도록 `entry_mode` 를 두는 편이 안전합니다.
+  - 청산은 기존 ATR/트레일링/부분익절 구조를 최대한 재사용합니다.
+
+#### B. 알트 Bollinger Squeeze 돌파
+
+- 적용 대상
+  - 우선 `ETH/USDT`, `ETH/KRW`, `XRP/KRW`, `XRP/USDT`
+- 새 설정 후보
+  - `STRATEGY_ENTRY_MODE=ma|squeeze`
+  - `STRATEGY_BB_PERIOD=20`
+  - `STRATEGY_BB_STDDEV=2.0`
+  - `STRATEGY_SQUEEZE_MAX_BANDWIDTH_PCT=...`
+  - `STRATEGY_SQUEEZE_MIN_VOLUME_RATIO=...`
+- 코드 시작점
+  - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
+  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
+  - [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+  - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
+- 설계 포인트
+  - 기존 MA 돌파 전략을 없애지 말고, `entry_mode` 로 병렬 실험하는 게 좋습니다.
+  - 최근 손절 원인이 약한 후속 탄력이라, 밴드폭 축소 여부를 진입 전 필수 조건으로 두는 방향이 맞습니다.
+
+#### C. 레짐 전환형 전략 선택기
+
+- 적용 대상
+  - 전 심볼 공통
+- 새 설정 후보
+  - `STRATEGY_ENABLE_REGIME_STRATEGY_SWITCH=true`
+  - `STRATEGY_TRENDING_ENTRY_MODE=...`
+  - `STRATEGY_CHOPPY_ENTRY_MODE=disabled|mean_reversion`
+  - `BTC_TREND_CHOPPY_ENTRY_MODE=disabled|conservative`
+- 코드 시작점
+  - [settings/market_regime_guard.py](/Users/plo/Documents/auto_coin_bot/settings/market_regime_guard.py)
+  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
+  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
+- 설계 포인트
+  - 지금은 레짐이 `진입 차단` 용도에 가깝습니다.
+  - 다음 단계는 레짐을 `전략 선택` 용도로 승격하는 것입니다.
+
+#### D. 알트 Cross-Sectional Momentum 로테이션
+
+- 적용 대상
+  - 분석 수집 심볼 전체
+- 새 설정 후보
+  - `ROTATION_ENABLE=true`
+  - `ROTATION_LOOKBACK_DAYS=7`
+  - `ROTATION_TOP_N=3`
+  - `ROTATION_MIN_LIQUIDITY_THRESHOLD=...`
+- 코드 시작점
+  - [analysis_log_collector.py](/Users/plo/Documents/auto_coin_bot/analysis_log_collector.py)
+  - [tools/discover_untracked_symbols.py](/Users/plo/Documents/auto_coin_bot/tools/discover_untracked_symbols.py)
+  - [portfolio_allocator.py](/Users/plo/Documents/auto_coin_bot/portfolio_allocator.py)
+- 설계 포인트
+  - 이 후보는 전략 계산보다 `심볼 선택` 레이어가 먼저 필요합니다.
+  - 따라서 당장 매수 규칙보다도 `후보 심볼 선정 리포트` 를 먼저 만드는 편이 낫습니다.
+
+#### E. KAMA 적응형 평균 전략
+
+- 적용 대상
+  - 우선 `ETH/USDT`, `ETH/KRW`
+- 새 설정 후보
+  - `STRATEGY_MA_TYPE=sma|kama`
+  - `STRATEGY_KAMA_ER_PERIOD=10`
+  - `STRATEGY_KAMA_FAST=2`
+  - `STRATEGY_KAMA_SLOW=30`
+- 코드 시작점
+  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
+  - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
+- 설계 포인트
+  - ETH는 최근 손절 억제가 우선이라, 고정 SMA보다 적응형 평균이 가짜 돌파를 줄일 수 있는지 실험 가치가 있습니다.
+  - 이 전략은 범용 도입보다 `ETH 전용 실험`으로 시작하는 편이 안전합니다.
+
+#### F. 부분익절 후 잔량 전용 관리
+
+- 적용 대상
+  - `BTC/USDT`, `BTC/KRW`, `XRP/KRW`, `XRP/USDT`
+- 새 설정 후보
+  - `BTC_TREND_DISABLE_TREND_EXIT_AFTER_PARTIAL_TP=true`
+  - `BTC_TREND_RUNNER_MIN_PROFIT_PROTECT_PCT=...`
+  - `STRATEGY_RUNNER_MODE_SYMBOLS=...`
+- 코드 시작점
+  - [core/strategy/btc_position.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc_position.py)
+  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
+  - [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py)
+- 설계 포인트
+  - 현재 구조를 가장 적게 흔드는 후보입니다.
+  - 로그 기준으로 러너가 있는데 너무 일찍 잠그는 문제를 해결하는 데 직접적입니다.
 
 ### BTC 별도 실험 전략
 
@@ -314,16 +441,17 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
 ### 다음 수익률 개선 후보
 
 - 1단계
-  - BTC 전용 봇의 현재 전량 트레일링 성과를 먼저 관찰
-  - 알트 완화값 적용 후 `buy_ready`, `filled`, `top_block_reason` 변화를 비교
+  - `BTC Donchian + ATR` 설계안 초안 작성
+  - `부분익절 후 잔량 전용 관리` 를 현재 BTC/XRP 구조에 실험할지 먼저 판단
 - 2단계
-  - BTC 전용 봇에 `부분 익절 + 잔량 트레일링` 추가 검토
-  - `trade_history.jsonl` 에 leg 구분 필드를 넣어 부분익절 성과 분석 가능하게 확장
+  - 알트 `Bollinger Squeeze + 거래량 확장` 진입 실험안 작성
+  - 최근 손절 심볼에 대해 MA 돌파 대비 손절 억제 효과를 백테스트로 비교
 - 3단계
-  - 더 강한 시그널에만 진입하는 필터 튜닝 검토
-  - 거래량, 이격도, ATR 범위를 백테스트/실거래 로그 기준으로 재최적화
+  - `레짐 전환형 전략 선택기` 를 현재 레짐 가드 위에 얹는 설계안 작성
+  - `TRENDING`, `CHOPPY`, `LOW_ENERGY` 별 허용 전략을 정의
 - 4단계
-  - 레짐(시장 상태) 필터를 추가해 추세가 약한 구간에서는 진입을 끄고 시그널만 기록하는 모드 검토
+  - `Cross-Sectional Momentum 로테이션` 후보를 분석 수집 레이어에서 먼저 리포트화
+  - 이후 매매 전략으로 확장할지 판단
 
 ### 알트 부분손절 / 부분익절 적용안
 
