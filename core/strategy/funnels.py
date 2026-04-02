@@ -2,6 +2,7 @@
 작업 요약
 - 알트/BTC 진입, 추가매수, 청산 퍼널 step 생성기를 공통 모듈로 분리했다.
 - reason 코드와 단계 구성을 한 곳에서 유지하도록 정리했다.
+- RSI, MACD, 신호 스코어, 볼린저 밴드 폭 같은 보조 필터 단계를 퍼널에 반영했다.
 """
 
 from __future__ import annotations
@@ -15,8 +16,12 @@ def build_alt_entry_steps(
     bullish: bool,
     trend_follow_entry: bool,
     signal_is_strong: bool,
+    signal_score: float,
+    min_signal_score: float,
     gap_pct: float,
     min_gap_pct: float,
+    rsi_filter_passed: bool,
+    macd_filter_passed: bool,
     htf_bullish: bool,
     volume_filter_passed: bool,
     volume_ratio: float | None,
@@ -49,9 +54,23 @@ def build_alt_entry_steps(
         FunnelStep(
             stage="distance",
             passed=signal_is_strong,
-            reason="distance_too_small",
-            actual={"gap_pct": gap_pct},
-            required={"min_gap_pct": min_gap_pct},
+            reason="signal_score_low",
+            actual={"gap_pct": gap_pct, "signal_score": signal_score},
+            required={"min_gap_pct": min_gap_pct, "min_signal_score": min_signal_score},
+        ),
+        FunnelStep(
+            stage="rsi",
+            passed=rsi_filter_passed,
+            reason="rsi_filter_blocked",
+            actual={"rsi_filter_passed": rsi_filter_passed},
+            required={"rsi_filter_passed": True},
+        ),
+        FunnelStep(
+            stage="macd",
+            passed=macd_filter_passed,
+            reason="macd_filter_blocked",
+            actual={"macd_filter_passed": macd_filter_passed},
+            required={"macd_histogram_positive": True},
         ),
         FunnelStep(
             stage="higher_timeframe",
@@ -204,8 +223,16 @@ def build_btc_entry_steps(
     trend_follow_entry: bool,
     ema_aligned: bool,
     price_above_fast: bool,
+    ema_slope_positive: bool,
     ema_spread_pct: float,
     effective_min_ema_spread_pct: float,
+    signal_score: float,
+    min_signal_score: float,
+    rsi_filter_passed: bool,
+    bb_width_filter_passed: bool,
+    bb_width_pct: float | None,
+    min_bb_width_pct: float,
+    max_bb_width_pct: float,
     has_position: bool,
     in_cooldown: bool,
     cooldown_remaining: float,
@@ -248,11 +275,31 @@ def build_btc_entry_steps(
                 "trend_follow_entry": trend_follow_entry,
                 "ema_aligned": ema_aligned,
                 "price_above_fast": price_above_fast,
+                "ema_slope_positive": ema_slope_positive,
                 "ema_spread_pct": ema_spread_pct,
+                "signal_score": signal_score,
             },
             required={
                 "bullish_signal_or_trend_follow_entry": True,
                 "min_ema_spread_pct": effective_min_ema_spread_pct,
+                "min_signal_score": min_signal_score,
+            },
+        ),
+        FunnelStep(
+            stage="rsi",
+            passed=rsi_filter_passed,
+            reason="rsi_filter_blocked",
+            actual={"rsi_filter_passed": rsi_filter_passed},
+            required={"rsi_filter_passed": True},
+        ),
+        FunnelStep(
+            stage="bb_width",
+            passed=bb_width_filter_passed,
+            reason="bb_width_out_of_range",
+            actual={"bb_width_pct": bb_width_pct},
+            required={
+                "min_bb_width_pct": min_bb_width_pct,
+                "max_bb_width_pct": max_bb_width_pct,
             },
         ),
         FunnelStep(

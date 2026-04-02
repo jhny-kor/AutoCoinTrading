@@ -1,5 +1,6 @@
 """
 수정 요약
+- 실거래와의 차이를 줄이기 위해 알트/BTC 리플레이도 공통 신호 계산, 레짐 정책, 노이즈 비율, 진입 상태 머신을 반영하도록 확장
 - 혼합 청산 세트를 위해 알트 리플레이도 심볼별 순익 보호 익절 기준 map 을 읽도록 확장
 - 로컬 OHLCV 파일과 공개 거래소 시세를 이용해 전략을 오프라인으로 재생하는 백테스트/리플레이 CLI 를 추가
 - 알트 MA 전략과 BTC EMA 전략을 공통 인터페이스로 요약/거래 로그까지 저장하도록 구성
@@ -32,6 +33,21 @@ from analysis_log_collector import (
     fetch_upbit_ohlcv,
 )
 from btc_trend_settings import load_btc_trend_settings
+from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
+from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
+from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
+from core.strategy.btc_position import evaluate_btc_open_position
+from core.strategy.indicators import (
+    calc_adx,
+    calc_bollinger_band_width_pct,
+    calc_macd_histogram,
+    calc_noise_ratio,
+    calc_pct_slope,
+    calc_return_correlation,
+    calc_rsi,
+)
+from core.strategy.timing import update_entry_timing_state
+from market_regime_guard import classify_symbol_regime, get_alt_regime_policy, get_btc_regime_policy
 from strategy_settings import load_strategy_settings
 
 
@@ -272,6 +288,51 @@ def build_exit_prices(
     return stop_price, max(take_profit_price, fee_floor)
 
 
+def clamp_noise_multiplier(
+    *,
+    noise_ratio: float | None,
+    baseline: float,
+    min_multiplier: float,
+    max_multiplier: float,
+) -> float:
+    """노이즈 비율을 진입 문턱값 배수로 변환한다."""
+    if noise_ratio is None:
+        return 1.0
+    multiplier = 1.0 + ((noise_ratio - baseline) / max(baseline, 1e-9)) * 0.5
+    return max(min_multiplier, min(max_multiplier, multiplier))
+
+
+def build_replay_symbol_regime(
+    *,
+    volume_ratio: float | None,
+    avg_abs_change_pct: float | None,
+    gap_pct: float | None,
+    rsi_value: float | None,
+    adx_value: float | None,
+    bullish_signal: bool,
+    bearish_signal: bool,
+    above_ma: bool,
+    htf_bullish: bool | None,
+    public_buy_ready: bool,
+):
+    """실시간 분석 로그 대신 현재 캔들 특징으로 레짐을 분류한다."""
+    return classify_symbol_regime(
+        {
+            "volume_ratio": volume_ratio,
+            "avg_abs_change_pct": avg_abs_change_pct,
+            "gap_pct": gap_pct,
+            "rsi": rsi_value,
+            "adx": adx_value,
+            "public_buy_ready": public_buy_ready,
+            "bullish_signal": bullish_signal,
+            "bearish_signal": bearish_signal,
+            "above_ma": above_ma,
+            "htf_bullish": htf_bullish,
+            "collected_at_local": None,
+        }
+    )
+
+
 def load_candles(path: Path) -> list[Candle]:
     """CSV 또는 JSONL 파일에서 캔들 목록을 읽는다."""
     if not path.exists():
@@ -477,6 +538,7 @@ def resolve_default_max_daily_loss(exchange_name: str) -> float:
 def simulate_alt_strategy(
     *,
     candles: list[Candle],
+    btc_reference_candles: list[Candle] | None,
     source_timeframe: str,
     symbol: str,
     exchange_name: str,
@@ -497,6 +559,11 @@ def simulate_alt_strategy(
         target_timeframe=strategy.higher_timeframe,
     )
     higher_timeframe_timestamps = [candle.timestamp_ms for candle in higher_timeframe_candles]
+    btc_reference_timestamps = (
+        [candle.timestamp_ms for candle in btc_reference_candles]
+        if btc_reference_candles
+        else []
+    )
 
     cash = initial_cash
     units = 0.0
@@ -512,8 +579,16 @@ def simulate_alt_strategy(
     daily_pnl_date: str | None = None
     trade_records: list[TradeRecord] = []
     equity_curve: list[EquityPoint] = []
+    entry_timing_state: dict[str, dict[str, int | str]] = {}
 
-    min_required = max(strategy.volume_lookback + 3, strategy.volatility_lookback + 3, 25)
+    min_required = max(
+        strategy.volume_lookback + 3,
+        strategy.volatility_lookback + 3,
+        strategy.rsi_period + 3,
+        strategy.macd_slow_period + strategy.macd_signal_period + 3,
+        strategy.noise_ratio_lookback + 3,
+        25,
+    )
     for index in range(min_required, len(candles)):
         window = candles[: index + 1]
         current = window[-1]
@@ -523,63 +598,89 @@ def simulate_alt_strategy(
             daily_realized_pnl_quote = 0.0
 
         closes = [candle.close for candle in window]
-        bullish, bearish, prev_close, prev_ma, last_close, last_ma = detect_sma_crossover(closes, 20)
-        gap_pct = abs(last_close - last_ma) / last_ma * 100 if last_ma else 0.0
-        signal_is_strong = gap_pct >= strategy.get_crossover_gap_pct(symbol)
-        trend_follow_entry = (
-            strategy.enable_trend_follow_entry
-            and last_close > last_ma
-            and (
-                not strategy.trend_follow_requires_prev_above_ma
-                or prev_close > prev_ma
-            )
-            and (
-                not strategy.trend_follow_requires_price_rising
-                or last_close > prev_close
-            )
-        )
-        entry_signal = bullish or trend_follow_entry
+        ma_period = 20
+        bullish, bearish, prev_close, prev_ma, last_close, last_ma = detect_sma_crossover(closes, ma_period)
+        ma_series = [
+            calc_sma(closes[: idx + 1], ma_period)
+            for idx in range(ma_period - 1, len(closes))
+        ]
         volume_ratio = calc_volume_ratio(window, strategy.volume_lookback)
         avg_abs_change_pct = calc_avg_abs_change_pct(closes, strategy.volatility_lookback)
+        noise_ratio = calc_noise_ratio(
+            [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+            strategy.noise_ratio_lookback,
+        )
+        rsi_value = calc_rsi(closes, strategy.rsi_period)
+        _macd, _macd_signal, macd_histogram = calc_macd_histogram(
+            closes,
+            fast_period=strategy.macd_fast_period,
+            slow_period=strategy.macd_slow_period,
+            signal_period=strategy.macd_signal_period,
+        )
+        ma_slope_pct = calc_pct_slope(ma_series, strategy.trend_slope_lookback)
+        price_slope_pct = calc_pct_slope(closes, strategy.trend_slope_lookback)
+        adx_value = calc_adx(
+            [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+            14,
+        )
 
         active_higher_timeframe = get_active_candles_by_time(
             higher_timeframe_candles,
             higher_timeframe_timestamps,
             current.timestamp_ms,
         )
-        htf_bullish: bool | None = None
-        htf_bearish: bool | None = None
-        if strategy.enable_higher_timeframe_filter and len(active_higher_timeframe) >= strategy.higher_timeframe_ma_period:
-            htf_closes = [candle.close for candle in active_higher_timeframe]
-            htf_last_close = htf_closes[-1]
-            htf_last_ma = calc_sma(htf_closes, strategy.higher_timeframe_ma_period)
-            htf_bullish = htf_last_close > htf_last_ma
-            htf_bearish = htf_last_close < htf_last_ma
+        htf_bullish = True
+        htf_bearish = True
+        if strategy.enable_higher_timeframe_filter:
+            htf_bullish = False
+            htf_bearish = False
+            if len(active_higher_timeframe) >= strategy.higher_timeframe_ma_period:
+                htf_closes = [candle.close for candle in active_higher_timeframe]
+                htf_last_close = htf_closes[-1]
+                htf_last_ma = calc_sma(htf_closes, strategy.higher_timeframe_ma_period)
+                htf_bullish = htf_last_close > htf_last_ma
+                htf_bearish = htf_last_close < htf_last_ma
 
-        position_quote_value = units * last_close
-        has_position = units > 0 and position_quote_value >= min_buy_order_value * 0.5
-        if has_position and avg_entry_price is not None:
-            highest_price_since_entry = max(highest_price_since_entry or last_close, last_close)
-            lowest_price_since_entry = min(lowest_price_since_entry or last_close, last_close)
-        elif not has_position:
-            highest_price_since_entry = None
-            lowest_price_since_entry = None
+        base_min_gap_pct = strategy.get_crossover_gap_pct(symbol)
+        noise_gap_multiplier = clamp_noise_multiplier(
+            noise_ratio=noise_ratio,
+            baseline=strategy.noise_ratio_baseline,
+            min_multiplier=strategy.noise_ratio_min_multiplier,
+            max_multiplier=strategy.noise_ratio_max_multiplier,
+        ) if strategy.enable_noise_ratio_adaptation else 1.0
+        min_gap_pct = base_min_gap_pct * noise_gap_multiplier
 
-        in_partial_tp_cooldown = (
-            strategy.partial_take_profit_reentry_cooldown_sec > 0
-            and (current.timestamp_ms - last_partial_take_profit_ts) / 1000
-            < strategy.partial_take_profit_reentry_cooldown_sec
+        alt_signal_state = compute_alt_signal_state(
+            prev_close=prev_close,
+            prev_ma=prev_ma,
+            last_close=last_close,
+            last_ma=last_ma,
+            min_gap_pct=min_gap_pct,
+            enable_trend_follow_entry=strategy.enable_trend_follow_entry,
+            require_prev_above_ma=strategy.trend_follow_requires_prev_above_ma,
+            require_price_rising=strategy.trend_follow_requires_price_rising,
+            require_ma_slope_positive=strategy.trend_follow_requires_ma_slope_positive,
+            volume_ratio=volume_ratio,
+            min_volume_ratio=strategy.get_min_volume_ratio(symbol),
+            rsi_value=rsi_value,
+            enable_rsi_filter=strategy.enable_rsi_filter,
+            rsi_entry_min=strategy.rsi_entry_min,
+            rsi_entry_max=strategy.rsi_entry_max,
+            macd_histogram=macd_histogram,
+            enable_macd_filter=strategy.enable_macd_filter,
+            ma_slope_pct=ma_slope_pct,
+            price_slope_pct=price_slope_pct,
+            signal_score_min=strategy.signal_score_min,
         )
-        in_trade_cooldown = (
-            strategy.min_trade_interval_sec > 0
-            and (current.timestamp_ms - last_trade_ts) / 1000 < strategy.min_trade_interval_sec
-        )
-
-        daily_loss_limit_reached = daily_realized_pnl_quote <= -max_daily_loss_quote
-        take_profit_pct = strategy.get_take_profit_pct(symbol)
-        effective_min_take_profit_pct = max(take_profit_pct, fee_rate_pct * 2 * 1.1)
-        stop_loss_pct = strategy.get_stop_loss_pct(symbol)
-        fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
+        bullish = bool(alt_signal_state["bullish"])
+        bearish = bool(alt_signal_state["bearish"])
+        gap_pct = float(alt_signal_state["gap_pct"])
+        signal_is_strong = bool(alt_signal_state["signal_is_strong"])
+        signal_score = float(alt_signal_state["signal_score"])
+        rsi_filter_passed = bool(alt_signal_state["rsi_filter_passed"])
+        macd_filter_passed = bool(alt_signal_state["macd_filter_passed"])
+        trend_follow_entry = bool(alt_signal_state["trend_follow_entry"])
+        entry_signal = bool(alt_signal_state["entry_signal"])
 
         volume_filter_passed = (
             True
@@ -594,44 +695,144 @@ def simulate_alt_strategy(
                 and strategy.min_volatility_pct <= avg_abs_change_pct <= strategy.max_volatility_pct
             )
         )
-        higher_timeframe_passed = (
-            True
-            if not strategy.enable_higher_timeframe_filter
-            else htf_bullish is True
+        higher_timeframe_entry_passed = (
+            True if not strategy.enable_higher_timeframe_filter else bool(htf_bullish)
+        )
+        higher_timeframe_exit_passed = (
+            True if not strategy.enable_higher_timeframe_filter else bool(htf_bearish)
+        )
+
+        public_buy_ready = (
+            bullish
+            and signal_is_strong
+            and rsi_filter_passed
+            and macd_filter_passed
+            and volume_filter_passed
+            and volatility_filter_passed
+            and higher_timeframe_entry_passed
+        )
+        regime_snapshot = build_replay_symbol_regime(
+            volume_ratio=volume_ratio,
+            avg_abs_change_pct=avg_abs_change_pct,
+            gap_pct=gap_pct,
+            rsi_value=rsi_value,
+            adx_value=adx_value,
+            bullish_signal=bullish,
+            bearish_signal=bearish,
+            above_ma=last_close > last_ma,
+            htf_bullish=htf_bullish,
+            public_buy_ready=public_buy_ready,
+        )
+        regime_policy = get_alt_regime_policy(regime_snapshot.regime)
+
+        btc_reference_closes: list[float] = []
+        if btc_reference_candles:
+            active_btc_reference = get_active_candles_by_time(
+                btc_reference_candles,
+                btc_reference_timestamps,
+                current.timestamp_ms,
+            )
+            btc_reference_closes = [candle.close for candle in active_btc_reference]
+        correlation_with_btc = (
+            calc_return_correlation(
+                closes,
+                btc_reference_closes,
+                lookback=strategy.correlation_lookback,
+            )
+            if strategy.enable_correlation_filter and btc_reference_closes
+            else None
+        )
+
+        position_quote_value = units * last_close
+        has_position = units > 0 and position_quote_value >= min_buy_order_value * 0.5
+        in_partial_tp_cooldown = (
+            strategy.partial_take_profit_reentry_cooldown_sec > 0
+            and (current.timestamp_ms - last_partial_take_profit_ts) / 1000
+            < strategy.partial_take_profit_reentry_cooldown_sec
+        )
+        in_trade_cooldown = (
+            strategy.min_trade_interval_sec > 0
+            and (current.timestamp_ms - last_trade_ts) / 1000 < strategy.min_trade_interval_sec
+        )
+        daily_loss_limit_reached = daily_realized_pnl_quote <= -max_daily_loss_quote
+
+        correlation_entry_blocked = (
+            entry_signal
+            and strategy.enable_correlation_filter
+            and correlation_with_btc is not None
+            and correlation_with_btc >= strategy.max_correlation_with_btc
+        )
+        fill_quality_entry_blocked = False
+        raw_entry_candidate = (
+            entry_signal
+            and not regime_policy.pause_new_entry
+            and not correlation_entry_blocked
+        )
+        entry_timing_snapshot = update_entry_timing_state(
+            state_store=entry_timing_state,
+            symbol=symbol,
+            has_position=has_position,
+            candidate_active=raw_entry_candidate,
+            required_confirmations=strategy.entry_confirmation_loops,
         )
 
         realized_on_this_bar = False
+        pnl_pct = None
+        current_net_realized_pnl_pct = None
+        mfe_pct = None
+        mae_pct = None
+        if has_position and avg_entry_price is not None:
+            position_metrics = compute_alt_position_metrics(
+                has_position=has_position,
+                average_entry_price=avg_entry_price,
+                last_close=last_close,
+                base_free=units,
+                fee_rate_pct=fee_rate_pct,
+                highest_price_since_entry=highest_price_since_entry,
+                lowest_price_since_entry=lowest_price_since_entry,
+            )
+            highest_price_since_entry = position_metrics["highest_price_since_entry"]
+            lowest_price_since_entry = position_metrics["lowest_price_since_entry"]
+            pnl_pct = position_metrics["pnl_pct"]
+            mfe_pct = position_metrics["mfe_pct"]
+            mae_pct = position_metrics["mae_pct"]
+            current_net_realized_pnl_pct = position_metrics["net_pnl_pct"]
+        elif not has_position:
+            highest_price_since_entry = None
+            lowest_price_since_entry = None
+
+        take_profit_pct = strategy.get_take_profit_pct(symbol) + regime_policy.take_profit_bonus_pct
+        stop_loss_pct = strategy.get_stop_loss_pct(symbol) * regime_policy.stop_loss_multiplier
+        fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
+        break_even_guard_min_mfe_pct = strategy.get_break_even_guard_min_mfe_pct(symbol)
+        break_even_guard_floor_net_pnl_pct = strategy.get_break_even_guard_floor_net_pnl_pct(symbol)
+        alt_exit_state = compute_alt_exit_decisions(
+            has_position=has_position,
+            pnl_pct=pnl_pct,
+            mfe_pct=mfe_pct,
+            current_net_realized_pnl_pct=current_net_realized_pnl_pct,
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct,
+            fee_rate_pct=fee_rate_pct,
+            enable_fee_protect_exit=strategy.enable_fee_protect_exit,
+            fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
+            enable_break_even_guard=strategy.enable_break_even_guard,
+            break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
+            break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+            break_even_guard_max_profit_retrace_pct=strategy.break_even_guard_max_profit_retrace_pct,
+            bearish=bearish,
+            sell_split_ratio=strategy.sell_split_ratio,
+        )
+        take_profit_ready = bool(alt_exit_state["take_profit_ready"])
+        stop_loss_triggered = bool(alt_exit_state["stop_loss_triggered"])
+        profit_protect_triggered = bool(alt_exit_state["profit_protect_triggered"])
+        break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
 
         if has_position and avg_entry_price is not None:
-            pnl_pct = ((last_close - avg_entry_price) / avg_entry_price) * 100
-            current_net_realized_pnl_pct = pnl_pct - (fee_rate_pct * 2)
-            mfe_pct = (
-                ((highest_price_since_entry - avg_entry_price) / avg_entry_price) * 100
-                if highest_price_since_entry is not None
-                else 0.0
-            )
-
-            stop_loss_triggered = pnl_pct <= -stop_loss_pct
-            profit_protect_triggered = (
-                strategy.enable_fee_protect_exit
-                and bearish
-                and current_net_realized_pnl_pct >= fee_protect_min_net_pnl_pct
-                and not stop_loss_triggered
-            )
-            break_even_guard_triggered = (
-                strategy.enable_break_even_guard
-                and current_net_realized_pnl_pct > 0
-                and mfe_pct >= strategy.get_break_even_guard_min_mfe_pct(symbol)
-                and current_net_realized_pnl_pct <= strategy.get_break_even_guard_floor_net_pnl_pct(symbol)
-                and not stop_loss_triggered
-                and not profit_protect_triggered
-            )
-            normal_take_profit_triggered = bearish and pnl_pct >= effective_min_take_profit_pct
-
+            normal_exit_triggered = bearish and take_profit_ready and higher_timeframe_exit_passed
             exit_ratio = 0.0
             exit_reason = ""
             is_final_exit = True
-
             if stop_loss_triggered:
                 if strategy.uses_partial_stop_loss(symbol) and not partial_stop_loss_done:
                     exit_ratio = strategy.partial_stop_loss_ratio
@@ -646,7 +847,7 @@ def simulate_alt_strategy(
             elif break_even_guard_triggered:
                 exit_ratio = 1.0
                 exit_reason = "break_even_guard_exit"
-            elif normal_take_profit_triggered:
+            elif normal_exit_triggered:
                 if strategy.uses_partial_take_profit(symbol) and not partial_take_profit_done:
                     exit_ratio = strategy.partial_take_profit_ratio
                     exit_reason = "partial_take_profit"
@@ -685,8 +886,7 @@ def simulate_alt_strategy(
                         last_partial_take_profit_ts = current.timestamp_ms
                     if exit_reason == "partial_stop_loss" and units > 0:
                         partial_stop_loss_done = True
-                    if exit_reason in {"stop_loss", "profit_protect_take_profit", "break_even_guard_exit", "take_profit"}:
-                        last_trade_ts = current.timestamp_ms
+                    last_trade_ts = current.timestamp_ms
                     trade_records.append(
                         TradeRecord(
                             strategy_type="alt",
@@ -711,7 +911,10 @@ def simulate_alt_strategy(
                                 "is_final_exit": is_final_exit,
                                 "daily_realized_pnl_quote_after": daily_realized_pnl_quote,
                                 "mfe_pct": mfe_pct,
+                                "mae_pct": mae_pct,
                                 "current_net_realized_pnl_pct": current_net_realized_pnl_pct,
+                                "signal_score": signal_score,
+                                "symbol_regime": regime_snapshot.regime,
                             },
                         )
                     )
@@ -719,17 +922,23 @@ def simulate_alt_strategy(
 
         position_ratio = strategy.get_position_ratio(symbol, risk_per_trade)
         requested_order_value = cash * position_ratio * strategy.buy_split_ratio
-        can_average_down = (
-            has_position
-            and avg_entry_price is not None
-            and last_close <= avg_entry_price * (1 - (strategy.averaging_down_gap_pct / 100))
+        can_average_down = compute_can_average_down(
+            has_position=has_position,
+            average_entry_price=avg_entry_price,
+            last_close=last_close,
+            averaging_down_gap_pct=strategy.averaging_down_gap_pct,
         )
+        effective_max_entry_count = max(0, strategy.max_entry_count + regime_policy.max_entry_count_delta)
         entry_allowed = (
             entry_signal
             and signal_is_strong
+            and (not regime_policy.require_strong_signal or signal_is_strong)
             and volume_filter_passed
             and volatility_filter_passed
-            and higher_timeframe_passed
+            and higher_timeframe_entry_passed
+            and not correlation_entry_blocked
+            and not fill_quality_entry_blocked
+            and entry_timing_snapshot.ready
             and not in_trade_cooldown
             and not in_partial_tp_cooldown
             and not daily_loss_limit_reached
@@ -738,7 +947,7 @@ def simulate_alt_strategy(
                 not has_position
                 or (
                     can_average_down
-                    and entry_count < strategy.max_entry_count
+                    and entry_count < effective_max_entry_count
                 )
             )
             and not realized_on_this_bar
@@ -780,9 +989,15 @@ def simulate_alt_strategy(
                         entry_count_after=entry_count,
                         extra={
                             "signal_is_strong": signal_is_strong,
+                            "signal_score": signal_score,
                             "gap_pct": gap_pct,
+                            "noise_ratio": noise_ratio,
+                            "noise_gap_multiplier": noise_gap_multiplier,
                             "volume_ratio": volume_ratio,
                             "avg_abs_change_pct": avg_abs_change_pct,
+                            "correlation_with_btc": correlation_with_btc,
+                            "symbol_regime": regime_snapshot.regime,
+                            "entry_timing_phase": entry_timing_snapshot.phase,
                         },
                     )
                 )
@@ -825,6 +1040,7 @@ def simulate_alt_strategy(
         "win_rate_pct": (len(winning_trades) / len(sell_records) * 100) if sell_records else 0.0,
         "total_net_realized_pnl_quote": sum((record.net_realized_pnl_quote or 0.0) for record in sell_records),
         "max_drawdown_pct": compute_max_drawdown(equity_curve),
+        "backtest_assumes_full_fill": True,
     }
     return summary, trade_records, equity_curve
 
@@ -866,12 +1082,16 @@ def simulate_btc_strategy(
     daily_pnl_date: str | None = None
     trade_records: list[TradeRecord] = []
     equity_curve: list[EquityPoint] = []
+    entry_timing_state: dict[str, dict[str, int | str]] = {}
 
     min_required = max(
         settings.slow_ema_period + 5,
         settings.atr_period + 5,
         settings.volume_lookback + 5,
         settings.swing_lookback + 5,
+        settings.rsi_period + 5,
+        settings.bb_period + 5,
+        settings.noise_ratio_lookback + 5,
     )
     for index in range(min_required, len(base_candles)):
         window = base_candles[: index + 1]
@@ -882,37 +1102,91 @@ def simulate_btc_strategy(
             daily_realized_pnl_quote = 0.0
 
         closes = [candle.close for candle in window]
+        fast_ema_series = calc_ema_series(closes, settings.fast_ema_period)
+        slow_ema_series = calc_ema_series(closes, settings.slow_ema_period)
         bullish, bearish, _, _, fast_ema, slow_ema = detect_ema_crossover(
             closes,
             settings.fast_ema_period,
             settings.slow_ema_period,
         )
         last_close = closes[-1]
-        ema_spread_pct = abs(fast_ema - slow_ema) / slow_ema * 100 if slow_ema else 0.0
         volume_ratio = calc_volume_ratio(window, settings.volume_lookback)
         atr_value = calc_atr(window, settings.atr_period)
         atr_pct = (atr_value / last_close) * 100 if last_close > 0 else 0.0
+        rsi_value = calc_rsi(closes, settings.rsi_period)
+        noise_ratio = calc_noise_ratio(
+            [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+            settings.noise_ratio_lookback,
+        )
+        bb_width_pct = calc_bollinger_band_width_pct(
+            closes,
+            period=settings.bb_period,
+            stddev_multiplier=settings.bb_stddev_multiplier,
+        )
+        fast_ema_slope_pct = calc_pct_slope(fast_ema_series, settings.ema_slope_lookback)
+        slow_ema_slope_pct = calc_pct_slope(slow_ema_series, settings.ema_slope_lookback)
         confirm_window = get_active_candles_by_time(confirm_candles, confirm_timestamps, current.timestamp_ms)
         confirm_filter_passed = True
+        confirm_bullish = True
         if settings.enable_confirm_timeframe_filter:
             confirm_filter_passed = False
+            confirm_bullish = False
             if len(confirm_window) >= settings.confirm_ema_period:
                 confirm_closes = [candle.close for candle in confirm_window]
                 confirm_last_close = confirm_closes[-1]
                 confirm_last_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
-                confirm_filter_passed = confirm_last_close > confirm_last_ema
+                confirm_bullish = confirm_last_close > confirm_last_ema
+                confirm_filter_passed = confirm_bullish
 
-        ema_aligned = fast_ema > slow_ema
-        price_above_fast = last_close > fast_ema
-        trend_follow_entry = (
-            settings.enable_trend_follow_entry
-            and ema_aligned
-            and (
-                not settings.trend_follow_requires_price_above_fast
-                or price_above_fast
+        base_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
+        noise_spread_multiplier = clamp_noise_multiplier(
+            noise_ratio=noise_ratio,
+            baseline=settings.noise_ratio_baseline,
+            min_multiplier=settings.noise_ratio_min_multiplier,
+            max_multiplier=settings.noise_ratio_max_multiplier,
+        ) if settings.enable_noise_ratio_adaptation else 1.0
+        effective_signal_score_min = settings.signal_score_min
+        if settings.enable_noise_ratio_adaptation and noise_ratio is not None:
+            effective_signal_score_min = max(
+                0.0,
+                min(
+                    100.0,
+                    settings.signal_score_min
+                    + (noise_ratio - settings.noise_ratio_baseline)
+                    * settings.noise_ratio_signal_score_weight,
+                ),
             )
+        effective_min_ema_spread_pct = base_min_ema_spread_pct * noise_spread_multiplier
+        btc_entry_state = compute_btc_entry_state(
+            bullish=bullish,
+            last_fast=fast_ema,
+            last_slow=slow_ema,
+            last_close=last_close,
+            min_ema_spread_pct=effective_min_ema_spread_pct,
+            enable_trend_follow_entry=settings.enable_trend_follow_entry,
+            require_price_above_fast=settings.trend_follow_requires_price_above_fast,
+            require_ema_slope_positive=settings.trend_follow_requires_ema_slope_positive,
+            fast_ema_slope_pct=fast_ema_slope_pct,
+            slow_ema_slope_pct=slow_ema_slope_pct,
+            rsi_value=rsi_value,
+            enable_rsi_filter=settings.enable_rsi_filter,
+            rsi_entry_min=settings.rsi_entry_min,
+            rsi_entry_max=settings.rsi_entry_max,
+            bb_width_pct=bb_width_pct,
+            enable_bb_width_filter=settings.enable_bb_width_filter,
+            min_bb_width_pct=settings.min_bb_width_pct,
+            max_bb_width_pct=settings.max_bb_width_pct,
+            signal_score_min=effective_signal_score_min,
         )
-        entry_signal = bullish or trend_follow_entry
+        ema_aligned = bool(btc_entry_state["ema_aligned"])
+        price_above_fast = bool(btc_entry_state["price_above_fast"])
+        ema_slope_positive = bool(btc_entry_state["ema_slope_positive"])
+        ema_spread_pct = float(btc_entry_state["ema_spread_pct"])
+        rsi_filter_passed = bool(btc_entry_state["rsi_filter_passed"])
+        bb_width_filter_passed = bool(btc_entry_state["bb_width_filter_passed"])
+        signal_score = float(btc_entry_state["signal_score"])
+        trend_follow_entry = bool(btc_entry_state["trend_follow_entry"])
+        entry_signal = bool(btc_entry_state["entry_signal"])
         volume_filter_passed = volume_ratio is not None and volume_ratio >= settings.get_min_volume_ratio(symbol)
         atr_filter_passed = settings.get_min_atr_pct(symbol) <= atr_pct <= settings.max_atr_pct
 
@@ -933,43 +1207,98 @@ def simulate_btc_strategy(
         in_cooldown = max(base_cooldown_remaining, stop_loss_cooldown_remaining, profit_exit_cooldown_remaining) > 0
         daily_loss_limit_reached = daily_realized_pnl_quote <= -max_daily_loss_quote
 
-        if has_position and entry_price is not None:
-            pnl_pct = ((last_close - entry_price) / entry_price) * 100
-            current_net_pnl_pct = pnl_pct - (fee_rate_pct * 2)
-            recent_swing_low = get_recent_swing_low(window[:-1], settings.swing_lookback)
-            recent_swing_high = get_recent_swing_high(window[:-1], settings.swing_lookback)
-            fee_floor_take_profit_pct = fee_rate_pct * 2 * 1.05
-            stop_price, take_profit_price = build_exit_prices(
-                entry_price=entry_price,
-                atr_value=atr_value,
-                recent_swing_low=recent_swing_low,
-                recent_swing_high=recent_swing_high,
-                min_take_profit_pct=fee_floor_take_profit_pct,
-                settings=settings,
-            )
-            stop_triggered = last_close <= stop_price
-            profit_protect_triggered = (
-                settings.enable_fee_protect_exit
-                and bearish
-                and current_net_pnl_pct >= settings.fee_protect_min_net_pnl_pct
-                and not stop_triggered
-            )
-            if not trailing_armed and last_close >= take_profit_price:
-                trailing_armed = True
-            trailing_drawdown_pct = (
-                ((highest_price_since_entry - last_close) / highest_price_since_entry) * 100
-                if trailing_armed and highest_price_since_entry
-                else 0.0
-            )
-            trailing_triggered = trailing_armed and trailing_drawdown_pct >= settings.trailing_drawdown_pct and not stop_triggered
-            trend_exit_triggered = (
-                settings.exit_on_bearish_cross
-                and bearish
-                and not trailing_armed
-                and not stop_triggered
-                and not profit_protect_triggered
-            )
+        regime_snapshot = build_replay_symbol_regime(
+            volume_ratio=volume_ratio,
+            avg_abs_change_pct=calc_avg_abs_change_pct(closes, settings.volume_lookback),
+            gap_pct=ema_spread_pct,
+            rsi_value=rsi_value,
+            adx_value=calc_adx(
+                [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+                14,
+            ),
+            bullish_signal=bullish,
+            bearish_signal=bearish,
+            above_ma=last_close > slow_ema,
+            htf_bullish=confirm_bullish,
+            public_buy_ready=(
+                bullish and volume_filter_passed and atr_filter_passed and confirm_filter_passed
+                and rsi_filter_passed and bb_width_filter_passed
+            ),
+        )
+        regime_policy = get_btc_regime_policy(regime_snapshot.regime)
+        effective_min_volume_ratio = settings.get_effective_min_volume_ratio(symbol, regime_snapshot.regime)
+        volume_filter_passed = volume_ratio is not None and volume_ratio >= effective_min_volume_ratio
+        effective_min_atr_pct = settings.get_min_atr_pct(symbol) * regime_policy.min_atr_multiplier
+        atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
+        fill_quality_entry_blocked = False
+        raw_entry_candidate = (
+            entry_signal
+            and not regime_policy.pause_new_entry
+            and not fill_quality_entry_blocked
+        )
+        entry_timing_snapshot = update_entry_timing_state(
+            state_store=entry_timing_state,
+            symbol=symbol,
+            has_position=has_position,
+            candidate_active=raw_entry_candidate,
+            required_confirmations=settings.entry_confirmation_loops,
+        )
 
+        recent_swing_low = get_recent_swing_low(window[:-1], settings.swing_lookback)
+        recent_swing_high = get_recent_swing_high(window[:-1], settings.swing_lookback)
+        position_state = evaluate_btc_open_position(
+            has_position=has_position,
+            entry_price=entry_price,
+            last_close=last_close,
+            base_free=units,
+            fee_rate_pct=fee_rate_pct,
+            atr_value=atr_value,
+            recent_swing_low=recent_swing_low,
+            recent_swing_high=recent_swing_high,
+            highest_price_since_entry=highest_price_since_entry,
+            lowest_price_since_entry=lowest_price_since_entry,
+            trailing_armed=trailing_armed,
+            trailing_armed_at=None,
+            trailing_activation_price=None,
+            partial_take_profit_done=partial_take_profit_done,
+            confirm_bullish=confirm_bullish,
+            ema_aligned=ema_aligned,
+            ema_spread_pct=ema_spread_pct,
+            settings=settings,
+        )
+        highest_price_since_entry = position_state["highest_price_since_entry"]
+        lowest_price_since_entry = position_state["lowest_price_since_entry"]
+        trailing_armed = bool(position_state["trailing_armed"])
+        stop_price = position_state["stop_price"]
+        take_profit_price = position_state["take_profit_price"]
+        pnl_pct = position_state["pnl_pct"]
+        current_net_pnl_pct = position_state["current_net_realized_pnl_pct"]
+        partial_take_profit_triggered = bool(position_state["partial_take_profit_triggered"])
+        bull_pullback_hold_active = bool(position_state["bull_pullback_hold_active"])
+        drawdown_from_high_pct = position_state["drawdown_from_high_pct"]
+        mfe_pct = position_state["mfe_pct"]
+        mae_pct = position_state["mae_pct"]
+
+        btc_exit_flags = compute_btc_exit_flags(
+            has_position=has_position,
+            stop_price=stop_price,
+            take_profit_price=take_profit_price,
+            last_close=last_close,
+            highest_price_since_entry=highest_price_since_entry,
+            trailing_drawdown_pct=settings.trailing_drawdown_pct * regime_policy.trailing_drawdown_multiplier,
+            trailing_armed=trailing_armed,
+            enable_fee_protect_exit=settings.enable_fee_protect_exit,
+            fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
+            pnl_pct=current_net_pnl_pct,
+            bearish=(bearish or (not ema_aligned) or (not price_above_fast)),
+            confirm_bullish=confirm_bullish and not bull_pullback_hold_active,
+        )
+        stop_triggered = bool(btc_exit_flags["stop_triggered"])
+        trailing_triggered = bool(btc_exit_flags["trailing_stop_triggered"])
+        profit_protect_triggered = bool(btc_exit_flags["profit_protect_triggered"])
+        trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
+
+        if has_position and entry_price is not None:
             sell_ratio = 0.0
             exit_reason = ""
             if stop_triggered:
@@ -981,7 +1310,7 @@ def simulate_btc_strategy(
             elif trailing_triggered:
                 sell_ratio = 1.0
                 exit_reason = "trailing_take_profit"
-            elif not partial_take_profit_done and settings.enable_partial_take_profit and last_close >= take_profit_price:
+            elif partial_take_profit_triggered:
                 sell_ratio = settings.partial_take_profit_ratio
                 exit_reason = "partial_take_profit"
             elif trend_exit_triggered:
@@ -1039,6 +1368,12 @@ def simulate_btc_strategy(
                             "trailing_armed": trailing_armed,
                             "atr_pct": atr_pct,
                             "ema_spread_pct": ema_spread_pct,
+                            "signal_score": signal_score,
+                            "noise_ratio": noise_ratio,
+                            "symbol_regime": regime_snapshot.regime,
+                            "drawdown_from_high_pct": drawdown_from_high_pct,
+                            "mfe_pct": mfe_pct,
+                            "mae_pct": mae_pct,
                         },
                     )
                 )
@@ -1049,10 +1384,13 @@ def simulate_btc_strategy(
         requested_add_on_order_value = cash * risk_per_trade * settings.pyramid_position_ratio
         entry_allowed = (
             entry_signal
-            and ema_spread_pct >= settings.get_min_ema_spread_pct(symbol)
+            and signal_score >= effective_signal_score_min
             and volume_filter_passed
             and atr_filter_passed
             and confirm_filter_passed
+            and not regime_policy.pause_new_entry
+            and (not regime_policy.require_fresh_cross or bullish)
+            and entry_timing_snapshot.ready
             and not in_cooldown
             and not daily_loss_limit_reached
             and requested_order_value >= min_buy_order_value
@@ -1062,9 +1400,10 @@ def simulate_btc_strategy(
             has_position
             and entry_price is not None
             and settings.enable_pyramid_add_on
-            and add_on_count < settings.pyramid_max_add_ons
+            and add_on_count < max(0, settings.pyramid_max_add_ons + regime_policy.pyramid_max_add_ons_delta)
             and ((last_close - entry_price) / entry_price) * 100 >= settings.pyramid_trigger_profit_pct
             and entry_signal
+            and signal_score >= effective_signal_score_min
             and requested_add_on_order_value >= min_buy_order_value
         )
 
@@ -1109,6 +1448,11 @@ def simulate_btc_strategy(
                             "ema_spread_pct": ema_spread_pct,
                             "atr_pct": atr_pct,
                             "volume_ratio": volume_ratio,
+                            "signal_score": signal_score,
+                            "noise_ratio": noise_ratio,
+                            "noise_spread_multiplier": noise_spread_multiplier,
+                            "symbol_regime": regime_snapshot.regime,
+                            "entry_timing_phase": entry_timing_snapshot.phase,
                         },
                     )
                 )
@@ -1149,6 +1493,7 @@ def simulate_btc_strategy(
         "win_rate_pct": (len(winning_trades) / len(sell_records) * 100) if sell_records else 0.0,
         "total_net_realized_pnl_quote": sum((record.net_realized_pnl_quote or 0.0) for record in sell_records),
         "max_drawdown_pct": compute_max_drawdown(equity_curve),
+        "backtest_assumes_full_fill": True,
     }
     return summary, trade_records, equity_curve
 
@@ -1197,6 +1542,9 @@ def run_backtest_command(args: argparse.Namespace) -> int:
     """리플레이/백테스트를 실행하고 결과 파일을 저장한다."""
     input_path = Path(args.input)
     candles = load_candles(input_path)
+    btc_reference_candles = None
+    if getattr(args, "btc_reference_input", None):
+        btc_reference_candles = load_candles(Path(args.btc_reference_input))
     if len(candles) < 50:
         raise ValueError("백테스트에 필요한 캔들이 너무 적습니다. 최소 50개 이상 준비하세요.")
 
@@ -1213,6 +1561,7 @@ def run_backtest_command(args: argparse.Namespace) -> int:
     if args.strategy == "alt":
         summary, trades, equity_curve = simulate_alt_strategy(
             candles=candles,
+            btc_reference_candles=btc_reference_candles,
             source_timeframe=args.timeframe,
             symbol=args.symbol,
             exchange_name=args.exchange,
@@ -1267,6 +1616,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--exchange", required=True, choices=["okx", "upbit"])
     run_parser.add_argument("--symbol", required=True)
     run_parser.add_argument("--input", required=True)
+    run_parser.add_argument(
+        "--btc-reference-input",
+        help="알트 전략에서 BTC 상관관계 필터를 같이 재생할 때 사용할 BTC 기준 OHLCV 파일",
+    )
     run_parser.add_argument("--timeframe", required=True, help="입력 파일 캔들 주기")
     run_parser.add_argument("--initial-cash", type=float, default=1_000_000.0)
     run_parser.add_argument("--fee-rate-pct", type=float, default=None)

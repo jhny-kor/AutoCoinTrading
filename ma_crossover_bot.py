@@ -1,5 +1,8 @@
 """
 수정 요약
+- 노이즈 비율 기반 동적 이격도 보정을 추가해 알트 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강
+- 2차 강화로 진입 상태 머신, BTC 상관관계 가드, 체결률 기반 진입 차단을 추가했다.
+- 알트 진입에 RSI, MACD, MA 기울기, 신호 스코어를 추가하고 레짐별 손절/익절/분할진입 정책을 반영하도록 강화
 - 혼합 청산 세트를 위해 심볼별 순익 보호 익절 기준을 읽어 ETH/USDT, XRP/KRW 같은 심볼별 청산 성격을 분리할 수 있게 확장
 - 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 공통 알트 전략 진입 가드를 강화했다.
 - OKX 외부 응답 지연(RequestTimeout/NetworkError) 완화를 위해 시세/잔고 조회에 제한적 재시도를 적용했다.
@@ -64,14 +67,24 @@ from core.logging.metrics import build_alt_common_metrics
 from core.positions.lifecycle import clear_alt_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_alt_allocation
+from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
 from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
+from core.strategy.indicators import (
+    calc_macd_histogram,
+    calc_noise_ratio,
+    calc_pct_slope,
+    calc_return_correlation,
+    calc_rsi,
+)
+from core.strategy.timing import update_entry_timing_state
 from market_regime_guard import (
     build_regime_change_message,
     classify_symbol_regime,
+    get_alt_regime_policy,
     load_latest_symbol_record,
     load_low_energy_snapshot,
     update_regime_state,
@@ -82,7 +95,12 @@ from state_recovery import (
     restore_program_position_states,
 )
 from structured_log_manager import FunnelStep, StructuredLogManager, choose_volatility_reason
-from strategy_settings import load_alt_markets, load_managed_symbols, load_strategy_settings
+from strategy_settings import (
+    DEFAULT_OKX_BTC_SYMBOL,
+    load_alt_markets,
+    load_managed_symbols,
+    load_strategy_settings,
+)
 from telegram_notifier import load_telegram_notifier
 from trade_history_logger import (
     TradeHistoryLogger,
@@ -254,6 +272,7 @@ def run_bot():
     structured_logger = StructuredLogManager("ma_crossover_bot")
     notifier = load_telegram_notifier()
     trade_history = TradeHistoryLogger()
+    execution_quality_guard = ExecutionQualityGuard()
     portfolio_allocator = PortfolioAllocator(
         exchange_name="OKX",
         quote_currency="USDT",
@@ -283,9 +302,17 @@ def run_bot():
     daily_limit_notified = (
         daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
     )
+    entry_timing_state: dict[str, dict[str, int | str]] = {}
 
     timeframe = "1m"
     ma_period = 20
+    min_ohlcv_limit = max(
+        ma_period + 5,
+        strategy.rsi_period + 5,
+        strategy.noise_ratio_lookback + 5,
+        strategy.macd_slow_period + strategy.macd_signal_period + 5,
+        ma_period + strategy.trend_slope_lookback + 5,
+    )
 
     log = logger.log
 
@@ -332,6 +359,23 @@ def run_bot():
                 message="일일 손익 누적값을 초기화했습니다.",
             )
 
+        btc_reference_closes: list[float] = []
+        btc_reference_above_ma = False
+        if strategy.enable_correlation_filter:
+            try:
+                btc_ohlcv = fetch_ohlcv(
+                    exchange,
+                    DEFAULT_OKX_BTC_SYMBOL,
+                    timeframe=timeframe,
+                    limit=max(min_ohlcv_limit, strategy.correlation_lookback + ma_period + 5),
+                )
+                btc_reference_closes = [row[4] for row in btc_ohlcv]
+                if len(btc_reference_closes) >= ma_period:
+                    btc_reference_ma = calc_sma(btc_reference_closes, ma_period)
+                    btc_reference_above_ma = btc_reference_closes[-1] > btc_reference_ma
+            except Exception as exc:
+                log(f"[BTC/USDT] 상관관계 기준 시세 조회 실패: {exc}")
+
         for m in markets:
             symbol = m["symbol"]
             base = m["base"]
@@ -342,9 +386,13 @@ def run_bot():
             try:
                 log("캔들 데이터 조회 시도 중...")
                 ohlcv = fetch_ohlcv(
-                    exchange, symbol, timeframe=timeframe, limit=ma_period + 5
+                    exchange, symbol, timeframe=timeframe, limit=min_ohlcv_limit
                 )
                 closes = [c[4] for c in ohlcv]  # 종가 리스트
+                ma_series = [
+                    calc_sma(closes[: idx + 1], ma_period)
+                    for idx in range(ma_period - 1, len(closes))
+                ]
                 log("이동평균 및 크로스 계산 중...")
                 (
                     bullish,
@@ -364,9 +412,29 @@ def run_bot():
                 )
                 gap_pct = abs(last_close - last_ma) / last_ma * 100 if last_ma else 0.0
                 log(f"[{symbol}] 현재 종가와 MA 이격도: {gap_pct:.4f}%")
+                rsi_value = calc_rsi(closes, strategy.rsi_period)
+                noise_ratio = calc_noise_ratio(
+                    ohlcv,
+                    strategy.noise_ratio_lookback,
+                )
+                _macd_value, _macd_signal, macd_histogram = calc_macd_histogram(
+                    closes,
+                    fast_period=strategy.macd_fast_period,
+                    slow_period=strategy.macd_slow_period,
+                    signal_period=strategy.macd_signal_period,
+                )
+                ma_slope_pct = calc_pct_slope(
+                    ma_series,
+                    strategy.trend_slope_lookback,
+                )
+                price_slope_pct = calc_pct_slope(
+                    closes,
+                    strategy.trend_slope_lookback,
+                )
 
                 volume_ratio = calc_volume_ratio(ohlcv, strategy.volume_lookback)
-                effective_min_volume_ratio = strategy.get_min_volume_ratio(symbol)
+                base_min_volume_ratio = strategy.get_min_volume_ratio(symbol)
+                effective_min_volume_ratio = base_min_volume_ratio
                 volume_filter_passed = True
                 if strategy.enable_volume_filter and volume_ratio is not None:
                     volume_filter_passed = (
@@ -434,10 +502,11 @@ def run_bot():
                     load_latest_symbol_record(exchange_name="okx", symbol=symbol)
                 )
                 symbol_regime = symbol_regime_snapshot.regime
+                regime_policy = get_alt_regime_policy(symbol_regime)
                 symbol_regime_blocks_entry = (
-                    not has_position and symbol_regime in {"LOW_ENERGY", "OVERHEATED", "EXHAUSTION_RISK"}
+                    not has_position and regime_policy.pause_new_entry
                 )
-                symbol_regime_requires_strong_signal = symbol_regime in {"BREAKOUT_ATTEMPT", "CHOPPY"}
+                symbol_regime_requires_strong_signal = regime_policy.require_strong_signal
                 should_alert, previous_regime = update_regime_state(
                     exchange_name="okx",
                     symbol=symbol,
@@ -524,7 +593,23 @@ def run_bot():
                         f"남은 시간: {int(partial_take_profit_cooldown_remaining)}초"
                     )
 
-                min_gap_pct = strategy.get_crossover_gap_pct(symbol)
+                base_min_gap_pct = strategy.get_crossover_gap_pct(symbol)
+                noise_gap_multiplier = 1.0
+                if strategy.enable_noise_ratio_adaptation and noise_ratio is not None:
+                    noise_gap_multiplier = 1.0 + (
+                        (noise_ratio - strategy.noise_ratio_baseline)
+                        / max(strategy.noise_ratio_baseline, 1e-9)
+                    ) * 0.5
+                    noise_gap_multiplier = max(
+                        strategy.noise_ratio_min_multiplier,
+                        min(strategy.noise_ratio_max_multiplier, noise_gap_multiplier),
+                    )
+                # 노이즈가 큰 장은 진입 문턱을 높이고, 깔끔한 장은 문턱을 낮춰 진입 속도를 높인다.
+                min_gap_pct = base_min_gap_pct * noise_gap_multiplier
+                effective_max_entry_count = max(
+                    0,
+                    strategy.max_entry_count + regime_policy.max_entry_count_delta,
+                )
                 position_ratio = strategy.get_position_ratio(
                     symbol,
                     config["risk_per_trade"],
@@ -538,23 +623,95 @@ def run_bot():
                     enable_trend_follow_entry=strategy.enable_trend_follow_entry,
                     require_prev_above_ma=strategy.trend_follow_requires_prev_above_ma,
                     require_price_rising=strategy.trend_follow_requires_price_rising,
+                    require_ma_slope_positive=strategy.trend_follow_requires_ma_slope_positive,
+                    volume_ratio=volume_ratio,
+                    min_volume_ratio=effective_min_volume_ratio,
+                    rsi_value=rsi_value,
+                    enable_rsi_filter=strategy.enable_rsi_filter,
+                    rsi_entry_min=strategy.rsi_entry_min,
+                    rsi_entry_max=strategy.rsi_entry_max,
+                    macd_histogram=macd_histogram,
+                    enable_macd_filter=strategy.enable_macd_filter,
+                    ma_slope_pct=ma_slope_pct,
+                    price_slope_pct=price_slope_pct,
+                    signal_score_min=strategy.signal_score_min,
                 )
                 bullish = bool(alt_signal_state["bullish"])
                 bearish = bool(alt_signal_state["bearish"])
                 gap_pct = float(alt_signal_state["gap_pct"])
                 signal_is_strong = bool(alt_signal_state["signal_is_strong"])
+                signal_score = float(alt_signal_state["signal_score"])
+                rsi_filter_passed = bool(alt_signal_state["rsi_filter_passed"])
+                macd_filter_passed = bool(alt_signal_state["macd_filter_passed"])
                 trend_follow_entry = bool(alt_signal_state["trend_follow_entry"])
                 entry_signal = bool(alt_signal_state["entry_signal"])
+                # 알트가 BTC와 너무 같은 방향으로 움직이는 구간은 포트폴리오 중복 노출을 줄이기 위해 진입을 막는다.
+                correlation_with_btc = (
+                    calc_return_correlation(
+                        closes,
+                        btc_reference_closes,
+                        lookback=strategy.correlation_lookback,
+                    )
+                    if strategy.enable_correlation_filter and btc_reference_closes
+                    else None
+                )
+                correlation_entry_blocked = (
+                    entry_signal
+                    and strategy.enable_correlation_filter
+                    and not has_position
+                    and btc_reference_above_ma
+                    and correlation_with_btc is not None
+                    and correlation_with_btc >= strategy.max_correlation_with_btc
+                )
+                # 최근 체결비율이 낮았던 심볼은 주문 품질이 회복될 때까지 잠시 쉬게 만든다.
+                fill_quality_snapshot = (
+                    execution_quality_guard.get_fill_quality_snapshot(
+                        exchange_name="OKX",
+                        symbol=symbol,
+                        since_seconds=strategy.fill_quality_lookback_sec,
+                        min_fill_ratio=strategy.fill_quality_min_fill_ratio,
+                        min_sample_count=strategy.fill_quality_min_sample_count,
+                    )
+                    if strategy.enable_fill_quality_guard
+                    else FillQualitySnapshot(
+                        active=False,
+                        avg_fill_ratio=None,
+                        sample_count=0,
+                        latest_recorded_at=None,
+                        reason="disabled",
+                    )
+                )
+                fill_quality_entry_blocked = (
+                    entry_signal and not has_position and fill_quality_snapshot.active
+                )
+                raw_entry_candidate = (
+                    entry_signal
+                    and not symbol_regime_blocks_entry
+                    and not low_energy_guard_active
+                    and not correlation_entry_blocked
+                    and not fill_quality_entry_blocked
+                )
+                # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
+                entry_timing_snapshot = update_entry_timing_state(
+                    state_store=entry_timing_state,
+                    symbol=symbol,
+                    has_position=has_position,
+                    candidate_active=raw_entry_candidate,
+                    required_confirmations=strategy.entry_confirmation_loops,
+                )
                 dynamic_bonus_eligible = is_dynamic_bonus_eligible(
                     has_position=has_position,
                     base_signal=bullish,
-                    strong_signal=signal_is_strong,
+                    strong_signal=signal_score >= strategy.dynamic_signal_score_min,
                     require_strong_signal=portfolio_allocator.settings.dynamic_require_strong_signal,
                     volume_ratio=volume_ratio,
                     volume_threshold=portfolio_allocator.settings.dynamic_volume_ratio_threshold,
                     trend_ok=htf_bullish,
                     require_trend_ok=portfolio_allocator.settings.dynamic_require_trend_ok,
-                    enable_dynamic_overweight=portfolio_allocator.settings.enable_dynamic_overweight,
+                    enable_dynamic_overweight=(
+                        portfolio_allocator.settings.enable_dynamic_overweight
+                        and regime_policy.allow_dynamic_overweight
+                    ),
                 )
                 requested_order_value, allocation_decision = build_alt_allocation(
                     portfolio_allocator=portfolio_allocator,
@@ -568,7 +725,34 @@ def run_bot():
                 usdt_to_use = allocation_decision.approved_order_value_quote
                 estimated_buy_amount = usdt_to_use / last_close if last_close else 0.0
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
+                if noise_ratio is not None:
+                    log(
+                        f"[{symbol}] 노이즈 비율: {noise_ratio:.4f} "
+                        f"(기본 이격도 {base_min_gap_pct:.4f}% -> 동적 이격도 {min_gap_pct:.4f}%)"
+                    )
                 log(f"[{symbol}] 적용 매수 비중: {position_ratio:.4f}")
+                log(
+                    f"[{symbol}] RSI: {rsi_value:.2f} | MACD 히스토그램: "
+                    f"{0.0 if macd_histogram is None else macd_histogram:.6f} | "
+                    f"MA 기울기: {0.0 if ma_slope_pct is None else ma_slope_pct:.4f}% | "
+                    f"가격 기울기: {0.0 if price_slope_pct is None else price_slope_pct:.4f}% | "
+                    f"신호 스코어: {signal_score:.1f}"
+                )
+                log(
+                    f"[{symbol}] 진입 상태 머신: {entry_timing_snapshot.phase} "
+                    f"({entry_timing_snapshot.confirmation_count}/"
+                    f"{entry_timing_snapshot.required_confirmations})"
+                )
+                if correlation_with_btc is not None:
+                    log(
+                        f"[{symbol}] BTC 상관계수: {correlation_with_btc:.3f} "
+                        f"(차단 기준 {strategy.max_correlation_with_btc:.3f}, BTC 상단추세={btc_reference_above_ma})"
+                    )
+                if fill_quality_snapshot.avg_fill_ratio is not None:
+                    log(
+                        f"[{symbol}] 최근 체결비율: {fill_quality_snapshot.avg_fill_ratio * 100:.1f}% "
+                        f"(표본 {fill_quality_snapshot.sample_count}, 차단 기준 {strategy.fill_quality_min_fill_ratio * 100:.1f}%)"
+                    )
                 log(
                     f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
                     f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
@@ -585,7 +769,30 @@ def run_bot():
                     log(f"[{symbol}] 포지션 인식 최소 수량도 동일하게 {position_threshold:.4f} {base} 로 적용합니다.")
                 if (entry_signal or bearish) and not signal_is_strong:
                     log(
-                        f"[{symbol}] 신호가 약합니다. 수수료(거래당 1%)를 고려해 이번 신호는 건너뜁니다."
+                        f"[{symbol}] 신호 점수 {signal_score:.1f} 가 기준 {strategy.signal_score_min:.1f} 미만이라 이번 신호는 건너뜁니다."
+                    )
+                if entry_signal and not rsi_filter_passed:
+                    log(
+                        f"[{symbol}] RSI {0.0 if rsi_value is None else rsi_value:.2f} 가 "
+                        f"허용 구간 {strategy.rsi_entry_min:.1f}~{strategy.rsi_entry_max:.1f} 밖이라 매수를 보류합니다."
+                    )
+                if entry_signal and not macd_filter_passed:
+                    log(
+                        f"[{symbol}] MACD 히스토그램이 양수가 아니어서 매수를 보류합니다."
+                    )
+                if correlation_entry_blocked:
+                    log(
+                        f"[{symbol}] BTC 와 상관계수 {correlation_with_btc:.3f} 가 높고 BTC 도 상단 추세라 신규 매수를 보류합니다."
+                    )
+                if fill_quality_entry_blocked:
+                    log(
+                        f"[{symbol}] 최근 체결비율 {fill_quality_snapshot.avg_fill_ratio * 100:.1f}% 로 낮아 "
+                        f"다음 {strategy.fill_quality_lookback_sec // 60}분 동안 신규 매수를 보류합니다."
+                    )
+                if raw_entry_candidate and not entry_timing_snapshot.ready:
+                    log(
+                        f"[{symbol}] 진입 후보 신호를 누적 확인 중입니다. "
+                        f"{entry_timing_snapshot.confirmation_count}/{entry_timing_snapshot.required_confirmations}"
                     )
                 if trend_follow_entry and not bullish:
                     log(
@@ -677,11 +884,14 @@ def run_bot():
                 fee_round_trip_pct = config["fee_rate_pct"] * 2
                 effective_min_take_profit_pct = fee_round_trip_pct * 1.1
                 take_profit_pct = strategy.get_take_profit_pct(symbol)
-                stop_loss_pct = strategy.get_stop_loss_pct(symbol)
+                stop_loss_pct = strategy.get_stop_loss_pct(symbol) * regime_policy.stop_loss_multiplier
                 fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
                 break_even_guard_min_mfe_pct = strategy.get_break_even_guard_min_mfe_pct(symbol)
                 break_even_guard_floor_net_pnl_pct = (
                     strategy.get_break_even_guard_floor_net_pnl_pct(symbol)
+                )
+                break_even_guard_max_profit_retrace_pct = (
+                    strategy.break_even_guard_max_profit_retrace_pct
                 )
                 partial_take_profit_enabled = strategy.uses_partial_take_profit(symbol)
                 partial_stop_loss_enabled = strategy.uses_partial_stop_loss(symbol)
@@ -694,13 +904,14 @@ def run_bot():
                     and not partial_stop_loss_done.get(symbol, False)
                 )
                 effective_take_profit_pct = max(
-                    take_profit_pct,
+                    take_profit_pct + regime_policy.take_profit_bonus_pct,
                     effective_min_take_profit_pct,
                 )
                 if has_position:
                     log(
                         f"[{symbol}] 적용 익절률: {effective_take_profit_pct:.2f}% "
-                        f"(전략값 {take_profit_pct:.2f}%, 왕복 수수료 {fee_round_trip_pct:.2f}%), "
+                        f"(전략값 {take_profit_pct:.2f}%, 레짐 보정 {regime_policy.take_profit_bonus_pct:.2f}%, "
+                        f"왕복 수수료 {fee_round_trip_pct:.2f}%), "
                         f"적용 손절률: {stop_loss_pct:.2f}%"
                     )
                     if current_net_realized_pnl_pct is not None:
@@ -740,6 +951,7 @@ def run_bot():
                     enable_break_even_guard=strategy.enable_break_even_guard,
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
                     break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+                    break_even_guard_max_profit_retrace_pct=break_even_guard_max_profit_retrace_pct,
                     bearish=bearish,
                     sell_split_ratio=strategy.sell_split_ratio,
                 )
@@ -747,6 +959,7 @@ def run_bot():
                 stop_loss_triggered = bool(alt_exit_state["stop_loss_triggered"])
                 profit_protect_triggered = bool(alt_exit_state["profit_protect_triggered"])
                 break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
+                profit_retrace_from_mfe_pct = alt_exit_state["profit_retrace_from_mfe_pct"]
                 estimated_sell_amount = (
                     base_free * float(alt_exit_state["estimated_sell_ratio"])
                 )
@@ -773,7 +986,8 @@ def run_bot():
                 if has_position and break_even_guard_triggered:
                     log(
                         f"[{symbol}] 브레이크이븐 가드 조건 충족: 최대 유리 구간 {mfe_pct:.2f}% 이후 "
-                        f"수수료 반영 순익률이 {current_net_realized_pnl_pct:.2f}% 까지 되돌아 청산합니다."
+                        f"수수료 반영 순익률이 {current_net_realized_pnl_pct:.2f}% 까지 되돌고 "
+                        f"이익 반납폭이 {0.0 if profit_retrace_from_mfe_pct is None else profit_retrace_from_mfe_pct:.2f}% 에 도달해 청산합니다."
                     )
                 if has_position and stop_loss_triggered:
                     log(
@@ -799,6 +1013,24 @@ def run_bot():
                     price=last_close,
                     ma=last_ma,
                     gap_pct=gap_pct,
+                    noise_ratio=noise_ratio,
+                    noise_gap_multiplier=noise_gap_multiplier,
+                    base_min_gap_pct=base_min_gap_pct,
+                    signal_score=signal_score,
+                    rsi_value=rsi_value,
+                    rsi_filter_passed=rsi_filter_passed,
+                    macd_histogram=macd_histogram,
+                    macd_filter_passed=macd_filter_passed,
+                    ma_slope_pct=ma_slope_pct,
+                    price_slope_pct=price_slope_pct,
+                    entry_timing_phase=entry_timing_snapshot.phase,
+                    entry_timing_confirmation_count=entry_timing_snapshot.confirmation_count,
+                    entry_timing_required_confirmations=entry_timing_snapshot.required_confirmations,
+                    correlation_with_btc=correlation_with_btc,
+                    correlation_entry_blocked=correlation_entry_blocked,
+                    fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
+                    fill_quality_sample_count=fill_quality_snapshot.sample_count,
+                    fill_quality_entry_blocked=fill_quality_entry_blocked,
                     trend_follow_entry=trend_follow_entry,
                     volume_ratio=volume_ratio,
                     avg_abs_change_pct=avg_abs_change_pct,
@@ -825,7 +1057,9 @@ def run_bot():
                     profit_protect_triggered=profit_protect_triggered,
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
                     break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+                    break_even_guard_max_profit_retrace_pct=break_even_guard_max_profit_retrace_pct,
                     break_even_guard_triggered=break_even_guard_triggered,
+                    profit_retrace_from_mfe_pct=profit_retrace_from_mfe_pct,
                     low_energy_guard_active=low_energy_guard_active,
                     low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                     low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
@@ -833,6 +1067,9 @@ def run_bot():
                     symbol_regime=symbol_regime,
                     symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                     symbol_regime_requires_strong_signal=symbol_regime_requires_strong_signal,
+                    regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
+                    regime_stop_loss_multiplier=regime_policy.stop_loss_multiplier,
+                    regime_take_profit_bonus_pct=regime_policy.take_profit_bonus_pct,
                     partial_take_profit_cooldown_active=partial_take_profit_cooldown_active,
                     partial_take_profit_cooldown_remaining_sec=partial_take_profit_cooldown_remaining,
                     partial_take_profit_pending=partial_take_profit_pending,
@@ -844,8 +1081,12 @@ def run_bot():
                     bullish=bullish,
                     trend_follow_entry=trend_follow_entry,
                     signal_is_strong=signal_is_strong,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.signal_score_min,
                     gap_pct=gap_pct,
                     min_gap_pct=min_gap_pct,
+                    rsi_filter_passed=rsi_filter_passed,
+                    macd_filter_passed=macd_filter_passed,
                     htf_bullish=(not strategy.enable_higher_timeframe_filter or htf_bullish),
                     volume_filter_passed=(not strategy.enable_volume_filter or volume_filter_passed),
                     volume_ratio=volume_ratio,
@@ -860,7 +1101,7 @@ def run_bot():
                     last_close=last_close,
                     avg_entry_price=avg_entry_price,
                     current_entry_count=current_entry_count,
-                    max_entry_count=strategy.max_entry_count,
+                    max_entry_count=effective_max_entry_count,
                     daily_loss_limit_reached=daily_loss_limit_reached,
                     daily_realized_pnl_quote=daily_realized_pnl_quote,
                     max_daily_loss_quote=config["max_daily_loss_quote"],
@@ -898,8 +1139,42 @@ def run_bot():
                             stage="regime_signal_strength",
                             passed=(not symbol_regime_requires_strong_signal or signal_is_strong),
                             reason="regime_requires_strong_signal",
-                            actual={"symbol_regime": symbol_regime, "signal_is_strong": signal_is_strong},
-                            required={"strong_signal_required": True},
+                            actual={
+                                "symbol_regime": symbol_regime,
+                                "signal_is_strong": signal_is_strong,
+                                "signal_score": signal_score,
+                            },
+                            required={"strong_signal_required": True, "min_signal_score": strategy.signal_score_min},
+                        ),
+                        FunnelStep(
+                            stage="correlation_guard",
+                            passed=not correlation_entry_blocked,
+                            reason="btc_correlation_too_high",
+                            actual={
+                                "correlation_with_btc": correlation_with_btc,
+                                "btc_reference_above_ma": btc_reference_above_ma,
+                            },
+                            required={"max_correlation_with_btc": strategy.max_correlation_with_btc},
+                        ),
+                        FunnelStep(
+                            stage="fill_quality_guard",
+                            passed=not fill_quality_entry_blocked,
+                            reason="fill_quality_low",
+                            actual={
+                                "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
+                                "sample_count": fill_quality_snapshot.sample_count,
+                            },
+                            required={"min_fill_ratio": strategy.fill_quality_min_fill_ratio},
+                        ),
+                        FunnelStep(
+                            stage="entry_timing",
+                            passed=entry_timing_snapshot.ready,
+                            reason="entry_confirmation_pending",
+                            actual={
+                                "phase": entry_timing_snapshot.phase,
+                                "confirmation_count": entry_timing_snapshot.confirmation_count,
+                            },
+                            required={"required_confirmations": entry_timing_snapshot.required_confirmations},
                         ),
                         FunnelStep(
                             stage="portfolio_budget",
@@ -1127,6 +1402,7 @@ def run_bot():
                                 "strategy_version": strategy.version,
                                 "bullish_signal": bullish,
                                 "signal_is_strong": signal_is_strong,
+                                "signal_score": signal_score,
                                 "gap_pct": gap_pct,
                                 "take_profit_pct": take_profit_pct,
                                 "stop_loss_pct": stop_loss_pct,
@@ -1137,7 +1413,7 @@ def run_bot():
                             },
                         )
                         log(
-                            f"[{symbol}] 분할 매수 진행: {entry_count[symbol]}/{strategy.max_entry_count}회"
+                            f"[{symbol}] 분할 매수 진행: {entry_count[symbol]}/{effective_max_entry_count}회"
                         )
                         log(
                             f"[{symbol}] 갱신된 평균 진입가: {entry_price[symbol]:.4f}"

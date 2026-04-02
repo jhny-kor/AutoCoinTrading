@@ -1,5 +1,7 @@
 """
 수정 요약
+- 분석용 JSONL 에 노이즈 비율을 함께 저장해 동적 진입 문턱값 보정 근거를 바로 확인할 수 있게 확장
+- 분석용 JSONL 에 ADX, MACD 히스토그램, MA 기울기를 함께 저장해 레짐 분류와 신호 품질 분석에 바로 활용할 수 있게 확장
 - 호가창 상위 구간 누적 잔량, 누적 호가 금액, 깊이 비대칭, 가벼운 체결 압력 지표까지 함께 저장하도록 확장
 - 분석 수집기 메인 루프 예외도 텔레그램으로 즉시 알리도록 보강
 - 분석용 JSONL 에 거래량 배수, 변동성, RSI, 최근 범위 위치 같은 추가 지표를 함께 저장하도록 확장
@@ -33,6 +35,14 @@ from typing import Iterable
 import ccxt
 from dotenv import load_dotenv
 
+from core.strategy.indicators import (
+    calc_adx,
+    calc_macd_histogram,
+    calc_noise_ratio,
+    calc_pct_slope,
+    calc_rsi as calc_rsi_core,
+    calc_sma as calc_sma_core,
+)
 from log_path_utils import dated_path
 from strategy_settings import load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
@@ -40,10 +50,7 @@ from telegram_notifier import load_telegram_notifier
 
 def calc_sma(prices: list[float], period: int) -> float:
     """단순 이동평균을 계산한다."""
-    if len(prices) < period:
-        raise ValueError("가격 데이터가 이동평균 기간보다 적습니다.")
-    window = prices[-period:]
-    return sum(window) / len(window)
+    return calc_sma_core(prices, period)
 
 
 def parse_bool(raw: str | None, default: bool = False) -> bool:
@@ -110,25 +117,7 @@ def calc_avg_abs_change_pct(closes: list[float], lookback: int) -> float | None:
 
 def calc_rsi(closes: list[float], period: int) -> float | None:
     """단순 RSI 값을 계산한다."""
-    if len(closes) < period + 1:
-        return None
-    gains = []
-    losses = []
-    for prev, curr in zip(closes[-(period + 1):], closes[-period:]):
-        change = curr - prev
-        if change >= 0:
-            gains.append(change)
-            losses.append(0.0)
-        else:
-            gains.append(0.0)
-            losses.append(abs(change))
-
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return calc_rsi_core(closes, period)
 
 
 def calc_recent_range_stats(
@@ -512,7 +501,20 @@ def build_snapshot(
     avg_abs_change_pct = calc_avg_abs_change_pct(
         closes, int(settings["volatility_lookback"])
     )
+    # 최근 완료 봉의 잡음 수준을 같이 남겨 동적 진입 문턱값 보정 근거로 쓴다.
+    noise_ratio = calc_noise_ratio(ohlcv, int(settings["noise_ratio_lookback"]))
     rsi = calc_rsi(closes, int(settings["rsi_period"]))
+    adx = calc_adx(ohlcv, int(settings["adx_period"]))
+    _macd_value, _macd_signal, macd_histogram = calc_macd_histogram(
+        closes,
+        fast_period=int(settings["macd_fast_period"]),
+        slow_period=int(settings["macd_slow_period"]),
+        signal_period=int(settings["macd_signal_period"]),
+    )
+    ma_slope_pct = calc_pct_slope(
+        [calc_sma(closes[: idx + 1], ma_period) for idx in range(ma_period - 1, len(closes))],
+        int(settings["trend_slope_lookback"]),
+    )
     range_stats = calc_recent_range_stats(
         highs=highs,
         lows=lows,
@@ -592,7 +594,11 @@ def build_snapshot(
         "candle_body_pct": candle_body_pct,
         "volume_ratio": volume_ratio,
         "avg_abs_change_pct": avg_abs_change_pct,
+        "noise_ratio": noise_ratio,
         "rsi": rsi,
+        "adx": adx,
+        "macd_histogram": macd_histogram,
+        "ma_slope_pct": ma_slope_pct,
         "previous_candle_ts": prev_candle[0],
         "configured_min_gap_pct": min_gap_pct,
         "configured_take_profit_pct": min_take_profit_pct,
@@ -661,12 +667,20 @@ def main():
     ma_period = int(os.getenv("ANALYSIS_MA_PERIOD", "20"))
     recent_range_lookback = int(os.getenv("ANALYSIS_RECENT_RANGE_LOOKBACK", "20"))
     rsi_period = int(os.getenv("ANALYSIS_RSI_PERIOD", "14"))
+    adx_period = int(os.getenv("ANALYSIS_ADX_PERIOD", "14"))
     collect_orderbook = parse_bool(
         os.getenv("ANALYSIS_ENABLE_ORDERBOOK", "true"),
         default=True,
     )
-    limit = ma_period + 5
     strategy = load_strategy_settings("OKX_MIN_BUY_ORDER_VALUE", 1.0)
+    limit = max(
+        ma_period + 5,
+        rsi_period + 5,
+        adx_period + 5,
+        strategy.noise_ratio_lookback + 5,
+        strategy.macd_slow_period + strategy.macd_signal_period + 5,
+        ma_period + strategy.trend_slope_lookback + 5,
+    )
     collector_settings = {
         "higher_timeframe": strategy.higher_timeframe,
         "higher_timeframe_ma_period": strategy.higher_timeframe_ma_period,
@@ -682,6 +696,12 @@ def main():
         "max_volatility_pct": strategy.max_volatility_pct,
         "recent_range_lookback": recent_range_lookback,
         "rsi_period": rsi_period,
+        "adx_period": adx_period,
+        "noise_ratio_lookback": strategy.noise_ratio_lookback,
+        "macd_fast_period": strategy.macd_fast_period,
+        "macd_slow_period": strategy.macd_slow_period,
+        "macd_signal_period": strategy.macd_signal_period,
+        "trend_slope_lookback": strategy.trend_slope_lookback,
     }
 
     okx = create_okx_public_client()
@@ -694,7 +714,9 @@ def main():
         f"상위 타임프레임: {collector_settings['higher_timeframe']}, "
         f"거래량 lookback: {collector_settings['volume_lookback']}, "
         f"변동성 lookback: {collector_settings['volatility_lookback']}, "
-        f"RSI 기간: {collector_settings['rsi_period']}"
+        f"노이즈 lookback: {collector_settings['noise_ratio_lookback']}, "
+        f"RSI 기간: {collector_settings['rsi_period']}, "
+        f"ADX 기간: {collector_settings['adx_period']}"
     )
 
     while True:
@@ -744,6 +766,7 @@ def main():
                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                     f"{exchange_name.upper()} {symbol} 수집 완료 "
                     f"(close={snapshot['close']}, gap={snapshot['gap_pct']:.4f}%, "
+                    f"noise={snapshot.get('noise_ratio')}, "
                     f"volume_ratio={snapshot['volume_ratio']}, rsi={snapshot['rsi']})"
                 )
             except Exception as e:

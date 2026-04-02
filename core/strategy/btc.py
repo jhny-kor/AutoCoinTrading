@@ -2,9 +2,15 @@
 작업 요약
 - BTC 진입 신호와 기본 청산 플래그 계산을 공통 함수로 분리했다.
 - EMA 정렬, spread, 손절/트레일링/순익 보호 판단을 한 곳으로 모았다.
+- RSI, 볼린저 밴드 폭, EMA 기울기를 진입 필터에 반영해 추세 확인 강도를 높였다.
 """
 
 from __future__ import annotations
+
+
+def _clamp_score(raw: float) -> float:
+    """신호 스코어를 0~100 범위로 제한한다."""
+    return max(0.0, min(100.0, raw))
 
 
 def compute_btc_entry_state(
@@ -16,21 +22,94 @@ def compute_btc_entry_state(
     min_ema_spread_pct: float,
     enable_trend_follow_entry: bool,
     require_price_above_fast: bool,
+    require_ema_slope_positive: bool,
+    fast_ema_slope_pct: float | None,
+    slow_ema_slope_pct: float | None,
+    rsi_value: float | None,
+    enable_rsi_filter: bool,
+    rsi_entry_min: float,
+    rsi_entry_max: float,
+    bb_width_pct: float | None,
+    enable_bb_width_filter: bool,
+    min_bb_width_pct: float,
+    max_bb_width_pct: float,
+    signal_score_min: float,
 ) -> dict[str, float | bool]:
     ema_aligned = last_fast > last_slow
     price_above_fast = last_close >= last_fast
     ema_spread_pct = abs(last_fast - last_slow) / last_slow * 100 if last_slow else 0.0
+    ema_slope_positive = (
+        fast_ema_slope_pct is not None
+        and slow_ema_slope_pct is not None
+        and fast_ema_slope_pct > 0
+        and slow_ema_slope_pct > 0
+    )
+    rsi_filter_passed = (
+        not enable_rsi_filter
+        or (
+            rsi_value is not None
+            and rsi_entry_min <= rsi_value <= rsi_entry_max
+        )
+    )
+    bb_width_filter_passed = (
+        not enable_bb_width_filter
+        or (
+            bb_width_pct is not None
+            and min_bb_width_pct <= bb_width_pct <= max_bb_width_pct
+        )
+    )
     trend_follow_entry = (
         enable_trend_follow_entry
         and ema_aligned
         and ema_spread_pct >= min_ema_spread_pct
         and (not require_price_above_fast or price_above_fast)
+        and (not require_ema_slope_positive or ema_slope_positive)
     )
-    entry_signal = bullish or trend_follow_entry
+    spread_component = 0.0
+    if min_ema_spread_pct > 0:
+        spread_component = min(1.0, ema_spread_pct / min_ema_spread_pct) * 35.0
+    elif ema_spread_pct > 0:
+        spread_component = 35.0
+
+    rsi_component = 0.0
+    if rsi_filter_passed and rsi_value is not None:
+        band_center = (rsi_entry_min + rsi_entry_max) / 2
+        half_band = max((rsi_entry_max - rsi_entry_min) / 2, 1e-9)
+        normalized_distance = min(1.0, abs(rsi_value - band_center) / half_band)
+        rsi_component = (1.0 - normalized_distance) * 20.0
+
+    bb_component = 0.0
+    if bb_width_filter_passed and bb_width_pct is not None and min_bb_width_pct > 0:
+        bb_component = min(1.0, bb_width_pct / min_bb_width_pct) * 20.0
+    elif bb_width_filter_passed and bb_width_pct is not None:
+        bb_component = 20.0
+
+    slope_component = 15.0 if ema_slope_positive else 0.0
+    trend_component = 10.0 if price_above_fast else 0.0
+    cross_component = 15.0 if bullish else 0.0
+    signal_score = _clamp_score(
+        spread_component
+        + rsi_component
+        + bb_component
+        + slope_component
+        + trend_component
+        + cross_component
+    )
+    signal_is_strong = signal_score >= signal_score_min
+    entry_signal = (
+        (bullish or trend_follow_entry)
+        and rsi_filter_passed
+        and bb_width_filter_passed
+    )
     return {
         "ema_aligned": ema_aligned,
         "price_above_fast": price_above_fast,
         "ema_spread_pct": ema_spread_pct,
+        "ema_slope_positive": ema_slope_positive,
+        "rsi_filter_passed": rsi_filter_passed,
+        "bb_width_filter_passed": bb_width_filter_passed,
+        "signal_score": signal_score,
+        "signal_is_strong": signal_is_strong,
         "trend_follow_entry": trend_follow_entry,
         "entry_signal": entry_signal,
     }

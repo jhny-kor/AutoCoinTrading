@@ -1,5 +1,9 @@
 """
 수정 요약
+- BTC 포지션 평가 helper 호출을 한 번만 수행하도록 정리해 중복 분기를 줄였다.
+- 노이즈 비율 기반 동적 EMA 스프레드/신호 스코어 보정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강했다.
+- 2차 강화로 진입 상태 머신과 체결률 기반 진입 차단을 추가했다.
+- BTC 진입에 RSI, 볼린저 밴드 폭, EMA 기울기, 레짐별 ATR/피라미딩/트레일링 정책을 추가해 추세 확인을 강화했다.
 - 업비트 잔고/호가 REST 호출을 짧게 캐시하고 최소 주문 경계 근처에서만 호가를 재조회해 지연 영향을 줄이도록 개선
 - 업비트 BTC 매도도 공통 재시도 경로를 사용하고 주문 직후 캐시를 비워 다음 루프가 최신 잔고를 다시 읽도록 보강
 - BTC 가 CHOPPY 레짐일 때는 심볼별 추가 거래량 기준을 적용해 약한 진입을 더 줄이도록 보수화했다.
@@ -70,9 +74,18 @@ from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_btc_allocations
+from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.runtime.bootstrap import build_btc_runtime_state
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
+from core.strategy.indicators import (
+    calc_bollinger_band_width_pct,
+    calc_ema_series as calc_ema_series_core,
+    calc_noise_ratio,
+    calc_pct_slope,
+    calc_rsi,
+)
+from core.strategy.timing import update_entry_timing_state
 from core.strategy.btc_position import (
     build_btc_exit_prices,
     evaluate_btc_open_position,
@@ -85,6 +98,7 @@ from core.strategy.funnels import (
 from market_regime_guard import (
     build_regime_change_message,
     classify_symbol_regime,
+    get_btc_regime_policy,
     load_latest_symbol_record,
     load_low_energy_snapshot,
     update_regime_state,
@@ -106,14 +120,7 @@ from trade_history_logger import (
 
 def calc_ema_series(prices: list[float], period: int) -> list[float]:
     """EMA 시리즈를 계산한다."""
-    if len(prices) < period:
-        raise ValueError("EMA 계산에 필요한 가격 데이터가 부족합니다.")
-
-    multiplier = 2 / (period + 1)
-    ema_values = [sum(prices[:period]) / period]
-    for price in prices[period:]:
-        ema_values.append((price - ema_values[-1]) * multiplier + ema_values[-1])
-    return ema_values
+    return calc_ema_series_core(prices, period)
 
 
 def detect_ema_crossover(
@@ -216,7 +223,9 @@ def run_bot():
     structured_logger = StructuredLogManager("upbit_btc_ema_trend_bot")
     notifier = load_telegram_notifier()
     trade_history = TradeHistoryLogger()
+    execution_quality_guard = ExecutionQualityGuard()
     log = logger.log
+    entry_timing_state: dict[str, dict[str, int | str]] = {}
 
     symbol = "BTC/KRW"
     base = "BTC"
@@ -260,6 +269,10 @@ def run_bot():
         settings.atr_period + 5,
         settings.volume_lookback + 5,
         settings.swing_lookback + 5,
+        settings.rsi_period + 5,
+        settings.noise_ratio_lookback + 5,
+        settings.bb_period + 5,
+        settings.slow_ema_period + settings.ema_slope_lookback + 5,
     )
     confirm_limit = max(settings.confirm_ema_period + 5, settings.slow_ema_period + 5)
 
@@ -329,6 +342,8 @@ def run_bot():
             closes = [row[4] for row in ohlcv]
             confirm_closes = [row[4] for row in confirm_ohlcv]
             last_close = closes[-1]
+            fast_ema_series = calc_ema_series(closes, settings.fast_ema_period)
+            slow_ema_series = calc_ema_series(closes, settings.slow_ema_period)
 
             bullish, bearish, prev_fast, prev_slow, last_fast, last_slow = detect_ema_crossover(
                 closes,
@@ -341,8 +356,48 @@ def run_bot():
             effective_min_atr_pct = settings.get_min_atr_pct(symbol)
             confirm_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
             confirm_close = confirm_closes[-1]
-            effective_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
+            base_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
             confirm_bullish = confirm_close > confirm_ema
+            rsi_value = calc_rsi(closes, settings.rsi_period)
+            noise_ratio = calc_noise_ratio(
+                ohlcv,
+                settings.noise_ratio_lookback,
+            )
+            bb_width_pct = calc_bollinger_band_width_pct(
+                closes,
+                period=settings.bb_period,
+                stddev_multiplier=settings.bb_stddev_multiplier,
+            )
+            fast_ema_slope_pct = calc_pct_slope(
+                fast_ema_series,
+                settings.ema_slope_lookback,
+            )
+            slow_ema_slope_pct = calc_pct_slope(
+                slow_ema_series,
+                settings.ema_slope_lookback,
+            )
+            noise_spread_multiplier = 1.0
+            effective_signal_score_min = settings.signal_score_min
+            if settings.enable_noise_ratio_adaptation and noise_ratio is not None:
+                noise_spread_multiplier = 1.0 + (
+                    (noise_ratio - settings.noise_ratio_baseline)
+                    / max(settings.noise_ratio_baseline, 1e-9)
+                ) * 0.5
+                noise_spread_multiplier = max(
+                    settings.noise_ratio_min_multiplier,
+                    min(settings.noise_ratio_max_multiplier, noise_spread_multiplier),
+                )
+                effective_signal_score_min = max(
+                    0.0,
+                    min(
+                        100.0,
+                        settings.signal_score_min
+                        + (noise_ratio - settings.noise_ratio_baseline)
+                        * settings.noise_ratio_signal_score_weight,
+                    ),
+                )
+            # 노이즈가 큰 장은 EMA 스프레드와 신호 점수 기준을 같이 높여 가짜 돌파를 줄인다.
+            effective_min_ema_spread_pct = base_min_ema_spread_pct * noise_spread_multiplier
             btc_entry_state = compute_btc_entry_state(
                 bullish=bullish,
                 last_fast=last_fast,
@@ -351,10 +406,27 @@ def run_bot():
                 min_ema_spread_pct=effective_min_ema_spread_pct,
                 enable_trend_follow_entry=settings.enable_trend_follow_entry,
                 require_price_above_fast=settings.trend_follow_requires_price_above_fast,
+                require_ema_slope_positive=settings.trend_follow_requires_ema_slope_positive,
+                fast_ema_slope_pct=fast_ema_slope_pct,
+                slow_ema_slope_pct=slow_ema_slope_pct,
+                rsi_value=rsi_value,
+                enable_rsi_filter=settings.enable_rsi_filter,
+                rsi_entry_min=settings.rsi_entry_min,
+                rsi_entry_max=settings.rsi_entry_max,
+                bb_width_pct=bb_width_pct,
+                enable_bb_width_filter=settings.enable_bb_width_filter,
+                min_bb_width_pct=settings.min_bb_width_pct,
+                max_bb_width_pct=settings.max_bb_width_pct,
+                signal_score_min=effective_signal_score_min,
             )
             ema_aligned = bool(btc_entry_state["ema_aligned"])
             price_above_fast = bool(btc_entry_state["price_above_fast"])
+            ema_slope_positive = bool(btc_entry_state["ema_slope_positive"])
             ema_spread_pct = float(btc_entry_state["ema_spread_pct"])
+            rsi_filter_passed = bool(btc_entry_state["rsi_filter_passed"])
+            bb_width_filter_passed = bool(btc_entry_state["bb_width_filter_passed"])
+            signal_score = float(btc_entry_state["signal_score"])
+            signal_is_strong = bool(btc_entry_state["signal_is_strong"])
             trend_follow_entry = bool(btc_entry_state["trend_follow_entry"])
             entry_signal = bool(btc_entry_state["entry_signal"])
             recent_swing_low = get_recent_swing_low(ohlcv[:-1], settings.swing_lookback)
@@ -419,10 +491,11 @@ def run_bot():
                 load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
             )
             symbol_regime = symbol_regime_snapshot.regime
+            regime_policy = get_btc_regime_policy(symbol_regime)
             symbol_regime_blocks_entry = (
-                not has_position and symbol_regime in {"LOW_ENERGY", "OVERHEATED", "EXHAUSTION_RISK"}
+                not has_position and regime_policy.pause_new_entry
             )
-            symbol_regime_requires_fresh_cross = symbol_regime in {"BREAKOUT_ATTEMPT", "CHOPPY"}
+            symbol_regime_requires_fresh_cross = regime_policy.require_fresh_cross
             effective_min_volume_ratio = settings.get_effective_min_volume_ratio(
                 symbol,
                 symbol_regime,
@@ -431,6 +504,7 @@ def run_bot():
                 volume_ratio is not None
                 and volume_ratio >= effective_min_volume_ratio
             )
+            effective_min_atr_pct = effective_min_atr_pct * regime_policy.min_atr_multiplier
             atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
             should_alert, previous_regime = update_regime_state(
                 exchange_name="upbit",
@@ -450,6 +524,41 @@ def run_bot():
             daily_loss_limit_reached = is_daily_loss_limit_reached(
                 daily_realized_pnl_quote=daily_realized_pnl_quote,
                 max_daily_loss_quote=config["max_daily_loss_quote"],
+            )
+            fill_quality_snapshot = (
+                execution_quality_guard.get_fill_quality_snapshot(
+                    exchange_name="UPBIT",
+                    symbol=symbol,
+                    since_seconds=settings.fill_quality_lookback_sec,
+                    min_fill_ratio=settings.fill_quality_min_fill_ratio,
+                    min_sample_count=settings.fill_quality_min_sample_count,
+                )
+                if settings.enable_fill_quality_guard
+                else FillQualitySnapshot(
+                    active=False,
+                    avg_fill_ratio=None,
+                    sample_count=0,
+                    latest_recorded_at=None,
+                    reason="disabled",
+                )
+            )
+            # BTC 도 최근 체결비율이 낮았던 구간은 진입보다 실행 품질 회복을 우선한다.
+            fill_quality_entry_blocked = (
+                entry_signal and not has_position and fill_quality_snapshot.active
+            )
+            raw_entry_candidate = (
+                entry_signal
+                and not low_energy_guard_active
+                and not symbol_regime_blocks_entry
+                and not fill_quality_entry_blocked
+            )
+            # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
+            entry_timing_snapshot = update_entry_timing_state(
+                state_store=entry_timing_state,
+                symbol=symbol,
+                has_position=has_position,
+                candidate_active=raw_entry_candidate,
+                required_confirmations=settings.entry_confirmation_loops,
             )
 
             log("-" * 60)
@@ -480,47 +589,91 @@ def run_bot():
             )
             log(
                 f"[{symbol}] EMA 정렬 상태: aligned={ema_aligned}, "
-                f"price_above_fast={price_above_fast}, spread={ema_spread_pct:.4f}%"
+                f"price_above_fast={price_above_fast}, spread={ema_spread_pct:.4f}%, "
+                f"ema_slope_positive={ema_slope_positive}"
             )
+            log(
+                f"[{symbol}] RSI: {0.0 if rsi_value is None else rsi_value:.2f}, "
+                f"BB 폭: {0.0 if bb_width_pct is None else bb_width_pct:.4f}%, "
+                f"EMA 기울기: {0.0 if fast_ema_slope_pct is None else fast_ema_slope_pct:.4f}%/"
+                f"{0.0 if slow_ema_slope_pct is None else slow_ema_slope_pct:.4f}%, "
+                f"신호 스코어: {signal_score:.1f}"
+            )
+            if noise_ratio is not None:
+                log(
+                    f"[{symbol}] 노이즈 비율: {noise_ratio:.4f} "
+                    f"(기본 EMA 스프레드 {base_min_ema_spread_pct:.4f}% -> 동적 {effective_min_ema_spread_pct:.4f}%, "
+                    f"기본 점수 {settings.signal_score_min:.1f} -> 동적 {effective_signal_score_min:.1f})"
+                )
+            log(
+                f"[{symbol}] 진입 상태 머신: {entry_timing_snapshot.phase} "
+                f"({entry_timing_snapshot.confirmation_count}/"
+                f"{entry_timing_snapshot.required_confirmations})"
+            )
+            if fill_quality_snapshot.avg_fill_ratio is not None:
+                log(
+                    f"[{symbol}] 최근 체결비율: {fill_quality_snapshot.avg_fill_ratio * 100:.1f}% "
+                    f"(표본 {fill_quality_snapshot.sample_count}, 차단 기준 {settings.fill_quality_min_fill_ratio * 100:.1f}%)"
+                )
             if trend_follow_entry and not bullish:
                 log(
                     f"[{symbol}] 신규 골든크로스는 아니지만 EMA 상승 정렬 유지 조건으로 진입 후보를 허용합니다."
                 )
+            if entry_signal and not rsi_filter_passed:
+                log(
+                    f"[{symbol}] RSI 가 허용 구간 {settings.rsi_entry_min:.1f}~{settings.rsi_entry_max:.1f} 밖이라 진입을 보류합니다."
+                )
+            if entry_signal and not bb_width_filter_passed:
+                log(
+                    f"[{symbol}] 볼린저 밴드 폭 {0.0 if bb_width_pct is None else bb_width_pct:.4f}% 가 "
+                    f"허용 범위 {settings.min_bb_width_pct:.4f}%~{settings.max_bb_width_pct:.4f}% 밖이라 진입을 보류합니다."
+                )
+            if fill_quality_entry_blocked:
+                log(
+                    f"[{symbol}] 최근 체결비율 {fill_quality_snapshot.avg_fill_ratio * 100:.1f}% 로 낮아 "
+                    f"다음 {settings.fill_quality_lookback_sec // 60}분 동안 신규 진입을 보류합니다."
+                )
+            if raw_entry_candidate and not entry_timing_snapshot.ready:
+                log(
+                    f"[{symbol}] 진입 후보 신호를 누적 확인 중입니다. "
+                    f"{entry_timing_snapshot.confirmation_count}/{entry_timing_snapshot.required_confirmations}"
+                )
+            # 포지션 평가 helper 는 한 번만 호출하고, 이후 보유 여부에 따라 후처리만 나눈다.
+            position_state = evaluate_btc_open_position(
+                has_position=has_position,
+                entry_price=entry_price,
+                last_close=last_close,
+                base_free=base_free,
+                fee_rate_pct=config["fee_rate_pct"],
+                atr_value=atr_value,
+                recent_swing_low=recent_swing_low,
+                recent_swing_high=recent_swing_high,
+                highest_price_since_entry=highest_price_since_entry,
+                lowest_price_since_entry=lowest_price_since_entry,
+                trailing_armed=trailing_armed,
+                trailing_armed_at=trailing_armed_at,
+                trailing_activation_price=trailing_activation_price,
+                partial_take_profit_done=partial_take_profit_done,
+                confirm_bullish=confirm_bullish,
+                ema_aligned=ema_aligned,
+                ema_spread_pct=ema_spread_pct,
+                settings=settings,
+            )
+            stop_price = position_state["stop_price"]
+            take_profit_price = position_state["take_profit_price"]
+            pnl_pct = position_state["pnl_pct"]
+            current_fee_quote_estimate = position_state["current_fee_quote_estimate"]
+            current_net_realized_pnl_quote = position_state["current_net_realized_pnl_quote"]
+            current_net_realized_pnl_pct = position_state["current_net_realized_pnl_pct"]
+            partial_take_profit_triggered = position_state["partial_take_profit_triggered"]
+            bull_pullback_hold_active = position_state["bull_pullback_hold_active"]
+            drawdown_from_high_pct = position_state["drawdown_from_high_pct"]
+            mfe_pct = position_state["mfe_pct"]
+            mae_pct = position_state["mae_pct"]
 
             if has_position and entry_price is not None:
-                position_state = evaluate_btc_open_position(
-                    has_position=has_position,
-                    entry_price=entry_price,
-                    last_close=last_close,
-                    base_free=base_free,
-                    fee_rate_pct=config["fee_rate_pct"],
-                    atr_value=atr_value,
-                    recent_swing_low=recent_swing_low,
-                    recent_swing_high=recent_swing_high,
-                    highest_price_since_entry=highest_price_since_entry,
-                    lowest_price_since_entry=lowest_price_since_entry,
-                    trailing_armed=trailing_armed,
-                    trailing_armed_at=trailing_armed_at,
-                    trailing_activation_price=trailing_activation_price,
-                    partial_take_profit_done=partial_take_profit_done,
-                    confirm_bullish=confirm_bullish,
-                    ema_aligned=ema_aligned,
-                    ema_spread_pct=ema_spread_pct,
-                    settings=settings,
-                )
                 highest_price_since_entry = position_state["highest_price_since_entry"]
                 lowest_price_since_entry = position_state["lowest_price_since_entry"]
-                stop_price = position_state["stop_price"]
-                take_profit_price = position_state["take_profit_price"]
-                pnl_pct = position_state["pnl_pct"]
-                current_fee_quote_estimate = position_state["current_fee_quote_estimate"]
-                current_net_realized_pnl_quote = position_state["current_net_realized_pnl_quote"]
-                current_net_realized_pnl_pct = position_state["current_net_realized_pnl_pct"]
-                partial_take_profit_triggered = position_state["partial_take_profit_triggered"]
-                bull_pullback_hold_active = position_state["bull_pullback_hold_active"]
-                drawdown_from_high_pct = position_state["drawdown_from_high_pct"]
-                mfe_pct = position_state["mfe_pct"]
-                mae_pct = position_state["mae_pct"]
                 if position_state["trailing_armed_just_now"]:
                     trailing_armed = True
                     trailing_armed_at = time.time()
@@ -572,37 +725,6 @@ def run_bot():
                         f"일시 조정으로 보고 보유를 유지합니다."
                     )
             else:
-                position_state = evaluate_btc_open_position(
-                    has_position=has_position,
-                    entry_price=entry_price,
-                    last_close=last_close,
-                    base_free=base_free,
-                    fee_rate_pct=config["fee_rate_pct"],
-                    atr_value=atr_value,
-                    recent_swing_low=recent_swing_low,
-                    recent_swing_high=recent_swing_high,
-                    highest_price_since_entry=highest_price_since_entry,
-                    lowest_price_since_entry=lowest_price_since_entry,
-                    trailing_armed=trailing_armed,
-                    trailing_armed_at=trailing_armed_at,
-                    trailing_activation_price=trailing_activation_price,
-                    partial_take_profit_done=partial_take_profit_done,
-                    confirm_bullish=confirm_bullish,
-                    ema_aligned=ema_aligned,
-                    ema_spread_pct=ema_spread_pct,
-                    settings=settings,
-                )
-                stop_price = position_state["stop_price"]
-                take_profit_price = position_state["take_profit_price"]
-                pnl_pct = position_state["pnl_pct"]
-                current_fee_quote_estimate = position_state["current_fee_quote_estimate"]
-                current_net_realized_pnl_quote = position_state["current_net_realized_pnl_quote"]
-                current_net_realized_pnl_pct = position_state["current_net_realized_pnl_pct"]
-                partial_take_profit_triggered = position_state["partial_take_profit_triggered"]
-                bull_pullback_hold_active = position_state["bull_pullback_hold_active"]
-                drawdown_from_high_pct = position_state["drawdown_from_high_pct"]
-                mfe_pct = position_state["mfe_pct"]
-                mae_pct = position_state["mae_pct"]
                 if not has_position:
                     highest_price_since_entry = position_state["highest_price_since_entry"]
                     lowest_price_since_entry = position_state["lowest_price_since_entry"]
@@ -628,7 +750,10 @@ def run_bot():
                 take_profit_price=take_profit_price,
                 last_close=last_close,
                 highest_price_since_entry=highest_price_since_entry,
-                trailing_drawdown_pct=settings.trailing_drawdown_pct,
+                trailing_drawdown_pct=(
+                    settings.trailing_drawdown_pct
+                    * regime_policy.trailing_drawdown_multiplier
+                ),
                 trailing_armed=trailing_armed,
                 enable_fee_protect_exit=settings.enable_fee_protect_exit,
                 fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
@@ -645,13 +770,16 @@ def run_bot():
             dynamic_bonus_eligible = is_dynamic_bonus_eligible(
                 has_position=has_position,
                 base_signal=entry_signal and ema_aligned and price_above_fast,
-                strong_signal=True,
+                strong_signal=signal_score >= effective_signal_score_min,
                 require_strong_signal=False,
                 volume_ratio=volume_ratio,
                 volume_threshold=portfolio_allocator.settings.dynamic_volume_ratio_threshold,
                 trend_ok=confirm_bullish,
                 require_trend_ok=portfolio_allocator.settings.dynamic_require_trend_ok,
-                enable_dynamic_overweight=portfolio_allocator.settings.enable_dynamic_overweight,
+                enable_dynamic_overweight=(
+                    portfolio_allocator.settings.enable_dynamic_overweight
+                    and regime_policy.allow_dynamic_overweight
+                ),
             )
             (
                 requested_order_value,
@@ -684,8 +812,24 @@ def run_bot():
                 last_slow_ema=last_slow,
                 ema_aligned=ema_aligned,
                 price_above_fast=price_above_fast,
+                ema_slope_positive=ema_slope_positive,
                 ema_spread_pct=ema_spread_pct,
                 effective_min_ema_spread_pct=effective_min_ema_spread_pct,
+                rsi_value=rsi_value,
+                rsi_filter_passed=rsi_filter_passed,
+                bb_width_pct=bb_width_pct,
+                bb_width_filter_passed=bb_width_filter_passed,
+                signal_score=signal_score,
+                noise_ratio=noise_ratio,
+                noise_spread_multiplier=noise_spread_multiplier,
+                base_min_ema_spread_pct=base_min_ema_spread_pct,
+                effective_signal_score_min=effective_signal_score_min,
+                entry_timing_phase=entry_timing_snapshot.phase,
+                entry_timing_confirmation_count=entry_timing_snapshot.confirmation_count,
+                entry_timing_required_confirmations=entry_timing_snapshot.required_confirmations,
+                fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
+                fill_quality_sample_count=fill_quality_snapshot.sample_count,
+                fill_quality_entry_blocked=fill_quality_entry_blocked,
                 trend_follow_entry=trend_follow_entry,
                 entry_signal=entry_signal,
                 volume_ratio=volume_ratio,
@@ -725,7 +869,10 @@ def run_bot():
                 add_on_count=add_on_count,
                 pyramid_add_on_enabled=settings.enable_pyramid_add_on,
                 pyramid_trigger_profit_pct=settings.pyramid_trigger_profit_pct,
-                pyramid_max_add_ons=settings.pyramid_max_add_ons,
+                pyramid_max_add_ons=max(
+                    0,
+                    settings.pyramid_max_add_ons + regime_policy.pyramid_max_add_ons_delta,
+                ),
                 profit_protect_triggered=profit_protect_triggered,
                 profit_exit_cooldown_remaining_sec=profit_exit_cooldown_remaining,
                 low_energy_guard_active=low_energy_guard_active,
@@ -735,6 +882,9 @@ def run_bot():
                 symbol_regime=symbol_regime,
                 symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                 symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
+                regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
+                regime_min_atr_multiplier=regime_policy.min_atr_multiplier,
+                regime_trailing_drawdown_multiplier=regime_policy.trailing_drawdown_multiplier,
             )
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
@@ -754,8 +904,16 @@ def run_bot():
                 trend_follow_entry=trend_follow_entry,
                 ema_aligned=ema_aligned,
                 price_above_fast=price_above_fast,
+                ema_slope_positive=ema_slope_positive,
                 ema_spread_pct=ema_spread_pct,
                 effective_min_ema_spread_pct=effective_min_ema_spread_pct,
+                signal_score=signal_score,
+                min_signal_score=effective_signal_score_min,
+                rsi_filter_passed=rsi_filter_passed,
+                bb_width_filter_passed=bb_width_filter_passed,
+                bb_width_pct=bb_width_pct,
+                min_bb_width_pct=settings.min_bb_width_pct,
+                max_bb_width_pct=settings.max_bb_width_pct,
                 has_position=has_position,
                 in_cooldown=in_cooldown,
                 cooldown_remaining=cooldown_remaining,
@@ -788,6 +946,30 @@ def run_bot():
                 estimated_entry_amount=safe_amount_to_precision_upbit(exchange, symbol, order_value / last_close if last_close else 0.0),
                 min_order_amount=0.0,
             )
+            entry_steps.extend(
+                [
+                    FunnelStep(
+                        stage="fill_quality_guard",
+                        passed=not fill_quality_entry_blocked,
+                        reason="fill_quality_low",
+                        actual={
+                            "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
+                            "sample_count": fill_quality_snapshot.sample_count,
+                        },
+                        required={"min_fill_ratio": settings.fill_quality_min_fill_ratio},
+                    ),
+                    FunnelStep(
+                        stage="entry_timing",
+                        passed=entry_timing_snapshot.ready,
+                        reason="entry_confirmation_pending",
+                        actual={
+                            "phase": entry_timing_snapshot.phase,
+                            "confirmation_count": entry_timing_snapshot.confirmation_count,
+                        },
+                        required={"required_confirmations": entry_timing_snapshot.required_confirmations},
+                    ),
+                ]
+            )
             entry_ready, _ = structured_logger.run_funnel(
                 symbol=symbol,
                 side="entry",
@@ -803,7 +985,11 @@ def run_bot():
                 and pnl_pct is not None
                 and pnl_pct >= settings.pyramid_trigger_profit_pct
             )
-            add_on_limit_available = add_on_count < settings.pyramid_max_add_ons
+            effective_pyramid_max_add_ons = max(
+                0,
+                settings.pyramid_max_add_ons + regime_policy.pyramid_max_add_ons_delta,
+            )
+            add_on_limit_available = add_on_count < effective_pyramid_max_add_ons
             add_on_ready = False
             if settings.enable_pyramid_add_on:
                 add_on_ready, _ = structured_logger.run_funnel(
@@ -816,7 +1002,7 @@ def run_bot():
                         min_pnl_pct=settings.pyramid_trigger_profit_pct,
                         add_on_limit_available=add_on_limit_available,
                         add_on_count=add_on_count,
-                        max_add_ons=settings.pyramid_max_add_ons,
+                        max_add_ons=effective_pyramid_max_add_ons,
                         trailing_armed=trailing_armed,
                         entry_signal=entry_signal,
                         bullish=bullish,

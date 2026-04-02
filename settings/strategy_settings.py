@@ -1,5 +1,9 @@
 """
 수정 요약
+- 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 알트 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장
+- 2차 강화용으로 진입 상태 머신, BTC 상관관계 가드, 체결률 품질 가드 설정을 추가했다.
+- 알트 공통 전략에 RSI, MACD, 기울기, 신호 스코어 설정을 추가해 진입 품질을 더 세밀하게 조정할 수 있게 확장
+- 브레이크이븐 가드에 MFE 대비 최대 이익 반납폭 기준을 추가해 수익 구간 회귀 청산을 더 빠르게 제어할 수 있게 보강
 - 혼합 청산 세트를 위해 수수료 반영 순익 보호 익절 기준도 심볼별 map 으로 읽도록 확장
 - 특정 심볼은 상위 타임프레임 하락 추세일 때 신규 진입을 차단하도록 공통 알트 전략 설정을 추가
 - ETH/KRW 같은 특정 심볼만 별도로 수익을 지키도록 브레이크이븐 가드 설정을 공통 알트 전략에 추가
@@ -50,10 +54,25 @@ class StrategySettings:
     enable_trend_follow_entry: bool
     trend_follow_requires_prev_above_ma: bool
     trend_follow_requires_price_rising: bool
+    trend_follow_requires_ma_slope_positive: bool
+    trend_slope_lookback: int
     enable_higher_timeframe_filter: bool
     block_entry_when_htf_bearish_symbols: tuple[str, ...]
     higher_timeframe: str
     higher_timeframe_ma_period: int
+    enable_rsi_filter: bool
+    rsi_period: int
+    rsi_entry_min: float
+    rsi_entry_max: float
+    enable_macd_filter: bool
+    macd_fast_period: int
+    macd_slow_period: int
+    macd_signal_period: int
+    enable_noise_ratio_adaptation: bool
+    noise_ratio_lookback: int
+    noise_ratio_baseline: float
+    noise_ratio_min_multiplier: float
+    noise_ratio_max_multiplier: float
     enable_volume_filter: bool
     volume_lookback: int
     min_volume_ratio: float
@@ -75,6 +94,17 @@ class StrategySettings:
     break_even_guard_min_mfe_pct_map: dict[str, float]
     break_even_guard_floor_net_pnl_pct: float
     break_even_guard_floor_net_pnl_pct_map: dict[str, float]
+    break_even_guard_max_profit_retrace_pct: float
+    signal_score_min: float
+    dynamic_signal_score_min: float
+    entry_confirmation_loops: int
+    enable_correlation_filter: bool
+    correlation_lookback: int
+    max_correlation_with_btc: float
+    enable_fill_quality_guard: bool
+    fill_quality_lookback_sec: int
+    fill_quality_min_fill_ratio: float
+    fill_quality_min_sample_count: int
     min_buy_order_value: float
     loop_interval_sec: int
     min_crossover_gap_pct_map: dict[str, float]
@@ -268,6 +298,13 @@ def load_strategy_settings(
             os.getenv("STRATEGY_TREND_FOLLOW_REQUIRE_PRICE_RISING", "true"),
             default=True,
         ),
+        trend_follow_requires_ma_slope_positive=parse_bool(
+            os.getenv("STRATEGY_TREND_FOLLOW_REQUIRE_MA_SLOPE_POSITIVE", "true"),
+            default=True,
+        ),
+        trend_slope_lookback=int(
+            os.getenv("STRATEGY_TREND_SLOPE_LOOKBACK", "3")
+        ),
         enable_higher_timeframe_filter=parse_bool(
             os.getenv("STRATEGY_ENABLE_HIGHER_TIMEFRAME_FILTER", "true"),
             default=True,
@@ -280,6 +317,36 @@ def load_strategy_settings(
         higher_timeframe=os.getenv("STRATEGY_HIGHER_TIMEFRAME", "5m"),
         higher_timeframe_ma_period=int(
             os.getenv("STRATEGY_HIGHER_TIMEFRAME_MA_PERIOD", "20")
+        ),
+        enable_rsi_filter=parse_bool(
+            os.getenv("STRATEGY_ENABLE_RSI_FILTER", "true"),
+            default=True,
+        ),
+        rsi_period=int(os.getenv("STRATEGY_RSI_PERIOD", "14")),
+        rsi_entry_min=float(os.getenv("STRATEGY_RSI_ENTRY_MIN", "40")),
+        rsi_entry_max=float(os.getenv("STRATEGY_RSI_ENTRY_MAX", "70")),
+        enable_macd_filter=parse_bool(
+            os.getenv("STRATEGY_ENABLE_MACD_FILTER", "true"),
+            default=True,
+        ),
+        macd_fast_period=int(os.getenv("STRATEGY_MACD_FAST_PERIOD", "12")),
+        macd_slow_period=int(os.getenv("STRATEGY_MACD_SLOW_PERIOD", "26")),
+        macd_signal_period=int(os.getenv("STRATEGY_MACD_SIGNAL_PERIOD", "9")),
+        enable_noise_ratio_adaptation=parse_bool(
+            os.getenv("STRATEGY_ENABLE_NOISE_RATIO_ADAPTATION", "true"),
+            default=True,
+        ),
+        noise_ratio_lookback=int(
+            os.getenv("STRATEGY_NOISE_RATIO_LOOKBACK", "20")
+        ),
+        noise_ratio_baseline=float(
+            os.getenv("STRATEGY_NOISE_RATIO_BASELINE", "0.50")
+        ),
+        noise_ratio_min_multiplier=float(
+            os.getenv("STRATEGY_NOISE_RATIO_MIN_MULTIPLIER", "0.70")
+        ),
+        noise_ratio_max_multiplier=float(
+            os.getenv("STRATEGY_NOISE_RATIO_MAX_MULTIPLIER", "1.30")
         ),
         enable_volume_filter=parse_bool(
             os.getenv("STRATEGY_ENABLE_VOLUME_FILTER", "true"),
@@ -341,6 +408,41 @@ def load_strategy_settings(
         ),
         break_even_guard_floor_net_pnl_pct_map=parse_symbol_float_map(
             os.getenv("STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP", "")
+        ),
+        break_even_guard_max_profit_retrace_pct=float(
+            os.getenv("STRATEGY_BREAK_EVEN_GUARD_MAX_PROFIT_RETRACE_PCT", "0.6")
+        ),
+        signal_score_min=float(
+            os.getenv("STRATEGY_SIGNAL_SCORE_MIN", "55")
+        ),
+        dynamic_signal_score_min=float(
+            os.getenv("STRATEGY_DYNAMIC_SIGNAL_SCORE_MIN", "70")
+        ),
+        entry_confirmation_loops=int(
+            os.getenv("STRATEGY_ENTRY_CONFIRMATION_LOOPS", "2")
+        ),
+        enable_correlation_filter=parse_bool(
+            os.getenv("STRATEGY_ENABLE_CORRELATION_FILTER", "true"),
+            default=True,
+        ),
+        correlation_lookback=int(
+            os.getenv("STRATEGY_CORRELATION_LOOKBACK", "20")
+        ),
+        max_correlation_with_btc=float(
+            os.getenv("STRATEGY_MAX_CORRELATION_WITH_BTC", "0.70")
+        ),
+        enable_fill_quality_guard=parse_bool(
+            os.getenv("STRATEGY_ENABLE_FILL_QUALITY_GUARD", "true"),
+            default=True,
+        ),
+        fill_quality_lookback_sec=int(
+            os.getenv("STRATEGY_FILL_QUALITY_LOOKBACK_SEC", "3600")
+        ),
+        fill_quality_min_fill_ratio=float(
+            os.getenv("STRATEGY_FILL_QUALITY_MIN_FILL_RATIO", "0.95")
+        ),
+        fill_quality_min_sample_count=int(
+            os.getenv("STRATEGY_FILL_QUALITY_MIN_SAMPLE_COUNT", "1")
         ),
         min_buy_order_value=float(
             os.getenv(min_buy_order_env_key, str(default_min_buy_order_value))

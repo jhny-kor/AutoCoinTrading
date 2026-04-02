@@ -1,6 +1,9 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장했다.
+- 2차 강화용으로 진입 상태 머신과 체결률 품질 가드 설정을 추가했다.
+- BTC 전용 전략에 RSI, 볼린저 밴드 폭, EMA 기울기 필터와 신호 스코어 기준을 추가해 진입 품질을 강화했다.
 - BTC 가 CHOPPY 레짐일 때는 심볼별 추가 최소 거래량 기준을 적용하도록 설정을 확장했다.
 - BTC/USDT 같은 특정 심볼만 더 엄격하게 진입시키도록 심볼별 EMA 스프레드/거래량 기준 오버라이드를 추가했다.
 - BTC 진입 필터를 조금 더 보수적으로 하고, 강한 다중 상승 추세에서는 짧은 조정을 견디는 설정을 추가했다.
@@ -49,6 +52,29 @@ class BtcTrendSettings:
     confirm_ema_period: int
     enable_trend_follow_entry: bool
     trend_follow_requires_price_above_fast: bool
+    trend_follow_requires_ema_slope_positive: bool
+    ema_slope_lookback: int
+    enable_rsi_filter: bool
+    rsi_period: int
+    rsi_entry_min: float
+    rsi_entry_max: float
+    enable_bb_width_filter: bool
+    bb_period: int
+    bb_stddev_multiplier: float
+    min_bb_width_pct: float
+    max_bb_width_pct: float
+    signal_score_min: float
+    enable_noise_ratio_adaptation: bool
+    noise_ratio_lookback: int
+    noise_ratio_baseline: float
+    noise_ratio_min_multiplier: float
+    noise_ratio_max_multiplier: float
+    noise_ratio_signal_score_weight: float
+    entry_confirmation_loops: int
+    enable_fill_quality_guard: bool
+    fill_quality_lookback_sec: int
+    fill_quality_min_fill_ratio: float
+    fill_quality_min_sample_count: int
     min_ema_spread_pct: float
     min_ema_spread_pct_map: dict[str, float]
     enable_fee_protect_exit: bool
@@ -136,6 +162,62 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         trend_follow_requires_price_above_fast=parse_bool(
             os.getenv("BTC_TREND_REQUIRE_PRICE_ABOVE_FAST", "true"),
             default=True,
+        ),
+        trend_follow_requires_ema_slope_positive=parse_bool(
+            os.getenv("BTC_TREND_REQUIRE_EMA_SLOPE_POSITIVE", "true"),
+            default=True,
+        ),
+        ema_slope_lookback=int(os.getenv("BTC_TREND_EMA_SLOPE_LOOKBACK", "3")),
+        enable_rsi_filter=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_RSI_FILTER", "true"),
+            default=True,
+        ),
+        rsi_period=int(os.getenv("BTC_TREND_RSI_PERIOD", "14")),
+        rsi_entry_min=float(os.getenv("BTC_TREND_RSI_ENTRY_MIN", "40")),
+        rsi_entry_max=float(os.getenv("BTC_TREND_RSI_ENTRY_MAX", "72")),
+        enable_bb_width_filter=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_BB_WIDTH_FILTER", "true"),
+            default=True,
+        ),
+        bb_period=int(os.getenv("BTC_TREND_BB_PERIOD", "20")),
+        bb_stddev_multiplier=float(
+            os.getenv("BTC_TREND_BB_STDDEV_MULTIPLIER", "2.0")
+        ),
+        min_bb_width_pct=float(os.getenv("BTC_TREND_MIN_BB_WIDTH_PCT", "0.20")),
+        max_bb_width_pct=float(os.getenv("BTC_TREND_MAX_BB_WIDTH_PCT", "8.00")),
+        signal_score_min=float(os.getenv("BTC_TREND_SIGNAL_SCORE_MIN", "55")),
+        enable_noise_ratio_adaptation=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_NOISE_RATIO_ADAPTATION", "true"),
+            default=True,
+        ),
+        noise_ratio_lookback=int(os.getenv("BTC_TREND_NOISE_RATIO_LOOKBACK", "20")),
+        noise_ratio_baseline=float(
+            os.getenv("BTC_TREND_NOISE_RATIO_BASELINE", "0.50")
+        ),
+        noise_ratio_min_multiplier=float(
+            os.getenv("BTC_TREND_NOISE_RATIO_MIN_MULTIPLIER", "0.70")
+        ),
+        noise_ratio_max_multiplier=float(
+            os.getenv("BTC_TREND_NOISE_RATIO_MAX_MULTIPLIER", "1.30")
+        ),
+        noise_ratio_signal_score_weight=float(
+            os.getenv("BTC_TREND_NOISE_RATIO_SIGNAL_SCORE_WEIGHT", "12.0")
+        ),
+        entry_confirmation_loops=int(
+            os.getenv("BTC_TREND_ENTRY_CONFIRMATION_LOOPS", "2")
+        ),
+        enable_fill_quality_guard=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_FILL_QUALITY_GUARD", "true"),
+            default=True,
+        ),
+        fill_quality_lookback_sec=int(
+            os.getenv("BTC_TREND_FILL_QUALITY_LOOKBACK_SEC", "3600")
+        ),
+        fill_quality_min_fill_ratio=float(
+            os.getenv("BTC_TREND_FILL_QUALITY_MIN_FILL_RATIO", "0.95")
+        ),
+        fill_quality_min_sample_count=int(
+            os.getenv("BTC_TREND_FILL_QUALITY_MIN_SAMPLE_COUNT", "1")
         ),
         min_ema_spread_pct=float(os.getenv("BTC_TREND_MIN_EMA_SPREAD_PCT", "0.002")),
         min_ema_spread_pct_map=parse_symbol_float_map(

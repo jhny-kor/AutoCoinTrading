@@ -37,6 +37,7 @@ class AltExitRuleTests(unittest.TestCase):
             enable_break_even_guard=True,
             break_even_guard_min_mfe_pct=1.0,
             break_even_guard_floor_net_pnl_pct=0.0,
+            break_even_guard_max_profit_retrace_pct=0.5,
             bearish=True,
             sell_split_ratio=0.5,
         )
@@ -59,12 +60,33 @@ class AltExitRuleTests(unittest.TestCase):
             enable_break_even_guard=True,
             break_even_guard_min_mfe_pct=1.0,
             break_even_guard_floor_net_pnl_pct=0.0,
+            break_even_guard_max_profit_retrace_pct=0.5,
             bearish=True,
             sell_split_ratio=0.5,
         )
         self.assertFalse(decisions["profit_protect_triggered"])
         self.assertTrue(decisions["break_even_guard_triggered"])
         self.assertEqual(decisions["estimated_sell_ratio"], 1.0)
+
+    def test_break_even_guard_waits_until_profit_retrace_is_large_enough(self):
+        decisions = compute_alt_exit_decisions(
+            has_position=True,
+            pnl_pct=1.2,
+            mfe_pct=1.5,
+            current_net_realized_pnl_pct=-0.02,
+            take_profit_pct=1.0,
+            stop_loss_pct=1.5,
+            fee_rate_pct=0.05,
+            enable_fee_protect_exit=True,
+            fee_protect_min_net_pnl_pct=0.2,
+            enable_break_even_guard=True,
+            break_even_guard_min_mfe_pct=1.0,
+            break_even_guard_floor_net_pnl_pct=0.0,
+            break_even_guard_max_profit_retrace_pct=0.5,
+            bearish=True,
+            sell_split_ratio=0.5,
+        )
+        self.assertFalse(decisions["break_even_guard_triggered"])
 
 
 if __name__ == "__main__":

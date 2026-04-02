@@ -14,6 +14,30 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>  
 </div>  
 
+## 2026-04-02 반영 사항
+
+오늘은 `1차 강화`와 `2차 강화`를 함께 반영했습니다.
+
+- 1차 강화
+  - 알트 진입에 `RSI(14)`, `MACD 히스토그램`, `MA/가격 기울기`, `0~100 신호 스코어`를 추가했습니다.
+  - BTC 진입에 `RSI`, `볼린저 밴드 폭`, `EMA 기울기`, `신호 스코어`를 추가했습니다.
+  - 노이즈 비율 `1 - abs(open-close)/(high-low)` 평균을 이용해 알트는 `min_gap_pct`, BTC는 `EMA 스프레드/신호 스코어 기준`을 동적으로 보정하도록 추가했습니다.
+  - 레짐 분류에 `ADX(14)` 를 반영하고, `TRENDING / CHOPPY / LOW_ENERGY / OVERHEATED / EXHAUSTION_RISK / BREAKOUT_ATTEMPT` 별 정책을 분리했습니다.
+  - 알트 브레이크이븐 가드에 `MFE 대비 최대 이익 반납폭` 기준을 추가했습니다.
+  - 분석 수집기에는 `ADX`, `MACD 히스토그램`, `MA 기울기`를 함께 저장하도록 확장했습니다.
+- 2차 강화
+  - 진입 상태 머신 `WATCH -> ARM -> READY -> HOLD` 를 추가해 신호가 연속 확인될 때만 진입하도록 바꿨습니다.
+  - 알트는 `BTC 상관관계 필터`를 추가해 BTC와 동조화가 너무 높은 상태에서는 신규 진입을 막습니다.
+  - BTC/알트 모두 `최근 체결비율(fill_ratio)` 이 낮은 심볼은 일정 시간 신규 진입을 막는 실행 품질 가드를 추가했습니다.
+  - 구조화 로그 metrics 에 `signal_score`, `entry_timing_*`, `correlation_with_btc`, `fill_quality_*` 같은 운영 분석 필드를 함께 남기도록 확장했습니다.
+- 오늘 추가된 공통 모듈
+  - `core/strategy/indicators.py`
+  - `core/strategy/timing.py`
+  - `core/risk/execution_guard.py`
+- 오늘 확인한 테스트
+  - `.venv/bin/python -m unittest discover -s tests -v` 중 관련 단위 테스트 기준 통과
+  - 실제로는 `tests.test_alt_signals`, `tests.test_alt_exit_rules`, `tests.test_funnels`, `tests.test_btc_position_eval`, `tests.test_timing`, `tests.test_execution_guard` 를 우선 확인했습니다.
+
 ## 문서 역할
 
 - `README.md`: 현재 운영 기준과 현재 구조를 설명합니다.
@@ -90,8 +114,11 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `core/positions/`: 복구 불가 포지션 보류 같은 포지션 가드 공통 처리
 - `core/positions/lifecycle.py`: 알트/BTC 포지션 초기화 같은 상태 정리 공통 처리
 - `core/strategy/`: 알트/BTC 신호 계산 공통 처리
+- `core/strategy/indicators.py`: RSI, MACD, 볼린저 밴드 폭, ADX, 상관계수 같은 공통 보조지표 계산
+- `core/strategy/timing.py`: 진입 상태 머신 `WATCH/ARM/READY/HOLD` 공통 처리
 - `core/risk/`: 일일 손실 제한, 동적 오버웨이트 자격 같은 리스크 계산 공통 처리
 - `core/risk/alt_exit.py`: 알트 수익률/순익률/브레이크이븐/순익 보호 익절 계산 공통 처리
+- `core/risk/execution_guard.py`: 최근 `trade_history` 의 체결비율 기준으로 신규 진입 차단 여부를 계산하는 실행 품질 가드
 - `reporting/listener_runtime.py`: 텔레그램 리스너 설정, polling, offset, 예약 리포트 상태 공통 처리
 - `reporting/position_snapshot.py`: `/positions` 응답용 거래소 포지션 스냅샷과 복구 진입가 요약 공통 처리
 - `migrate_logs_to_dated_dirs.py`: 기존 평면 로그를 날짜별 폴더 구조로 옮기는 마이그레이션 도구
@@ -192,6 +219,8 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
   - BTC 포지션 평가
   - 상태 복구
   - 퍼널 생성기
+  - 진입 상태 머신
+  - 체결률 기반 실행 품질 가드
   - 포트폴리오 배분 래퍼
   - 운영 헬스체크 리포트
 

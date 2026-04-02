@@ -18,8 +18,12 @@ class FunnelBuilderTests(unittest.TestCase):
             bullish=True,
             trend_follow_entry=False,
             signal_is_strong=True,
+            signal_score=75.0,
+            min_signal_score=55.0,
             gap_pct=0.5,
             min_gap_pct=0.2,
+            rsi_filter_passed=True,
+            macd_filter_passed=True,
             htf_bullish=True,
             volume_filter_passed=True,
             volume_ratio=1.4,
@@ -41,7 +45,7 @@ class FunnelBuilderTests(unittest.TestCase):
             order_value_quote=50.0,
             min_buy_order_value=1.0,
         )
-        self.assertEqual(10, len(steps))
+        self.assertEqual(12, len(steps))
         self.assertEqual("trend", steps[0].stage)
         self.assertEqual("order_value", steps[-1].stage)
 
@@ -78,8 +82,16 @@ class FunnelBuilderTests(unittest.TestCase):
             trend_follow_entry=False,
             ema_aligned=True,
             price_above_fast=True,
+            ema_slope_positive=True,
             ema_spread_pct=0.15,
             effective_min_ema_spread_pct=0.1,
+            signal_score=70.0,
+            min_signal_score=55.0,
+            rsi_filter_passed=True,
+            bb_width_filter_passed=True,
+            bb_width_pct=0.8,
+            min_bb_width_pct=0.2,
+            max_bb_width_pct=5.0,
             has_position=False,
             in_cooldown=False,
             cooldown_remaining=0.0,
@@ -113,6 +125,7 @@ class FunnelBuilderTests(unittest.TestCase):
             min_order_amount=0.0001,
         )
         self.assertEqual("order_amount", steps[-1].stage)
+        self.assertEqual("bb_width", steps[2].stage)
 
     def test_btc_add_on_steps_include_budget(self):
         steps = build_btc_add_on_steps(

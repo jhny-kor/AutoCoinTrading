@@ -1,6 +1,7 @@
 """
 저에너지 장 감지 공통 모듈
 
+- ADX 기반 추세 강도 판정과 레짐별 진입/리스크 정책 프로파일을 추가했다.
 - 레짐 변경 알림 메시지가 실제 줄바꿈으로 보이도록 정리했다.
 - 레짐 알림은 환경 변수로 끌 수 있도록 바꾸고, 기본값은 비활성화로 둬 운영 중 과도한 메시지를 막도록 조정했다.
 - 레짐 알림 비활성화 경로에서 `thresholds` 참조 오류가 나지 않도록 상태 저장 함수 내부를 보강했다.
@@ -87,12 +88,29 @@ class SymbolRegimeSnapshot:
     avg_abs_change_pct: float | None
     gap_pct: float | None
     rsi: float | None
+    adx: float | None
     public_buy_ready: bool
     bullish_signal: bool
     bearish_signal: bool
     above_ma: bool
     htf_bullish: bool | None
     recorded_at_local: str | None
+
+
+@dataclass(frozen=True)
+class RegimePolicy:
+    """레짐별 진입/리스크 보정 정책."""
+
+    pause_new_entry: bool
+    require_strong_signal: bool
+    require_fresh_cross: bool
+    allow_dynamic_overweight: bool
+    stop_loss_multiplier: float
+    take_profit_bonus_pct: float
+    max_entry_count_delta: int
+    min_atr_multiplier: float
+    trailing_drawdown_multiplier: float
+    pyramid_max_add_ons_delta: int
 
 
 def load_regime_thresholds() -> dict[str, float | int | bool]:
@@ -124,10 +142,188 @@ def load_regime_thresholds() -> dict[str, float | int | bool]:
         "overheated_volume_ratio_threshold": float(
             os.getenv("REGIME_OVERHEATED_VOLUME_RATIO_THRESHOLD", "1.50")
         ),
+        "adx_trending_threshold": float(
+            os.getenv("REGIME_ADX_TRENDING_THRESHOLD", "25")
+        ),
+        "adx_choppy_threshold": float(
+            os.getenv("REGIME_ADX_CHOPPY_THRESHOLD", "20")
+        ),
         "alert_min_interval_sec": int(
             os.getenv("REGIME_ALERT_MIN_INTERVAL_SEC", "900")
         ),
     }
+
+
+def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
+    """알트 전략에 적용할 레짐별 정책을 반환한다."""
+    policy_map = {
+        "LOW_ENERGY": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=-99,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+        ),
+        "OVERHEATED": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=0.75,
+            pyramid_max_add_ons_delta=0,
+        ),
+        "EXHAUSTION_RISK": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+        ),
+        "CHOPPY": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=0.8,
+            take_profit_bonus_pct=0.25,
+            max_entry_count_delta=-1,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+        ),
+        "TRENDING": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=False,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=True,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=1,
+            min_atr_multiplier=0.85,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=1,
+        ),
+        "BREAKOUT_ATTEMPT": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=True,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+        ),
+    }
+    return policy_map.get(
+        regime or "",
+        RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=False,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=True,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+        ),
+    )
+
+
+def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
+    """BTC 전략에 적용할 레짐별 정책을 반환한다."""
+    policy_map = {
+        "LOW_ENERGY": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.2,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=-99,
+        ),
+        "OVERHEATED": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=0.75,
+            pyramid_max_add_ons_delta=0,
+        ),
+        "EXHAUSTION_RISK": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=0.9,
+            pyramid_max_add_ons_delta=0,
+        ),
+        "CHOPPY": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=True,
+            require_fresh_cross=True,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.1,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=-1,
+        ),
+        "TRENDING": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=False,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=True,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=0.85,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=1,
+        ),
+        "BREAKOUT_ATTEMPT": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=True,
+            require_fresh_cross=True,
+            allow_dynamic_overweight=True,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+        ),
+    }
+    return policy_map.get(regime or "", get_alt_regime_policy(regime))
 
 
 def load_low_energy_guard_settings() -> LowEnergyGuardSettings:
@@ -302,6 +498,7 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
             avg_abs_change_pct=None,
             gap_pct=None,
             rsi=None,
+            adx=None,
             public_buy_ready=False,
             bullish_signal=False,
             bearish_signal=False,
@@ -315,6 +512,7 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
     avg_abs_change_pct = safe_float(record.get("avg_abs_change_pct"))
     gap_pct = safe_float(record.get("gap_pct"))
     rsi = safe_float(record.get("rsi"))
+    adx = safe_float(record.get("adx"))
     public_buy_ready = bool(record.get("public_buy_ready"))
     bullish_signal = bool(record.get("bullish_signal"))
     bearish_signal = bool(record.get("bearish_signal"))
@@ -347,6 +545,13 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
     ):
         regime = "EXHAUSTION_RISK"
     elif (
+        above_ma
+        and (htf_bullish is True)
+        and adx is not None
+        and adx >= float(thresholds["adx_trending_threshold"])
+    ):
+        regime = "TRENDING"
+    elif (
         public_buy_ready
         or (
             bullish_signal
@@ -366,6 +571,8 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
         and avg_abs_change_pct >= float(thresholds["trending_avg_abs_change_pct_threshold"])
     ):
         regime = "TRENDING"
+    elif adx is not None and adx < float(thresholds["adx_choppy_threshold"]):
+        regime = "CHOPPY"
 
     return SymbolRegimeSnapshot(
         regime=regime,
@@ -373,6 +580,7 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
         avg_abs_change_pct=avg_abs_change_pct,
         gap_pct=gap_pct,
         rsi=rsi,
+        adx=adx,
         public_buy_ready=public_buy_ready,
         bullish_signal=bullish_signal,
         bearish_signal=bearish_signal,
@@ -437,6 +645,7 @@ def build_regime_change_message(
     abs_text = "-" if snapshot.avg_abs_change_pct is None else f"{snapshot.avg_abs_change_pct:.4f}%"
     gap_text = "-" if snapshot.gap_pct is None else f"{snapshot.gap_pct:.4f}%"
     rsi_text = "-" if snapshot.rsi is None else f"{snapshot.rsi:.1f}"
+    adx_text = "-" if snapshot.adx is None else f"{snapshot.adx:.1f}"
     return (
         f"[REGIME] {exchange_name.upper()} {symbol}\n"
         f"이전 레짐: {previous_text}\n"
@@ -445,5 +654,6 @@ def build_regime_change_message(
         f"평균 절대 변화율: {abs_text}\n"
         f"이격도: {gap_text}\n"
         f"RSI: {rsi_text}\n"
+        f"ADX: {adx_text}\n"
         f"공개 준비: {'Y' if snapshot.public_buy_ready else 'N'}"
     )

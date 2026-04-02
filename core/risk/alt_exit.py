@@ -2,6 +2,7 @@
 작업 요약
 - 알트 포지션의 수익률/순익률/MFE/MAE 계산과 청산 보호 판단을 공통화했다.
 - 브레이크이븐 가드와 순익 보호 익절 계산을 한 곳으로 모았다.
+- MFE 대비 되돌림 폭 기준을 추가해 수익 구간에서 급한 반납을 더 빠르게 정리할 수 있게 보강했다.
 """
 
 from __future__ import annotations
@@ -70,6 +71,7 @@ def compute_alt_exit_decisions(
     enable_break_even_guard: bool,
     break_even_guard_min_mfe_pct: float,
     break_even_guard_floor_net_pnl_pct: float,
+    break_even_guard_max_profit_retrace_pct: float,
     bearish: bool,
     sell_split_ratio: float,
 ) -> dict[str, float | bool]:
@@ -102,6 +104,13 @@ def compute_alt_exit_decisions(
         and mfe_pct >= break_even_guard_min_mfe_pct
         and current_net_realized_pnl_pct is not None
         and current_net_realized_pnl_pct <= break_even_guard_floor_net_pnl_pct
+        and (
+            break_even_guard_max_profit_retrace_pct <= 0
+            or (
+                pnl_pct is not None
+                and (mfe_pct - pnl_pct) >= break_even_guard_max_profit_retrace_pct
+            )
+        )
         and bearish
         and not stop_loss_triggered
         and not profit_protect_triggered
@@ -118,5 +127,8 @@ def compute_alt_exit_decisions(
         "stop_loss_triggered": stop_loss_triggered,
         "profit_protect_triggered": profit_protect_triggered,
         "break_even_guard_triggered": break_even_guard_triggered,
+        "profit_retrace_from_mfe_pct": (
+            None if (mfe_pct is None or pnl_pct is None) else max(0.0, mfe_pct - pnl_pct)
+        ),
         "estimated_sell_ratio": estimated_sell_ratio,
     }
