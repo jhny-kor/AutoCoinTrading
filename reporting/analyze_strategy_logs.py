@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -470,6 +469,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     """요약 행을 CSV 로 저장한다."""
     if not rows:
         return
+    import csv
+
     path.parent.mkdir(parents=True, exist_ok=True)
     headers = list(rows[0].keys())
     with path.open("w", encoding="utf-8", newline="") as f:
