@@ -1,6 +1,7 @@
 """
 체결 결과 구조화 로거
 
+- 업비트 private 웹소켓 myOrder 이벤트를 raw_order 보강 데이터로 함께 읽어 체결 품질 추출 후보에 포함하도록 확장했다.
 - 텔레그램 체결 알림에 실제 체결가, 체결 수량, 체결 금액을 함께 표시할 수 있도록 주문 요약 helper 를 추가
 - 체결 시 왕복 수수료 추정치를 이용한 순손익 계산 helper 를 함께 제공해 로그 기록 기준을 통일
 - strategy_version 을 최상위 필드로 남겨 버전별 성과 비교가 가능하도록 확장
@@ -63,6 +64,9 @@ def _collect_order_candidates(raw_order: Any) -> list[dict[str, Any]]:
         info = raw_order.get("info")
         if isinstance(info, dict):
             candidates.append(info)
+        private_ws_event = raw_order.get("private_ws_event")
+        if isinstance(private_ws_event, dict):
+            candidates.append(private_ws_event)
         data = raw_order.get("data")
         if isinstance(data, list):
             for item in data:

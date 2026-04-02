@@ -1,6 +1,6 @@
 # UPBIT WEBSOCKET TRANSITION PLAN
 
-이 문서는 현재 `REST polling + 짧은 캐시` 구조의 업비트 실행 경로를, `시장 데이터는 WebSocket`, `주문과 잔고는 REST` 로 나누는 전환 설계안입니다.
+이 문서는 `REST polling + 짧은 캐시` 구조였던 업비트 실행 경로를, 현재 `시장 데이터는 WebSocket`, `주문은 REST`, `잔고/주문 이벤트는 private WebSocket 수집` 구조로 전환한 기준과 남은 범위를 정리한 문서입니다.
 
 기준 시점:
 - 작성일: `2026-04-01`
@@ -14,27 +14,29 @@
 - [Upbit Global WebSocket Guide: Real-Time Candle Stream](https://global-docs.upbit.com/docs/websocket)
 - [Upbit Global WebSocket Candle Changelog](https://global-docs.upbit.com/changelog/websocket_candle)
 
-## 1. 현재 상태
+## 1. 현재 구현 상태
 
-현재 업비트 경로는 `ccxt` 기반 REST 호출이 중심입니다.
+현재 업비트 경로는 아래처럼 바뀌었습니다.
 
 - 시세:
-  - `fetch_ohlcv`
-  - `fetch_order_book`
+  - 공개 웹소켓 `trade`
+  - 공개 웹소켓 `orderbook`
+  - 공개 웹소켓 `candle.1m`
+  - 5분/15분은 로컬 1분봉 리샘플
 - 잔고:
-  - `fetch_balance`
+  - private 웹소켓 `myAsset` 우선
+  - 필요 시 REST fallback
 - 주문:
-  - `create_market_buy_order`
-  - `create_market_sell_order`
+  - 주문 생성은 REST
+  - 최근 주문 이벤트는 private 웹소켓 `myOrder` 수집
 
-최근 보완은 아래 수준입니다.
+즉 현재는
 
-- 잔고 짧은 TTL 캐시
-- 호가 짧은 TTL 캐시
-- 최소 주문 경계 근처에서만 best bid 재조회
-- 주문 직후 캐시 무효화
+- `시장 데이터는 WebSocket 네이티브`
+- `잔고/주문 이벤트는 private WebSocket 수집`
+- `주문 제출만 REST`
 
-즉 현재는 `웹소켓 전환`이 아니라 `REST 호출 최적화` 상태입니다.
+상태입니다.
 
 ## 2. 전환 목표
 
@@ -48,7 +50,7 @@
 
 ### 비목표
 
-- 업비트 주문 자체를 WebSocket으로 바꾸지 않습니다.
+- 업비트 주문 생성 자체는 거래소 API 구조상 REST를 유지합니다.
 - 잔고 복구/체결 기록 구조를 전부 갈아엎지 않습니다.
 - 처음부터 모든 지표를 tick 기반 초고속으로 바꾸지 않습니다.
 

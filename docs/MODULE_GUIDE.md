@@ -59,6 +59,12 @@
   - 시장 상태 분석용 JSONL 수집기
   - 이격도, 변동성, 거래량, RSI, 호가 미시구조 기록
 
+- [upbit_market_data_stream.py](/Users/plo/Documents/auto_coin_bot/upbit_market_data_stream.py)
+  - 업비트 공개/인증 웹소켓 시장데이터 수집기
+  - 공개: trade / orderbook / candle.1m
+  - 인증: myOrder / myAsset
+  - 최신 스냅샷, 1분 캔들, private 이벤트 파일 저장
+
 - [analyze_logs.py](/Users/plo/Documents/auto_coin_bot/analyze_logs.py)
   - 분석용 시장 로그를 거래소/심볼별로 요약
 
@@ -163,6 +169,13 @@
   - 요청 재시도, KRW 주문 버퍼, 시장가 매수/매도 공통 경로
   - 잔고/호가 짧은 캐시, 최소 주문 경계 근처 전용 best bid 재조회
   - 업비트 시장가 매수 공통 helper
+
+- [core/market_data](/Users/plo/Documents/auto_coin_bot/core/market_data)
+  - 업비트 웹소켓 시장데이터 공통 계층
+  - 최신 상태 메모리 저장소
+  - 최신 스냅샷/1분 캔들 파일 저장
+  - 공개/인증 웹소켓 연결/재연결 처리
+  - 5분/15분 리샘플과 private myOrder/myAsset provider 처리
 
 ## 6. 전략별 본체 모듈
 

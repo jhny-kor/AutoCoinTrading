@@ -1,3 +1,8 @@
+"""
+수정 요약
+- 업비트 공개 웹소켓 시장데이터 수집기를 관리 대상 프로그램으로 추가하고 전체 시작 순서에 포함했다.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -64,6 +69,13 @@ PROGRAM_SPECS: tuple[ProgramSpec, ...] = (
         log_name="analysis_log_collector.log",
     ),
     ProgramSpec(
+        name="upbit_stream",
+        script="run/upbit_market_data_stream.py",
+        title="업비트 웹소켓 수집기",
+        report_label="업비트 웹소켓 수집기",
+        log_name="upbit_market_data_stream.log",
+    ),
+    ProgramSpec(
         name="telegram",
         script="run/telegram_command_listener.py",
         title="텔레그램 명령 리스너",
@@ -78,6 +90,7 @@ PROGRAM_BY_NAME: dict[str, ProgramSpec] = {spec.name: spec for spec in PROGRAM_S
 PROGRAM_CHOICES: tuple[str, ...] = tuple(spec.name for spec in PROGRAM_SPECS)
 START_ALL_ORDER: tuple[str, ...] = (
     "collector",
+    "upbit_stream",
     "telegram",
     "okx",
     "upbit",

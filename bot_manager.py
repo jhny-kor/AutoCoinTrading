@@ -1,6 +1,7 @@
 """
 봇 프로세스 관리 도구
 
+- 업비트 공개 웹소켓 시장데이터 수집기를 관리 대상에 추가하고 전체 시작 순서에 포함했다.
 - 봇 시작 시 현재 인터프리터 대신 프로젝트 `.venv/bin/python` 을 우선 사용하도록 보강해 collector/telegram 이 시스템 파이썬으로 잘못 뜨지 않게 수정했다.
 - 현재 실행 중인 봇 프로세스와 분석 수집기 상태를 확인한다.
 - 개별 봇 시작, 전체 시작, 전체 중지, 강제 종료를 지원한다.
@@ -22,6 +23,7 @@
 - .venv/bin/python bot_manager.py start okx_btc
 - .venv/bin/python bot_manager.py start upbit_btc
 - .venv/bin/python bot_manager.py start collector
+- .venv/bin/python bot_manager.py start upbit_stream
 - .venv/bin/python bot_manager.py start telegram
 - .venv/bin/python bot_manager.py stop
 - .venv/bin/python bot_manager.py stop all
@@ -30,6 +32,7 @@
 - .venv/bin/python bot_manager.py stop okx_btc
 - .venv/bin/python bot_manager.py stop upbit_btc
 - .venv/bin/python bot_manager.py stop collector
+- .venv/bin/python bot_manager.py stop upbit_stream
 - .venv/bin/python bot_manager.py stop telegram
 - .venv/bin/python bot_manager.py stop --force
 - .venv/bin/python bot_manager.py stop all --force
@@ -38,6 +41,7 @@
 - .venv/bin/python bot_manager.py stop okx_btc --force
 - .venv/bin/python bot_manager.py stop upbit_btc --force
 - .venv/bin/python bot_manager.py stop collector --force
+- .venv/bin/python bot_manager.py stop upbit_stream --force
 - .venv/bin/python bot_manager.py stop telegram --force
 """
 

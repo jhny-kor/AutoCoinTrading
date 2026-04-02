@@ -1,5 +1,8 @@
 """
 수정 요약
+- 업비트 BTC 5분/15분 경로도 웹소켓 1분봉 리샘플 우선, stale 시 REST fallback 으로 바꿔 REST 캔들 호출을 더 줄이도록 확장했다.
+- 업비트 BTC 1분봉 경로를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 바꿔 phase 3 전환을 시작했다.
+- 업비트 BTC best bid 조회를 웹소켓 latest 스냅샷 우선, stale 시 REST fallback 으로 바꿔 phase 2 전환을 시작했다.
 - BTC 포지션 평가 helper 호출을 한 번만 수행하도록 정리해 중복 분기를 줄였다.
 - 노이즈 비율 기반 동적 EMA 스프레드/신호 스코어 보정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강했다.
 - 2차 강화로 진입 상태 머신과 체결률 기반 진입 차단을 추가했다.
@@ -58,18 +61,22 @@ from btc_trend_settings import load_btc_trend_settings
 from core.execution.common import log_order_failure
 from core.execution.upbit import (
     apply_upbit_buy_order_buffer,
+    create_upbit_market_data_provider,
     create_market_buy_order_upbit,
     create_market_sell_order_upbit,
     create_upbit_client,
+    enrich_upbit_order_with_private_event,
     fetch_best_bid_upbit,
+    fetch_ohlcv_upbit_with_provider,
     fetch_ohlcv_upbit,
-    get_spot_balances_upbit,
+    get_spot_balances_upbit_with_provider,
     invalidate_upbit_balance_cache,
     invalidate_upbit_orderbook_cache,
     load_upbit_config,
     safe_amount_to_precision_upbit,
     should_refresh_best_bid_upbit,
 )
+from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
@@ -219,6 +226,7 @@ def run_bot():
     config = load_upbit_config()
     settings = load_btc_trend_settings()
     exchange = create_upbit_client(config)
+    market_data_provider: UpbitMarketDataProvider | None = create_upbit_market_data_provider(config)
     logger = BotLogger("upbit_btc_ema_trend_bot")
     structured_logger = StructuredLogManager("upbit_btc_ema_trend_bot")
     notifier = load_telegram_notifier()
@@ -332,12 +340,19 @@ def run_bot():
             )
 
         try:
-            ohlcv = fetch_ohlcv_upbit(exchange, symbol, timeframe=settings.timeframe, limit=min_ohlcv_limit)
-            confirm_ohlcv = fetch_ohlcv_upbit(
+            ohlcv = fetch_ohlcv_upbit_with_provider(
                 exchange,
-                symbol,
+                symbol=symbol,
+                timeframe=settings.timeframe,
+                limit=min_ohlcv_limit,
+                market_data_provider=market_data_provider,
+            )
+            confirm_ohlcv = fetch_ohlcv_upbit_with_provider(
+                exchange,
+                symbol=symbol,
                 timeframe=settings.confirm_timeframe,
                 limit=confirm_limit,
+                market_data_provider=market_data_provider,
             )
             closes = [row[4] for row in ohlcv]
             confirm_closes = [row[4] for row in confirm_ohlcv]
@@ -432,17 +447,22 @@ def run_bot():
             recent_swing_low = get_recent_swing_low(ohlcv[:-1], settings.swing_lookback)
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
-            base_free, quote_free = get_spot_balances_upbit(exchange, base, quote)
-            best_bid = (
-                fetch_best_bid_upbit(exchange, symbol)
-                if should_refresh_best_bid_upbit(
-                    base_free=base_free,
-                    last_close=last_close,
-                    min_order_value=min_buy_order_value,
-                    refresh_buffer_pct=config["best_bid_refresh_buffer_pct"],
-                )
-                else None
+            base_free, quote_free = get_spot_balances_upbit_with_provider(
+                exchange,
+                base=base,
+                quote=quote,
+                market_data_provider=market_data_provider,
             )
+            best_bid = None
+            if base_free > 0 and market_data_provider is not None:
+                best_bid = market_data_provider.get_best_bid(symbol)
+            if best_bid is None and should_refresh_best_bid_upbit(
+                base_free=base_free,
+                last_close=last_close,
+                min_order_value=min_buy_order_value,
+                refresh_buffer_pct=config["best_bid_refresh_buffer_pct"],
+            ):
+                best_bid = fetch_best_bid_upbit(exchange, symbol)
             sell_price_reference = best_bid if best_bid and best_bid > 0 else last_close
             position_quote_value = base_free * last_close
             # 업비트는 최소 주문 금액 기준으로 다시 팔 수 없는 잔량은 포지션에서 제외한다.
@@ -1116,6 +1136,11 @@ def run_bot():
                         )
                         continue
                     order_response_received_at = time.time()
+                    order = enrich_upbit_order_with_private_event(
+                        order,
+                        symbol=symbol,
+                        market_data_provider=market_data_provider,
+                    )
                     invalidate_upbit_balance_cache(exchange)
                     invalidate_upbit_orderbook_cache(exchange, symbol)
                     entry_price = last_close
@@ -1256,6 +1281,11 @@ def run_bot():
                     )
                     continue
                 order_response_received_at = time.time()
+                order = enrich_upbit_order_with_private_event(
+                    order,
+                    symbol=symbol,
+                    market_data_provider=market_data_provider,
+                )
                 invalidate_upbit_balance_cache(exchange)
                 invalidate_upbit_orderbook_cache(exchange, symbol)
 
@@ -1448,6 +1478,11 @@ def run_bot():
                         )
                         continue
                     order_response_received_at = time.time()
+                    order = enrich_upbit_order_with_private_event(
+                        order,
+                        symbol=symbol,
+                        market_data_provider=market_data_provider,
+                    )
                     invalidate_upbit_balance_cache(exchange)
                     invalidate_upbit_orderbook_cache(exchange, symbol)
                     realized_pnl_pct = 0.0

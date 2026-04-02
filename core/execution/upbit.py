@@ -1,5 +1,9 @@
 """
 수정 요약
+- 업비트 myAsset latest 를 잔고 조회 우선 경로로 읽고 myOrder 최근 이벤트를 주문 응답 보강에 쓸 helper 를 추가했다.
+- 업비트 5분/15분 OHLCV 도 웹소켓 1분 캔들 리샘플 우선, stale 시 REST fallback 으로 읽게 확장했다.
+- 업비트 1분봉 OHLCV 를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 읽는 helper 를 추가해 phase 3 전환을 시작했다.
+- 업비트 웹소켓 latest 스냅샷을 읽는 market data provider 설정과 생성 helper 를 추가해 best bid 를 웹소켓 우선으로 읽을 준비를 맞췄다.
 - 업비트 잔고/호가 조회를 짧은 TTL 캐시로 재사용하고 최소 주문 경계 근처에서만 호가를 재조회하도록 지연 완화 경로를 추가했다.
 - 업비트 시장가 매도도 공통 재시도 경로와 캐시 무효화 helper 를 쓰도록 확장했다.
 - 업비트 설정 로드, 429 재시도, 주문 버퍼, 잔고/호가 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
@@ -14,6 +18,8 @@ from typing import Tuple
 
 import ccxt
 from dotenv import load_dotenv
+
+from core.market_data.upbit_provider import UpbitMarketDataProvider
 
 
 def load_upbit_config() -> dict:
@@ -40,6 +46,10 @@ def load_upbit_config() -> dict:
     best_bid_refresh_buffer_pct = float(
         os.getenv("UPBIT_BEST_BID_REFRESH_BUFFER_PCT", "0.30")
     )
+    ws_provider_enabled = parse_bool(os.getenv("UPBIT_WS_PROVIDER_ENABLED", "true"))
+    ws_provider_root_dir = os.getenv("UPBIT_WS_PROVIDER_ROOT_DIR", "logs/runtime/upbit_ws").strip()
+    ws_provider_cache_ttl_sec = float(os.getenv("UPBIT_WS_PROVIDER_CACHE_TTL_SEC", "0.25"))
+    ws_provider_stale_sec = float(os.getenv("UPBIT_WS_PROVIDER_STALE_SEC", "5.0"))
 
     return {
         "api_key": api_key,
@@ -55,6 +65,10 @@ def load_upbit_config() -> dict:
         "balance_cache_ttl_sec": balance_cache_ttl_sec,
         "orderbook_cache_ttl_sec": orderbook_cache_ttl_sec,
         "best_bid_refresh_buffer_pct": best_bid_refresh_buffer_pct,
+        "ws_provider_enabled": ws_provider_enabled,
+        "ws_provider_root_dir": ws_provider_root_dir,
+        "ws_provider_cache_ttl_sec": ws_provider_cache_ttl_sec,
+        "ws_provider_stale_sec": ws_provider_stale_sec,
     }
 
 
@@ -74,6 +88,24 @@ def create_upbit_client(config: dict) -> ccxt.upbit:
                 "upbit_best_bid_refresh_buffer_pct": config["best_bid_refresh_buffer_pct"],
             },
         }
+    )
+
+
+def parse_bool(raw: str | None, default: bool = False) -> bool:
+    """문자열 불리언 값을 파싱한다."""
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def create_upbit_market_data_provider(config: dict) -> UpbitMarketDataProvider | None:
+    """업비트 웹소켓 latest 스냅샷 provider 를 생성한다."""
+    if not config.get("ws_provider_enabled", True):
+        return None
+    return UpbitMarketDataProvider(
+        root_dir=str(config.get("ws_provider_root_dir", "logs/runtime/upbit_ws")),
+        cache_ttl_sec=float(config.get("ws_provider_cache_ttl_sec", 0.25) or 0.25),
+        stale_sec=float(config.get("ws_provider_stale_sec", 5.0) or 5.0),
     )
 
 
@@ -193,6 +225,22 @@ def fetch_ohlcv_upbit(
     )
 
 
+def fetch_ohlcv_upbit_with_provider(
+    exchange: ccxt.upbit,
+    *,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+) -> list[list[float]]:
+    """업비트 OHLCV 를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
+    if market_data_provider is not None:
+        rows = market_data_provider.get_recent_ohlcv(symbol, timeframe, limit)
+        if rows:
+            return rows
+    return fetch_ohlcv_upbit(exchange, symbol, timeframe=timeframe, limit=limit)
+
+
 def get_spot_balances_upbit(exchange: ccxt.upbit, base: str, quote: str) -> Tuple[float, float]:
     cache = _get_runtime_cache(exchange)
     ttl_sec = float(exchange.options.get("upbit_balance_cache_ttl_sec", 0.0) or 0.0)
@@ -211,6 +259,50 @@ def get_spot_balances_upbit(exchange: ccxt.upbit, base: str, quote: str) -> Tupl
     base_free = balance.get(base, {}).get("free", 0.0)
     quote_free = balance.get(quote, {}).get("free", 0.0)
     return float(base_free), float(quote_free)
+
+
+def get_spot_balances_upbit_with_provider(
+    exchange: ccxt.upbit,
+    *,
+    base: str,
+    quote: str,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+) -> Tuple[float, float]:
+    """업비트 잔고를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
+    if market_data_provider is not None:
+        balances = market_data_provider.get_private_balances(base, quote)
+        if balances is not None:
+            return balances
+    return get_spot_balances_upbit(exchange, base, quote)
+
+
+def enrich_upbit_order_with_private_event(
+    raw_order: Any,
+    *,
+    symbol: str,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+    max_age_sec: float = 10.0,
+) -> Any:
+    """주문 응답에 최근 myOrder private 이벤트를 보강해 반환한다."""
+    if market_data_provider is None or not isinstance(raw_order, dict):
+        return raw_order
+    order_id = str(raw_order.get("id", "") or raw_order.get("orderId", "") or "")
+    if not order_id:
+        info = raw_order.get("info")
+        if isinstance(info, dict):
+            order_id = str(info.get("uuid", "") or "")
+    if not order_id:
+        return raw_order
+    event = market_data_provider.find_recent_myorder_event(
+        order_id=order_id,
+        market=market_data_provider.get_market_code(symbol),
+        max_age_sec=max_age_sec,
+    )
+    if event is None:
+        return raw_order
+    enriched = dict(raw_order)
+    enriched["private_ws_event"] = event
+    return enriched
 
 
 def safe_amount_to_precision_upbit(exchange: ccxt.upbit, symbol: str, amount: float) -> float:

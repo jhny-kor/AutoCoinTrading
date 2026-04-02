@@ -102,6 +102,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `bot_logger.py`: 터미널 출력과 파일 로그를 함께 처리하는 모듈
 - `bot_manager.py`: 실행 중인 봇 상태 확인 및 전체 중지 도구
 - `run/analysis_log_collector.py`: 분석용 구조화 로그 수집기 실행 진입점
+- `run/upbit_market_data_stream.py`: 업비트 공개/인증 웹소켓 시장데이터 수집기 실행 진입점
 - `analyze_logs.py`: 수집된 분석 로그 요약 도구
 - `telegram_notifier.py`: 텔레그램 메시지 전송 유틸
 - `run/telegram_command_listener.py`: 텔레그램 명령 수신 및 상태 응답 리스너 실행 진입점
@@ -134,12 +135,16 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `logs/YYYY-MM-DD/<program>.launcher.log`
 - `analysis_logs/YYYY-MM-DD/<exchange>__<symbol>.jsonl`
 - `trade_logs/YYYY-MM-DD/trade_history.jsonl`
+- `logs/runtime/upbit_ws/latest/*.json`
+- `logs/runtime/upbit_ws/candles_1m/*.jsonl`
+- `logs/runtime/upbit_ws/private/*.json`
+- `logs/runtime/upbit_ws/private/*.jsonl`
 - `structured_logs/live/YYYY-MM-DD/<program>/system.jsonl`
 - `structured_logs/live/YYYY-MM-DD/<program>/strategy.jsonl`
 - `structured_logs/live/YYYY-MM-DD/<program>/trade.jsonl`
 - `structured_logs/live/YYYY-MM-DD/<program>/summary_1h/*.json`
 
-프로그램을 실행하면 위 파일들이 자동으로 생성되고 누적 기록됩니다. `trade_logs/YYYY-MM-DD/trade_history.jsonl` 에는 매수/익절/손절 체결 결과가 거래소/심볼/수량/금액/손익/원본 주문 응답과 함께 구조화되어 저장됩니다. 최근에는 주문 실행 품질 분석용으로 주문 ID, API 지연, 평균 체결가, 슬리피지, 체결 비율 같은 필드도 함께 남기도록 확장했습니다. 구조화 로그는 장애 분석은 `system.jsonl`, 전략 병목 분석은 `strategy.jsonl`, 체결 분석은 `trade.jsonl` 로 바로 나눠서 볼 수 있게 해줍니다.
+프로그램을 실행하면 위 파일들이 자동으로 생성되고 누적 기록됩니다. `trade_logs/YYYY-MM-DD/trade_history.jsonl` 에는 매수/익절/손절 체결 결과가 거래소/심볼/수량/금액/손익/원본 주문 응답과 함께 구조화되어 저장됩니다. 최근에는 주문 실행 품질 분석용으로 주문 ID, API 지연, 평균 체결가, 슬리피지, 체결 비율 같은 필드도 함께 남기도록 확장했습니다. 업비트는 `logs/runtime/upbit_ws` 아래에 공개 웹소켓 latest/1분봉 스냅샷과 private `myOrder`, `myAsset` 이벤트도 함께 저장합니다. 구조화 로그는 장애 분석은 `system.jsonl`, 전략 병목 분석은 `strategy.jsonl`, 체결 분석은 `trade.jsonl` 로 바로 나눠서 볼 수 있게 해줍니다.
 또한 재시작 시 `trade_history` 로 평균 진입가를 복구하지 못한 포지션은 강제로 현재가를 진입가로 가정하지 않고 `position_state_unrecoverable` 경고를 남긴 뒤 자동 매매를 보류합니다. 이 동작은 손절/익절 판단 왜곡을 막기 위한 안전장치입니다.
 
 기존 평면 로그가 남아 있는 경우에는 아래 명령으로 날짜별 폴더 구조로 옮길 수 있습니다.
@@ -170,9 +175,11 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - OKX BTC EMA 봇만 시작: `.venv/bin/python bot_manager.py start okx_btc`
 - 업비트 BTC EMA 봇만 시작: `.venv/bin/python bot_manager.py start upbit_btc`
 - 분석 수집기만 시작: `.venv/bin/python bot_manager.py start collector`
+- 업비트 웹소켓 수집기만 시작: `.venv/bin/python bot_manager.py start upbit_stream`
 - 텔레그램 명령 리스너만 시작: `.venv/bin/python bot_manager.py start telegram`
 - 전체 중지: `.venv/bin/python bot_manager.py stop`
 - 텔레그램 리스너만 중지: `.venv/bin/python bot_manager.py stop telegram`
+- 업비트 웹소켓 수집기만 중지: `.venv/bin/python bot_manager.py stop upbit_stream`
 - 강제 종료: `.venv/bin/python bot_manager.py stop --force`
 
 위 도구는 `run/ma_crossover_bot.py`, `run/upbit_ma_crossover_bot.py`, `run/okx_btc_ema_trend_bot.py`, `run/upbit_btc_ema_trend_bot.py`, `run/analysis_log_collector.py`, `run/telegram_command_listener.py` 상태를 함께 확인하고 관리합니다.
@@ -192,6 +199,9 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - OKX BTC 봇: `run/okx_btc_ema_trend_bot.py`
 - 업비트 BTC 봇: `run/upbit_btc_ema_trend_bot.py`
 - 시장 분석 수집기: `run/analysis_log_collector.py`
+- 업비트 웹소켓 시장데이터 수집기: `run/upbit_market_data_stream.py`
+  - 공개: `trade / orderbook / candle.1m`
+  - 인증: `myOrder / myAsset`
 - 텔레그램 명령 리스너: `run/telegram_command_listener.py`
 
 ### 수시 확인

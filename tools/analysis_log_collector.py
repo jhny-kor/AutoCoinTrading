@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 분석 수집기에서도 웹소켓 latest/best bid/1분봉 스냅샷을 우선 사용하고 stale 시 REST fallback 하도록 바꿔 phase 4 전환을 시작했다.
 - 분석용 JSONL 에 노이즈 비율을 함께 저장해 동적 진입 문턱값 보정 근거를 바로 확인할 수 있게 확장
 - 분석용 JSONL 에 ADX, MACD 히스토그램, MA 기울기를 함께 저장해 레짐 분류와 신호 품질 분석에 바로 활용할 수 있게 확장
 - 호가창 상위 구간 누적 잔량, 누적 호가 금액, 깊이 비대칭, 가벼운 체결 압력 지표까지 함께 저장하도록 확장
@@ -35,6 +36,8 @@ from typing import Iterable
 import ccxt
 from dotenv import load_dotenv
 
+from core.execution.upbit import create_upbit_market_data_provider
+from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.strategy.indicators import (
     calc_adx,
     calc_macd_histogram,
@@ -234,6 +237,22 @@ def fetch_upbit_ohlcv(
     return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
 
+def fetch_upbit_ohlcv_with_provider(
+    exchange: ccxt.upbit,
+    *,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+) -> list[list[float]]:
+    """업비트 OHLCV 를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
+    if market_data_provider is not None and timeframe.strip().lower() == "1m":
+        rows = market_data_provider.get_recent_ohlcv_1m(symbol, limit)
+        if rows:
+            return rows
+    return fetch_upbit_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
+
+
 def choose_order_book_sweep_quote_target(symbol: str) -> float:
     """심볼의 호가 통화에 맞는 미시구조 체결 가정 금액을 고른다."""
     quote = symbol.split("/", 1)[1] if "/" in symbol else ""
@@ -277,6 +296,66 @@ def fetch_upbit_order_book(exchange: ccxt.upbit, symbol: str) -> dict[str, float
         )
     except Exception:
         return {}
+
+
+def fetch_upbit_order_book_with_provider(
+    exchange: ccxt.upbit,
+    symbol: str,
+    *,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+) -> dict[str, float | None]:
+    """업비트 호가를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
+    if market_data_provider is not None:
+        best_bid = market_data_provider.get_best_bid(symbol)
+        snapshot = market_data_provider.read_latest_snapshot(symbol)
+        orderbook = snapshot.get("orderbook") if isinstance(snapshot, dict) else None
+        best_ask = None
+        best_bid_size = None
+        best_ask_size = None
+        total_bid_size = None
+        total_ask_size = None
+        if isinstance(orderbook, dict):
+            best_ask = orderbook.get("best_ask_price")
+            best_bid_size = orderbook.get("best_bid_size")
+            best_ask_size = orderbook.get("best_ask_size")
+            total_bid_size = orderbook.get("total_bid_size")
+            total_ask_size = orderbook.get("total_ask_size")
+        if best_bid is not None and best_ask not in (None, ""):
+            try:
+                best_bid_f = float(best_bid)
+                best_ask_f = float(best_ask)
+                spread = best_ask_f - best_bid_f
+                mid = (best_ask_f + best_bid_f) / 2 if (best_ask_f + best_bid_f) else None
+                spread_pct = (spread / mid * 100) if mid else None
+                imbalance = None
+                if best_bid_size not in (None, "") and best_ask_size not in (None, "", 0):
+                    imbalance = float(best_bid_size) / float(best_ask_size)
+                return {
+                    "best_bid": best_bid_f,
+                    "best_bid_size": float(best_bid_size) if best_bid_size not in (None, "") else None,
+                    "best_ask": best_ask_f,
+                    "best_ask_size": float(best_ask_size) if best_ask_size not in (None, "") else None,
+                    "spread": spread,
+                    "spread_pct": spread_pct,
+                    "bid_ask_size_imbalance": imbalance,
+                    "bid_depth_size_3": total_bid_size,
+                    "ask_depth_size_3": total_ask_size,
+                    "bid_depth_size_5": total_bid_size,
+                    "ask_depth_size_5": total_ask_size,
+                    "bid_depth_notional_3": None,
+                    "ask_depth_notional_3": None,
+                    "bid_depth_notional_5": None,
+                    "ask_depth_notional_5": None,
+                    "depth_size_imbalance_3": None,
+                    "depth_size_imbalance_5": None,
+                    "buy_sweep_avg_price": None,
+                    "sell_sweep_avg_price": None,
+                    "buy_sweep_slippage_bps": None,
+                    "sell_sweep_slippage_bps": None,
+                }
+            except (TypeError, ValueError):
+                pass
+    return fetch_upbit_order_book(exchange, symbol)
 
 
 def _safe_price_size(level: list[float]) -> tuple[float | None, float | None]:
@@ -706,6 +785,14 @@ def main():
 
     okx = create_okx_public_client()
     upbit = create_upbit_public_client()
+    upbit_market_data_provider = create_upbit_market_data_provider(
+        {
+            "ws_provider_enabled": True,
+            "ws_provider_root_dir": os.getenv("UPBIT_WS_PROVIDER_ROOT_DIR", "logs/runtime/upbit_ws"),
+            "ws_provider_cache_ttl_sec": float(os.getenv("UPBIT_WS_PROVIDER_CACHE_TTL_SEC", "0.25")),
+            "ws_provider_stale_sec": float(os.getenv("UPBIT_WS_PROVIDER_STALE_SEC", "5.0")),
+        }
+    )
 
     print("=== 분석용 시장 데이터 수집기 시작 ===")
     print(f"수집 주기: {interval_sec}초")
@@ -734,8 +821,12 @@ def main():
                         fetch_okx_order_book(okx, symbol) if collect_orderbook else {}
                     )
                 else:
-                    ohlcv = fetch_upbit_ohlcv(
-                        upbit, symbol, timeframe=timeframe, limit=limit
+                    ohlcv = fetch_upbit_ohlcv_with_provider(
+                        upbit,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        limit=limit,
+                        market_data_provider=upbit_market_data_provider,
                     )
                     higher_timeframe_ohlcv = fetch_upbit_ohlcv(
                         upbit,
@@ -744,7 +835,13 @@ def main():
                         limit=int(collector_settings["higher_timeframe_ma_period"]) + 5,
                     )
                     order_book = (
-                        fetch_upbit_order_book(upbit, symbol) if collect_orderbook else {}
+                        fetch_upbit_order_book_with_provider(
+                            upbit,
+                            symbol,
+                            market_data_provider=upbit_market_data_provider,
+                        )
+                        if collect_orderbook
+                        else {}
                     )
 
                 snapshot = build_snapshot(

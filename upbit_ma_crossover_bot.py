@@ -1,5 +1,8 @@
 """
 수정 요약
+- 업비트 알트 상위 타임프레임 5분봉도 웹소켓 1분봉 리샘플 우선, stale 시 REST fallback 으로 바꿔 REST 캔들 호출을 더 줄이도록 확장했다.
+- 업비트 1분봉 조회를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 바꿔 phase 3 전환을 시작했다.
+- 업비트 best bid 조회를 웹소켓 latest 스냅샷 우선, stale 시 REST fallback 으로 바꿔 phase 2 전환을 시작했다.
 - 노이즈 비율 기반 동적 이격도 보정을 추가해 알트 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강
 - 2차 강화로 진입 상태 머신, BTC 상관관계 가드, 체결률 기반 진입 차단을 추가했다.
 - 알트 진입에 RSI, MACD, MA 기울기, 신호 스코어를 추가하고 레짐별 손절/익절/분할진입 정책을 반영하도록 강화
@@ -62,18 +65,22 @@ from bot_logger import BLUE, RED, BotLogger
 from core.execution.common import log_order_failure
 from core.execution.upbit import (
     apply_upbit_buy_order_buffer as apply_upbit_buy_order_buffer_core,
+    create_upbit_market_data_provider as create_upbit_market_data_provider_core,
     create_market_buy_order_upbit as create_market_buy_order_upbit_core,
     create_market_sell_order_upbit as create_market_sell_order_upbit_core,
     create_upbit_client as create_upbit_client_core,
+    enrich_upbit_order_with_private_event as enrich_upbit_order_with_private_event_core,
     fetch_best_bid_upbit as fetch_best_bid_upbit_core,
+    fetch_ohlcv_upbit_with_provider as fetch_ohlcv_upbit_with_provider_core,
     fetch_ohlcv_upbit as fetch_ohlcv_upbit_core,
-    get_spot_balances_upbit as get_spot_balances_upbit_core,
+    get_spot_balances_upbit_with_provider as get_spot_balances_upbit_with_provider_core,
     invalidate_upbit_balance_cache as invalidate_upbit_balance_cache_core,
     invalidate_upbit_orderbook_cache as invalidate_upbit_orderbook_cache_core,
     load_upbit_config as load_upbit_config_core,
     safe_amount_to_precision_upbit as safe_amount_to_precision_upbit_core,
     should_refresh_best_bid_upbit as should_refresh_best_bid_upbit_core,
 )
+from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.logging.metrics import build_alt_common_metrics
 from core.positions.lifecycle import clear_alt_position_state
 from core.positions.guards import handle_unrecoverable_position
@@ -127,6 +134,11 @@ def load_config() -> dict:
 def create_upbit_client(config: dict) -> ccxt.upbit:
     """업비트 클라이언트 생성."""
     return create_upbit_client_core(config)
+
+
+def create_upbit_market_data_provider(config: dict) -> UpbitMarketDataProvider | None:
+    """업비트 웹소켓 latest 스냅샷 provider 를 생성한다."""
+    return create_upbit_market_data_provider_core(config)
 
 
 def is_upbit_rate_limit_error(exc: Exception) -> bool:
@@ -187,10 +199,34 @@ def create_market_sell_order_upbit(
     return create_market_sell_order_upbit_core(exchange, symbol, amount)
 
 
-def fetch_ohlcv(
-    exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
+def enrich_upbit_order_with_private_event(
+    raw_order,
+    *,
+    symbol: str,
+    market_data_provider: UpbitMarketDataProvider | None = None,
 ):
-    return fetch_ohlcv_upbit_core(exchange, symbol, timeframe=timeframe, limit=limit)
+    """최근 myOrder private 이벤트를 주문 응답에 보강한다."""
+    return enrich_upbit_order_with_private_event_core(
+        raw_order,
+        symbol=symbol,
+        market_data_provider=market_data_provider,
+    )
+
+
+def fetch_ohlcv(
+    exchange: ccxt.upbit,
+    symbol: str,
+    timeframe: str = "1m",
+    limit: int = 200,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+):
+    return fetch_ohlcv_upbit_with_provider_core(
+        exchange,
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        market_data_provider=market_data_provider,
+    )
 
 
 def calc_sma(prices, period: int) -> float:
@@ -227,8 +263,19 @@ def detect_crossover(
     return bullish, bearish, prev_close, prev_ma, last_close, last_ma
 
 
-def get_spot_balances(exchange: ccxt.upbit, base: str, quote: str) -> Tuple[float, float]:
-    return get_spot_balances_upbit_core(exchange, base, quote)
+def get_spot_balances(
+    exchange: ccxt.upbit,
+    base: str,
+    quote: str,
+    *,
+    market_data_provider: UpbitMarketDataProvider | None = None,
+) -> Tuple[float, float]:
+    return get_spot_balances_upbit_with_provider_core(
+        exchange,
+        base=base,
+        quote=quote,
+        market_data_provider=market_data_provider,
+    )
 
 
 def safe_amount_to_precision(exchange: ccxt.upbit, symbol: str, amount: float) -> float:
@@ -314,6 +361,7 @@ def run_bot():
     config = load_config()
     strategy = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
     exchange = create_upbit_client(config)
+    market_data_provider = create_upbit_market_data_provider(config)
 
     # BTC 는 전용 EMA 봇으로 분리했으므로 기존 업비트 봇은 알트만 담당한다.
     markets = load_alt_markets("upbit")
@@ -417,6 +465,7 @@ def run_bot():
                     DEFAULT_UPBIT_BTC_SYMBOL,
                     timeframe=timeframe,
                     limit=max(min_ohlcv_limit, strategy.correlation_lookback + ma_period + 5),
+                    market_data_provider=market_data_provider,
                 )
                 btc_reference_closes = [row[4] for row in btc_ohlcv]
                 if len(btc_reference_closes) >= ma_period:
@@ -435,7 +484,11 @@ def run_bot():
             try:
                 log("캔들 데이터 조회 시도 중...")
                 ohlcv = fetch_ohlcv(
-                    exchange, symbol, timeframe=timeframe, limit=min_ohlcv_limit
+                    exchange,
+                    symbol,
+                    timeframe=timeframe,
+                    limit=min_ohlcv_limit,
+                    market_data_provider=market_data_provider,
                 )
                 closes = [c[4] for c in ohlcv]  # 종가 리스트
                 ma_series = [
@@ -519,6 +572,7 @@ def run_bot():
                         symbol,
                         timeframe=strategy.higher_timeframe,
                         limit=strategy.higher_timeframe_ma_period + 5,
+                        market_data_provider=market_data_provider,
                     )
                     htf_closes = [c[4] for c in htf_ohlcv]
                     htf_last_close = htf_closes[-1]
@@ -534,18 +588,23 @@ def run_bot():
                     )
 
                 log("잔고 조회 중...")
-                base_free, quote_free = get_spot_balances(exchange, base, quote)
-                log(f"현물 잔고 - {base}: {base_free}, {quote}: {quote_free}")
-                best_bid = (
-                    fetch_best_bid(exchange, symbol)
-                    if should_refresh_best_bid(
-                        base_free=base_free,
-                        last_close=last_close,
-                        min_order_value=strategy.min_buy_order_value,
-                        refresh_buffer_pct=config["best_bid_refresh_buffer_pct"],
-                    )
-                    else None
+                base_free, quote_free = get_spot_balances(
+                    exchange,
+                    base,
+                    quote,
+                    market_data_provider=market_data_provider,
                 )
+                log(f"현물 잔고 - {base}: {base_free}, {quote}: {quote_free}")
+                best_bid = None
+                if base_free > 0 and market_data_provider is not None:
+                    best_bid = market_data_provider.get_best_bid(symbol)
+                if best_bid is None and should_refresh_best_bid(
+                    base_free=base_free,
+                    last_close=last_close,
+                    min_order_value=strategy.min_buy_order_value,
+                    refresh_buffer_pct=config["best_bid_refresh_buffer_pct"],
+                ):
+                    best_bid = fetch_best_bid(exchange, symbol)
                 sell_price_reference = best_bid if best_bid and best_bid > 0 else last_close
 
                 position_quote_value = base_free * last_close
@@ -1349,6 +1408,11 @@ def run_bot():
                             )
                             continue
                         order_response_received_at = time.time()
+                        order = enrich_upbit_order_with_private_event(
+                            order,
+                            symbol=symbol,
+                            market_data_provider=market_data_provider,
+                        )
                         invalidate_upbit_balance_cache(exchange)
                         invalidate_upbit_orderbook_cache(exchange, symbol)
                         # 시장가 주문 특성상 실제 체결가 대신 현재가로 평균 진입가를 추정
@@ -1551,6 +1615,11 @@ def run_bot():
                             )
                             continue
                         order_response_received_at = time.time()
+                        order = enrich_upbit_order_with_private_event(
+                            order,
+                            symbol=symbol,
+                            market_data_provider=market_data_provider,
+                        )
                         invalidate_upbit_balance_cache(exchange)
                         invalidate_upbit_orderbook_cache(exchange, symbol)
                         last_trade_at[symbol] = time.time()
