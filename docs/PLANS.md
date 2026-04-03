@@ -11,7 +11,7 @@
 
 현재는 `단타/인트라데이 전용`으로 `BTC 전용 전략`과 `알트 전용 전략`을 나누어 운영합니다.
 
-### 2026-04-02 현재 적용 핵심 강화 요약
+### 2026-04-03 현재 적용 핵심 강화 요약
 
 - 1차 강화
   - 알트: `RSI`, `MACD 히스토그램`, `MA/가격 기울기`, `신호 스코어` 기반 진입 품질 보강
@@ -24,11 +24,13 @@
   - 알트는 `BTC 상관관계 필터` 적용
   - BTC/알트 모두 `fill_ratio` 기반 실행 품질 가드 적용
   - 퍼널과 metrics 에 `signal_score`, `entry_timing_*`, `correlation_with_btc`, `fill_quality_*` 필드 추가
+  - 알트는 `BTC 레짐`, `BTC ATR 퍼센트`를 추가로 읽어 신규 진입 비중을 단계형으로 축소
 - 운영 해석
   - 약한 단발 신호는 즉시 진입하지 않고 누적 확인 후 진입
   - BTC와 과도하게 같은 방향으로 흔들리는 알트는 신규 진입 축소
   - 최근 체결 품질이 나쁜 심볼은 자동으로 잠시 쉬게 해 주문 품질 악화를 회피
   - 캔들 잡음이 많은 날은 진입 문턱을 자동으로 높이고, 추세가 깔끔한 날은 문턱을 자동으로 낮춤
+  - BTC가 `LOW_ENERGY`이거나 `atr_pct`가 매우 낮은 구간에서는 알트 신규 진입을 바로 끄기보다 먼저 비중을 줄여 저엣지 진입을 완화
 
 - BTC 전용 전략
   - 기본 개념: 5분봉 EMA 추세추종 + 15분봉 확인
@@ -61,10 +63,14 @@
     - `XRP/KRW` 순익 보호 최소 순익률 `0.16`
     - `XRP/USDT` 순익 보호 최소 순익률 `0.18`
     - `STRATEGY_REGIME_POSITION_SCALE_MAP=TRENDING:1.00,BREAKOUT_ATTEMPT:0.80,CHOPPY:0.40,LOW_ENERGY:0.00,OVERHEATED:0.20,EXHAUSTION_RISK:0.00`
+    - `STRATEGY_BTC_REGIME_POSITION_SCALE_MAP=LOW_ENERGY:0.50`
+    - `STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP=ETH/KRW|LOW_ENERGY:0.35,XRP/KRW|LOW_ENERGY:0.60,ETH/USDT|LOW_ENERGY:0.35,XRP/USDT|LOW_ENERGY:0.60`
+    - `STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP=0.18:0.70,0.15:0.45,0.12:0.25`
   - 현재 해석:
     - `ETH/USDT`, `ETH/KRW` 는 최근 손절이 잦아 진입 품질을 먼저 높이는 쪽으로 조정
     - `XRP/KRW`, `XRP/USDT` 는 수익은 나지만 보호 청산이 빨라 러너를 덜 먹는 구간이 보여 순익 보호를 조금 늦춤
     - 레짐별 포지션 비중 1차 적용으로 상승장/횡보장/저에너지장에 따라 진입 크기도 다르게 조절
+    - 최근 3일 업비트 실거래 기준으로는 `BTC LOW_ENERGY`, `낮은 BTC atr_pct` 구간에서 알트 손실 캠페인이 상대적으로 많아, 알트 자체 레짐 외에 `BTC 상태 기반 축소`를 추가 적용
 
 장타/스윙 전용 구조와 초기 전략안은 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 에 정리합니다.
 

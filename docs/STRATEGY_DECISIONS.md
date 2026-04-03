@@ -491,6 +491,51 @@
   - 실거래는 수익 보호 신호가 너무 늦어 장중 수익 대부분을 되돌렸다고 판단
   - 따라서 `ETH/USDT` 는 다른 알트보다 더 빠르게 보호를 켜고, 음수로 내려가기 전 더 높은 순익 구간에서 정리하는 편이 맞음
 
+### 25. 레짐별 포지션 비중 1차 적용 (2026-04-03, alt_live_v1 / btc_mid_v1)
+
+- 변경 내용:
+  - 알트 `STRATEGY_REGIME_POSITION_SCALE_MAP` 적용
+  - BTC `BTC_TREND_REGIME_POSITION_SCALE_MAP` 적용
+  - 레짐별 포지션 비중 스케일을 로그와 metrics 에 함께 기록
+- 근거 로그:
+  - 최근 손절 거래는 `CHOPPY`, `LOW_ENERGY` 구간에서 후속 탄력이 약한 패턴이 반복
+  - 반대로 수익 러너가 나온 거래는 `TRENDING` 쪽에서 더 잘 유지되는 흐름이 확인
+- 해석:
+  - 레짐을 단순 진입 차단뿐 아니라 `진입 크기 조절`에도 쓰는 편이 자연스럽다고 판단
+
+### 26. BTC LOW_ENERGY 기준 알트 신규 진입 비중 축소 추가 (2026-04-03, alt_live_v1)
+
+- 변경 내용:
+  - `STRATEGY_ENABLE_BTC_REGIME_POSITION_SCALING=true`
+  - `STRATEGY_BTC_REGIME_POSITION_SCALE_MAP=LOW_ENERGY:0.50`
+  - `STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP`
+    - `ETH/KRW|LOW_ENERGY:0.35`
+    - `XRP/KRW|LOW_ENERGY:0.60`
+    - `ETH/USDT|LOW_ENERGY:0.35`
+    - `XRP/USDT|LOW_ENERGY:0.60`
+- 근거 로그:
+  - 최근 3일 업비트 알트 실거래 캠페인 10건 기준 기본 승률은 `60.0%`, 평균 순손익률은 `-0.1072%`
+  - 같은 표본에서 `BTC regime != LOW_ENERGY` 조건만 유지하면 승률 `83.3%`, 평균 순손익률 `+0.1380%`
+  - 다만 `LOW_ENERGY`를 바로 하드 차단하면 수익 거래도 함께 줄어드는 구간이 있어 1차는 `차단`보다 `비중 축소`가 더 안전하다고 판단
+- 해석:
+  - 최근 손실 거래는 BTC가 `LOW_ENERGY`일 때 상대적으로 더 많았음
+  - ETH는 손절 억제가 더 중요하고, XRP는 러너 보존도 중요해 `ETH 더 보수 / XRP 덜 보수`의 비대칭 축소가 적절하다고 판단
+
+### 27. BTC ATR 퍼센트 기반 알트 신규 진입 비중 축소 추가 (2026-04-03, alt_live_v1)
+
+- 변경 내용:
+  - `STRATEGY_ENABLE_BTC_ATR_POSITION_SCALING=true`
+  - `STRATEGY_BTC_ATR_POSITION_SCALE_LOOKBACK=14`
+  - `STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP=0.18:0.70,0.15:0.45,0.12:0.25`
+  - 알트 신규 진입 비중에 `BTC atr_pct` 단계형 스케일을 추가 적용
+- 근거 로그:
+  - 최근 3일 업비트 알트 캠페인 10건 기준 `BTC atr_pct >= 0.18` 구간만 유지하면 승률 `80.0%`, 평균 순손익률 `+0.2937%`
+  - 반대로 하드 차단으로 쓰면 수익 거래도 일부 함께 사라져, 최근 표본에서는 `차단`보다 `단계형 축소`가 더 적절했음
+  - 운영 로그에서도 `BTC ATR(0.0257%) 스케일 0.25x` 형식으로 실제 적용값이 기록되는 것을 확인
+- 해석:
+  - BTC 변동성이 너무 낮은 구간은 알트 추세 추종 엣지가 떨어지는 경우가 많았음
+  - 따라서 바로 진입 금지로 가기보다 `0.70x -> 0.45x -> 0.25x` 단계형 축소를 먼저 적용해 손실 진입을 줄이고, 좋은 거래까지 과하게 잘리지 않도록 조정
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
