@@ -167,9 +167,6 @@ stale 이면:
 - [core/market_data/upbit_market_state.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_market_state.py)
   - 심볼별 최신 상태 메모리 모델
 
-- [core/market_data/upbit_candle_aggregator.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_candle_aggregator.py)
-  - trade 또는 1s candle 을 1m/5m/15m 로 집계
-
 - [core/market_data/upbit_snapshot_store.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_snapshot_store.py)
   - 로컬 JSON/JSONL 스냅샷 저장과 읽기
 
@@ -177,14 +174,14 @@ stale 이면:
   - 전략 봇에서 읽는 공통 provider
   - WebSocket snapshot 우선, stale 시 REST fallback
 
-- [tools/upbit_ws_healthcheck.py](/Users/plo/Documents/auto_coin_bot/tools/upbit_ws_healthcheck.py)
-  - 수집기 연결 상태 점검
-
-- [tests/test_upbit_candle_aggregator.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_candle_aggregator.py)
-  - 봉 집계 단위 테스트
-
 - [tests/test_upbit_snapshot_store.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_snapshot_store.py)
   - 파일 저장/복구 단위 테스트
+
+- [tests/test_upbit_market_state.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_market_state.py)
+  - 실시간 시장 상태 갱신 단위 테스트
+
+- [tests/test_upbit_provider.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_provider.py)
+  - provider 우선 조회와 fallback 경로 단위 테스트
 
 ### 기존 파일 수정 후보
 
@@ -217,6 +214,10 @@ stale 이면:
 - 끊김 없이 수집 가능한지 확인
 - CPU/메모리/로그량 확인
 
+상태:
+
+- 완료
+
 ### Phase 2. 호가 조회만 대체
 
 - `fetch_best_bid` 를 provider 우선 구조로 교체
@@ -227,6 +228,10 @@ stale 이면:
 - 업비트 알트/BTC의 `fetch_order_book` 호출 수 감소
 - 최소 주문 경계 근처 응답 개선
 
+상태:
+
+- 완료
+
 ### Phase 3. 1분봉 조회 대체
 
 - `fetch_ohlcv(..., timeframe="1m")` 를 provider 우선 구조로 교체
@@ -235,6 +240,10 @@ stale 이면:
 목표:
 
 - 봇 루프의 반복 REST 호출을 크게 줄임
+
+상태:
+
+- 완료
 
 ### Phase 4. 분석 수집기 연동
 
