@@ -156,6 +156,9 @@ split env 가 없을 때만 아래 fallback 이 추가됩니다.
 - `config/runtime.local.toml` 운용 규칙 문서화 보강
 - typed config accessor 적용 범위를 실행/리포트 전역으로 더 넓히기
 
+위 항목은 리팩토링 미완료가 아니라 후속 개선 메모로 봅니다.
+현재 canonical 설정 구조 전환 자체는 완료된 상태입니다.
+
 ---
 
 ## 6. 한 줄 요약
