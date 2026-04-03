@@ -1,5 +1,6 @@
 """
 수정 요약
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - 업비트 분석 수집기에서도 웹소켓 latest/best bid/1분봉 스냅샷을 우선 사용하고 stale 시 REST fallback 하도록 바꿔 phase 4 전환을 시작했다.
 - 분석용 JSONL 에 노이즈 비율을 함께 저장해 동적 진입 문턱값 보정 근거를 바로 확인할 수 있게 확장
 - 분석용 JSONL 에 ADX, MACD 히스토그램, MA 기울기를 함께 저장해 레짐 분류와 신호 품질 분석에 바로 활용할 수 있게 확장
@@ -34,7 +35,6 @@ from pathlib import Path
 from typing import Iterable
 
 import ccxt
-from dotenv import load_dotenv
 
 from core.execution.upbit import create_upbit_market_data_provider
 from core.market_data.upbit_provider import UpbitMarketDataProvider
@@ -47,6 +47,7 @@ from core.strategy.indicators import (
     calc_sma as calc_sma_core,
 )
 from log_path_utils import dated_path
+from settings.env import load_project_env
 from strategy_settings import load_managed_symbols, load_strategy_settings
 from telegram_notifier import load_telegram_notifier
 
@@ -737,7 +738,7 @@ def iter_targets() -> Iterable[tuple[str, str]]:
 
 def main():
     """수집기 메인 루프."""
-    load_dotenv()
+    load_project_env()
     notifier = load_telegram_notifier()
     last_error_signature: str | None = None
 

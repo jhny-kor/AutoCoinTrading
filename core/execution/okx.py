@@ -1,5 +1,6 @@
 """
 작업 요약
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - OKX 설정 로드, 조회 재시도, 잔고 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
 - 알트/BTC 봇이 같은 OKX 실행 경로를 재사용하도록 정리했다.
 """
@@ -11,11 +12,11 @@ import time
 from typing import Tuple
 
 import ccxt
-from dotenv import load_dotenv
+from settings.env import load_project_env
 
 
 def load_okx_config() -> dict:
-    load_dotenv()
+    load_project_env()
 
     api_key = os.getenv("OKX_API_KEY")
     api_secret = os.getenv("OKX_API_SECRET")

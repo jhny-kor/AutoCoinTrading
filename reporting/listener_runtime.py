@@ -8,10 +8,9 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from bot_logger import BotLogger
 from reporting.telegram_notifier import format_telegram_request_error
+from settings.env import load_project_env
 from strategy_settings import load_managed_symbols
 
 WEEKDAY_NAME_TO_INDEX = {
@@ -55,7 +54,7 @@ def parse_bool(raw: str | None, default: bool = False) -> bool:
 
 def load_listener_settings() -> ListenerSettings:
     """환경 변수에서 리스너 설정을 읽는다."""
-    load_dotenv()
+    load_project_env()
 
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -206,4 +205,3 @@ def save_report_state(path: Path, state: dict[str, str]) -> None:
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-

@@ -1,6 +1,8 @@
 """
 저에너지 장 감지 공통 모듈
 
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+
 - 2차 확장으로 fresh cross 요구와 부분익절 비율 배수까지 레짐별 정책에 포함하도록 확장했다.
 - ADX 기반 추세 강도 판정과 레짐별 진입/리스크 정책 프로파일을 추가했다.
 - 레짐 변경 알림 메시지가 실제 줄바꿈으로 보이도록 정리했다.
@@ -21,8 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-
+from settings.env import load_project_env
 from log_path_utils import current_date_str
 
 
@@ -117,7 +118,7 @@ class RegimePolicy:
 
 def load_regime_thresholds() -> dict[str, float | int | bool]:
     """심볼별 레짐 분류에 사용할 임계값을 읽는다."""
-    load_dotenv()
+    load_project_env()
     return {
         "alert_enabled": parse_bool(
             os.getenv("REGIME_ALERT_ENABLED", "false"),
@@ -343,7 +344,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
 
 def load_low_energy_guard_settings() -> LowEnergyGuardSettings:
     """저에너지 장 가드 설정을 환경 변수에서 읽는다."""
-    load_dotenv()
+    load_project_env()
     return LowEnergyGuardSettings(
         enabled=parse_bool(os.getenv("MARKET_GUARD_ENABLE_LOW_ENERGY", "true"), True),
         avg_volume_ratio_threshold=float(

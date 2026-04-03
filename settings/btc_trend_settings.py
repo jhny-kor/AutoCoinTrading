@@ -1,6 +1,8 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+
 - 레짐별 포지션 비중 스케일 설정을 추가해 BTC도 상승장/횡보장/저에너지장에 따라 진입 크기를 다르게 조절할 수 있게 확장했다.
 - 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장했다.
 - 2차 강화용으로 진입 상태 머신과 체결률 품질 가드 설정을 추가했다.
@@ -28,8 +30,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
+from settings.env import load_project_env
 from strategy_settings import parse_symbol_float_map
 
 
@@ -153,7 +154,7 @@ class BtcTrendSettings:
 
 def load_btc_trend_settings() -> BtcTrendSettings:
     """BTC 전용 EMA 추세추종 설정을 불러온다."""
-    load_dotenv()
+    load_project_env()
 
     return BtcTrendSettings(
         version=os.getenv("BTC_TREND_VERSION", "btc_mid_v1").strip(),

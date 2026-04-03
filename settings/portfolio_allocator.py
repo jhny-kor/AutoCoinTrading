@@ -1,5 +1,6 @@
 """
 수정 요약
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - 목표 자산은 기존 분할 진입 주문금액이 아니라 남아 있는 목표 예산 자체를 주문금액으로 쓰도록 조정
 - 목표 비중과 남아 있는 누적 투입 원가를 기준으로 신규 매수 허용 금액을 계산하는 포트폴리오 배분 모듈을 추가
 - 거래량과 추세 품질이 강한 코인만 목표 비중을 보수적으로 +5% 확대하는 동적 오버웨이트를 지원하도록 추가
@@ -15,8 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
+from settings.env import load_project_env
 from strategy_settings import parse_bool, parse_symbol_float_map
 
 
@@ -52,7 +52,7 @@ class AllocationDecision:
 
 def load_portfolio_allocation_settings() -> PortfolioAllocationSettings:
     """환경 변수에서 포트폴리오 배분 설정을 읽는다."""
-    load_dotenv()
+    load_project_env()
     return PortfolioAllocationSettings(
         target_allocations=parse_symbol_float_map(
             os.getenv("PORTFOLIO_TARGET_ALLOCATIONS", "BTC:0.60,ETH:0.30,XRP:0.10")

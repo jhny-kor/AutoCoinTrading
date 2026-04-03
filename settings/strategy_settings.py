@@ -1,5 +1,6 @@
 """
 수정 요약
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄일 수 있게 공통 설정을 추가했다.
 - BTC 레짐 기반 알트 신규 진입 비중을 심볼별 override map 으로 세분화해 ETH 는 더 보수적으로, XRP 는 완만하게 축소할 수 있게 확장
 - 알트 신규 진입 비중에 BTC 레짐 기반 추가 스케일을 곱할 수 있게 확장해 BTC 가 LOW_ENERGY 일 때 먼저 포지션을 축소할 수 있게 보강
@@ -37,8 +38,7 @@
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
+from settings.env import load_project_env
 
 DEFAULT_OKX_ALT_SYMBOLS = ["PI/USDT"]
 DEFAULT_UPBIT_ALT_SYMBOLS = ["XRP/KRW"]
@@ -331,7 +331,7 @@ def build_market_entry(symbol: str) -> dict[str, str]:
 
 def load_alt_symbols(exchange_name: str) -> list[str]:
     """거래소별 알트 봇 감시 심볼 목록을 읽는다."""
-    load_dotenv()
+    load_project_env()
 
     exchange_key = exchange_name.strip().lower()
     if exchange_key == "okx":
@@ -354,7 +354,7 @@ def load_alt_markets(exchange_name: str) -> list[dict[str, str]]:
 
 def load_managed_symbols(exchange_name: str) -> list[str]:
     """거래소별 운영/분석 대상 심볼 목록을 읽는다."""
-    load_dotenv()
+    load_project_env()
 
     exchange_key = exchange_name.strip().lower()
     if exchange_key == "okx":
@@ -372,7 +372,7 @@ def load_strategy_settings(
     min_buy_order_env_key: str, default_min_buy_order_value: float
 ) -> StrategySettings:
     """공통 전략 설정과 거래소별 최소 주문 금액 설정을 함께 읽는다."""
-    load_dotenv()
+    load_project_env()
 
     return StrategySettings(
         version=os.getenv("STRATEGY_VERSION", "alt_v1").strip(),

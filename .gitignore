@@ -1,5 +1,8 @@
 # 민감정보
 .env
+.env.settings
+.env.secrets
+.env.local
 
 # 운영 로그 / 수집 로그 / 분석 산출물
 logs/
@@ -15,4 +18,3 @@ __pycache__/
 
 # macOS 잡파일
 .DS_Store
-

@@ -6,6 +6,8 @@
 
 업비트 시장데이터 웹소켓 수집기
 
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+
 - 목적:
   - 업비트 알트/BTC/분석 수집기가 나중에 같은 실시간 시세를 공유할 수 있도록 1단계 기반을 만든다.
 - 현재 단계:
@@ -22,8 +24,6 @@ import time
 from datetime import datetime
 import threading
 
-from dotenv import load_dotenv
-
 from bot_logger import BotLogger
 from core.market_data.upbit_private_auth import build_upbit_private_ws_headers
 from core.market_data.upbit_market_state import (
@@ -32,6 +32,7 @@ from core.market_data.upbit_market_state import (
 )
 from core.market_data.upbit_snapshot_store import UpbitSnapshotStore
 from core.market_data.upbit_ws_client import UpbitWebSocketClient
+from settings.env import load_project_env
 from strategy_settings import load_managed_symbols
 
 
@@ -41,7 +42,7 @@ DEFAULT_UPBIT_PRIVATE_WS_URL = "wss://api.upbit.com/websocket/v1/private"
 
 def build_runtime_settings() -> dict[str, float | str | bool]:
     """환경 변수에서 업비트 웹소켓 수집기 설정을 읽는다."""
-    load_dotenv()
+    load_project_env()
     return {
         "url": os.getenv("UPBIT_WEBSOCKET_URL", DEFAULT_UPBIT_WS_URL).strip(),
         "private_url": os.getenv(

@@ -71,10 +71,10 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 거래량 필터와 변동성 필터를 추가해 신규 진입 품질을 높였습니다.
 - 일일 최대 손실 제한을 추가해 손실이 커지면 신규 매수를 중단하도록 바꿨습니다.
 - 업비트는 편도 수수료 0.05%를 반영해 왕복 수수료보다 낮은 구간에서 성급히 매도하지 않도록 보완했습니다.
-- 전략 공통값은 `.env`에서 같이 관리하도록 정리했습니다.
+- 전략 공통값은 `.env.settings`에서 같이 관리하도록 정리했습니다.
 - 코인별 이격도, 익절률, 손절률을 다르게 설정할 수 있도록 정리했습니다.
-- 심볼별 최소 주문 수량도 `.env`에서 다르게 관리할 수 있도록 정리했습니다.
-- 알트 감시 심볼 목록도 `.env`에서 관리해 종목 추가 시 코드 수정 범위를 줄였습니다.
+- 심볼별 최소 주문 수량도 `.env.settings`에서 다르게 관리할 수 있도록 정리했습니다.
+- 알트 감시 심볼 목록도 `.env.settings`에서 관리해 종목 추가 시 코드 수정 범위를 줄였습니다.
 - BTC 전용 봇은 익절 구간 도달 후 최고가 대비 되돌림으로 전량 청산하는 트레일링 익절을 적용했습니다.
 - BTC 전용 봇은 수수료를 제하고도 순익이 남는 상태에서 추세가 약해지면 빠르게 잠그는 순익 보호 익절을 추가했습니다.
 - BTC 전용 봇은 트레일링 익절/순익 보호 익절 직후 재진입과 추가매수를 잠시 막는 전용 쿨다운을 추가했습니다.
@@ -98,7 +98,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 - `run/ma_crossover_bot.py`: OKX 알트 현물용 실행 진입점
 - `run/upbit_ma_crossover_bot.py`: 업비트 알트 원화마켓용 실행 진입점
-- `strategy_settings.py`: `.env`에서 공통 전략 값을 읽는 모듈
+- `strategy_settings.py`: `.env.settings` 기준 공통 전략 값을 읽는 모듈
 - `bot_logger.py`: 터미널 출력과 파일 로그를 함께 처리하는 모듈
 - `bot_manager.py`: 실행 중인 봇 상태 확인 및 전체 중지 도구
 - `run/analysis_log_collector.py`: 분석용 구조화 로그 수집기 실행 진입점
@@ -127,7 +127,9 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `btc_trend_settings.py`: BTC 전용 EMA 추세추종 설정 로더
 - `run/okx_btc_ema_trend_bot.py`: OKX BTC 전용 EMA+ATR 추세추종 실행 진입점
 - `run/upbit_btc_ema_trend_bot.py`: 업비트 BTC 전용 EMA+ATR 추세추종 실행 진입점
-- `.env`: API 키, 거래소별 설정, 공통 전략 설정
+- `.env.settings`: 운영 설정 본체
+- `.env.secrets`: API 키, 텔레그램 토큰 같은 비밀정보
+- `.env`: split env 가 없을 때만 쓰는 legacy fallback
 
 ## 로그 파일
 
@@ -161,10 +163,10 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 ## 알트 심볼 추가 방법
 
-- `.env`의 `OKX_ALT_SYMBOLS`, `UPBIT_ALT_SYMBOLS` 에 감시할 알트 심볼을 쉼표로 추가합니다.
+- `.env.settings`의 `OKX_ALT_SYMBOLS`, `UPBIT_ALT_SYMBOLS` 에 감시할 알트 심볼을 쉼표로 추가합니다.
 - 텔레그램 `/positions`, `/analysis`, 분석 수집기는 위 알트 목록에 BTC 전용 심볼을 자동으로 합쳐서 사용합니다.
-- 운영 알트 외에 추가 관찰만 하고 싶은 심볼이 있으면 `.env`의 `ANALYSIS_OKX_SYMBOLS`, `ANALYSIS_UPBIT_SYMBOLS` 에만 별도로 넣을 수 있습니다.
-- 심볼별 이격도, 익절률, 손절률, 최소 주문 수량은 `.env`의 `STRATEGY_*_MAP` 항목에 함께 추가해 두는 것이 안전합니다.
+- 운영 알트 외에 추가 관찰만 하고 싶은 심볼이 있으면 `.env.settings`의 `ANALYSIS_OKX_SYMBOLS`, `ANALYSIS_UPBIT_SYMBOLS` 에만 별도로 넣을 수 있습니다.
+- 심볼별 이격도, 익절률, 손절률, 최소 주문 수량은 `.env.settings`의 `STRATEGY_*_MAP` 항목에 함께 추가해 두는 것이 안전합니다.
 
 ## 봇 상태 확인, 시작, 중지
 
@@ -324,7 +326,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 ## 텔레그램 알림
 
-- `.env`에서 `TELEGRAM_ENABLED=true` 로 켭니다.
+- `.env.settings`에서 `TELEGRAM_ENABLED=true` 로 켭니다.
 - `TELEGRAM_BOT_TOKEN` 에 BotFather 에서 받은 토큰을 넣습니다.
 - `TELEGRAM_CHAT_ID` 에 메시지를 받을 chat id 를 넣습니다.
 
@@ -371,7 +373,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 현재 구현 범위에서 `수정 요청`은 요청 기록과 알림까지 자동화하고, 실제 코드 패치/커밋/푸시는 별도 Codex 세션에서 진행합니다.
 
-텔레그램 명령 리스너는 `.env`의 `TELEGRAM_CHAT_ID`와 일치하는 채팅에서 온 메시지에만 응답합니다.
+텔레그램 명령 리스너는 `.env.secrets`의 `TELEGRAM_CHAT_ID`와 일치하는 채팅에서 온 메시지에만 응답합니다.
 
 즉시 테스트 메시지를 터미널에서 보내고 싶으면 아래 명령을 사용할 수 있습니다.
 
@@ -379,7 +381,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 ## 텔레그램 일일 리포트
 
-텔레그램 명령 리스너가 실행 중이면 `.env` 설정에 따라 일일 리포트도 자동으로 전송됩니다.
+텔레그램 명령 리스너가 실행 중이면 `.env.settings` 설정에 따라 일일 리포트도 자동으로 전송됩니다.
 
 - 아침 리포트: `TELEGRAM_DAILY_REPORT_MORNING_HOUR=8`
 - 점심 리포트: `TELEGRAM_DAILY_REPORT_NOON_HOUR=12`
@@ -403,7 +405,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 ## 텔레그램 주간 리포트
 
-텔레그램 명령 리스너가 실행 중이면 `.env` 설정에 따라 최근 7일 기준 주간 리포트도 자동으로 전송됩니다.
+텔레그램 명령 리스너가 실행 중이면 `.env.settings` 설정에 따라 최근 7일 기준 주간 리포트도 자동으로 전송됩니다.
 
 - 사용 여부: `TELEGRAM_WEEKLY_REPORT_ENABLED=true`
 - 기본 전송 요일: `TELEGRAM_WEEKLY_REPORT_WEEKDAY=MON`
@@ -427,13 +429,13 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 현재는 분할 진입, 코인별 이격도/익절/손절, 상위 타임프레임, 거래량, 변동성, 일일 손실 제한까지 포함한 보수형 전략을 테스트 중입니다.
 - BTC 전용 봇은 ATR 기반 손절, 약한 추세 구간 진입 필터, 익절 구간 진입 후 전량 트레일링, 수수료 반영 순익 보호 익절 구조를 함께 테스트 중입니다.
 - 알트 봇은 기존 부분익절/부분손절 구조에 더해, 수수료를 넘긴 순익 구간에서 메인 추세가 꺾이면 전량 순익 보호 익절을 우선 실행하도록 테스트 중입니다.
-- 알트 봇은 `.env`의 알트 심볼 목록 기준으로 여러 종목을 순회하며, 최근 로그 기준으로 일부 종목의 거래량 필터와 이격도 기준을 완화해 테스트 중입니다.
+- 알트 봇은 `.env.settings`의 알트 심볼 목록 기준으로 여러 종목을 순회하며, 최근 로그 기준으로 일부 종목의 거래량 필터와 이격도 기준을 완화해 테스트 중입니다.
 - 앞으로는 현재 전략을 충분히 관찰한 뒤 코인별 필터 값을 더 세밀하게 조정하고, 필요하면 RSI나 거래 횟수 제한 같은 보조 필터를 추가 검토할 수 있습니다.
 
 ## 현재 역할 분리
 
-- 기존 OKX 봇: `.env`의 `OKX_ALT_SYMBOLS`
-- 기존 업비트 봇: `.env`의 `UPBIT_ALT_SYMBOLS`
+- 기존 OKX 봇: `.env.settings`의 `OKX_ALT_SYMBOLS`
+- 기존 업비트 봇: `.env.settings`의 `UPBIT_ALT_SYMBOLS`
 - OKX BTC 전용 봇: `BTC/USDT`
 - 업비트 BTC 전용 봇: `BTC/KRW`
 
@@ -469,9 +471,11 @@ BTC는 현재 1분봉 다중코인 전략보다 더 느린 추세형 접근이 �
 2. 터미널에서:  
 ```bash  
 docker pull ghcr.io/jhny-kor/autocointrading:latest
-cp .env.example .env   # API 키 등 채우기
+cp .env.settings.example .env.settings   # 운영 설정 채우기
+cp .env.secrets.example .env.secrets     # API 키/토큰 채우기
 docker run -d --name autocoin-bot 
--v "$(pwd)/.env:/app/.env" 
+-v "$(pwd)/.env.settings:/app/.env.settings" 
+-v "$(pwd)/.env.secrets:/app/.env.secrets" 
 -v "$(pwd)/logs:/app/logs" 
 --restart unless-stopped 
 ghcr.io/jhny-kor/autocointrading:latest start all
@@ -480,5 +484,5 @@ ghcr.io/jhny-kor/autocointrading:latest start all
 
 ### Windows 실행파일
 - Releases에서 최신 버전 다운로드 → 압축 풀기
-- `.env` 파일 만들고 값 채우기
+- `.env.settings`, `.env.secrets` 파일 만들고 값 채우기
 - `AutoCoinTrading.exe start all` 더블클릭 또는 cmd에서 실행

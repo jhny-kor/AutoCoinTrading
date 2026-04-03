@@ -1,5 +1,6 @@
 """
 수정 요약
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - 업비트 myAsset latest 를 잔고 조회 우선 경로로 읽고 myOrder 최근 이벤트를 주문 응답 보강에 쓸 helper 를 추가했다.
 - 업비트 5분/15분 OHLCV 도 웹소켓 1분 캔들 리샘플 우선, stale 시 REST fallback 으로 읽게 확장했다.
 - 업비트 1분봉 OHLCV 를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 읽는 helper 를 추가해 phase 3 전환을 시작했다.
@@ -17,13 +18,13 @@ import time
 from typing import Tuple
 
 import ccxt
-from dotenv import load_dotenv
 
 from core.market_data.upbit_provider import UpbitMarketDataProvider
+from settings.env import load_project_env
 
 
 def load_upbit_config() -> dict:
-    load_dotenv()
+    load_project_env()
 
     api_key = os.getenv("UPBIT_API_KEY")
     api_secret = os.getenv("UPBIT_API_SECRET")

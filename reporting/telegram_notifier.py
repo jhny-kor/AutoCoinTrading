@@ -1,6 +1,8 @@
 """
 텔레그램 알림 유틸
 
+- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+
 - `07:40:03`, `01-00:52:55` 같은 실행시간 문자열은 숫자 포맷터가 건드리지 않도록 보호했다.
 - 이미 쉼표가 들어간 숫자도 다시 깨지지 않도록 텔레그램 숫자 포맷터를 보정했다.
 - 텔레그램 전송 실패 시 DNS 조회 실패, 연결 종료, 네트워크 미도달 같은 원인을 한국어로 더 분명하게 진단하도록 개선했다.
@@ -28,8 +30,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
 from incident_manager import register_incident
+from settings.env import load_project_env
 
 PROTECTED_DATETIME_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:\d{2})?)?"
@@ -335,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def load_telegram_notifier() -> TelegramNotifier:
     """환경 변수에서 텔레그램 설정을 읽는다."""
-    load_dotenv()
+    load_project_env()
 
     return TelegramNotifier(
         enabled=parse_bool(os.getenv("TELEGRAM_ENABLED", "false"), default=False),

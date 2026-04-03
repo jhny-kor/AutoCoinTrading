@@ -1,12 +1,12 @@
 """
 수정 요약
-- env_overrides 아래 partial env 파일을 현재 .env 에 안전하게 반영하는 전략 세트 적용 도구를 추가
+- env_overrides 아래 partial env 파일을 현재 .env.settings 에 안전하게 반영하는 전략 세트 적용 도구로 정리
 - conservative, medium, mixed 세트 별칭과 직접 파일 지정 방식을 모두 지원하도록 확장
 - dry-run 으로 변경 예정 키를 먼저 확인할 수 있게 구성
 
 전략 세트 적용 도구
 
-- 목적: .env 전체를 수동 편집하지 않고 세트 파일의 일부 키만 현재 .env 에 반영한다.
+- 목적: .env.settings 전체를 수동 편집하지 않고 세트 파일의 일부 키만 현재 .env.settings 에 반영한다.
 - 입력: 세트 이름 또는 partial env 파일 경로
 - 출력: 변경된 키 목록과 반영 결과
 """
@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-ENV_PATH = ROOT_DIR / ".env"
+ENV_PATH = ROOT_DIR / ".env.settings"
 SET_DIR = ROOT_DIR / "env_overrides"
 
 SET_ALIASES = {
@@ -55,7 +55,7 @@ def resolve_set_path(name_or_path: str) -> Path:
 
 
 def apply_pairs_to_env(env_path: Path, pairs: dict[str, str], dry_run: bool = False) -> list[str]:
-    """현재 .env 에 partial env 키를 반영한다."""
+    """현재 .env.settings 에 partial env 키를 반영한다."""
     if not env_path.exists():
         raise FileNotFoundError(f".env 파일이 없습니다: {env_path}")
 

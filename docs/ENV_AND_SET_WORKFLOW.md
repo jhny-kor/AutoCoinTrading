@@ -2,42 +2,69 @@
 
 ## 핵심 결론
 
-현재 구조에서 **실제 운영 기준 파일은 `.env`** 입니다.
+현재 구조에서 **실제 운영 기준 파일은 `.env.settings` + `.env.secrets`** 입니다.
 
-`env_overrides/*.env` 는 `.env` 를 대체하는 파일이 아니라,
-**일부 키만 덮어쓰는 partial 전략 세트 파일** 입니다.
+`env_overrides/*.env` 는 이 메인 설정 파일을 대체하는 파일이 아니라,
+**일부 전략 키만 덮어쓰는 partial 세트 파일** 입니다.
 
-즉 현재는 아래 관계입니다.
+즉 현재 관계는 아래와 같습니다.
 
-- `.env` = 운영 본체
-- `env_overrides/*.env` = 비교/튜닝용 부분 세트
-- `tools/apply_strategy_set.py` = 부분 세트를 `.env` 에 반영하는 도구
+- `.env.settings` = 운영 설정 본체
+- `.env.secrets` = 비밀정보 본체
+- `.env.local` = 로컬 오버라이드
+- `.env` = legacy fallback
+- `env_overrides/*.env` = 비교/튜닝용 partial 전략 세트
+- `tools/apply_strategy_set.py` = partial 세트를 `.env.settings` 에 반영하는 도구
 
 ---
 
-## 1. `.env` 는 무엇인가
+## 1. 현재 실제로 읽는 파일
 
-`.env` 는 현재 봇이 실제로 읽는 메인 설정 파일입니다.
+현재 중앙 로더는 아래 순서로 환경 파일을 읽습니다.
 
-여기에는 아래가 함께 들어 있습니다.
+1. `.env.settings`
+2. `.env.secrets`
+3. `.env.local`
+4. `.env` (split env 가 없을 때만 fallback)
 
+즉 split env 가 있으면 `.env` 가 아니라 `.env.settings` + `.env.secrets` 가 실제 기준입니다.
+
+---
+
+## 2. 각 파일 역할
+
+### `.env.settings`
+
+- 운영 메인 설정 파일
+- 전략 설정
+- 리스크 설정
+- 포트폴리오 설정
+- 텔레그램 일반 설정
+- 최소 주문 금액, 타임프레임, 맵 기반 전략값
+
+### `.env.secrets`
+
+- 비밀정보 파일
 - 거래소 API 키
-- 텔레그램 설정
-- 최소 주문 금액
-- 전략 공통값
-- 심볼별 `*_MAP`
-- 리스크 관리 설정
-- 포트폴리오 배분 설정
+- 텔레그램 Bot 토큰
+- 텔레그램 chat id
 
-즉 현재 운영에서는 `.env` 안에 **전체 설정이 다 있습니다.**
+### `.env.local`
 
----
+- 로컬 환경 전용 오버라이드
+- 개인 장비에서만 잠깐 바꿔볼 값
 
-## 2. `env_overrides/*.env` 는 무엇인가
+### `.env`
 
-`env_overrides/*.env` 는 전체 설정 파일이 아닙니다.
+- legacy fallback
+- 예전 방식과 호환성 유지를 위한 파일
+- split env 가 없는 환경에서만 기준 역할
 
-이 파일들은 아래처럼 **일부 키만 담은 partial env** 입니다.
+### `env_overrides/*.env`
+
+- 비교/튜닝용 partial env
+- 일부 전략 키만 포함
+- 전체 설정 파일이 아님
 
 예:
 
@@ -45,50 +72,42 @@
 - `env_overrides/medium.env`
 - `env_overrides/mixed.env`
 
-이런 파일에는 보통 이런 값만 들어 있습니다.
+### `env_overrides/history/*`
 
-- `STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT`
-- `STRATEGY_MIN_TAKE_PROFIT_PCT_MAP`
-- `STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP`
-- `STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP`
-
-즉 “세트별로 바뀌는 전략 키만 모아둔 패치 파일”입니다.
+- 과거 세트 이력 보관
+- 날짜 붙은 기준선 파일
 
 ---
 
-## 3. 실제 적용은 어떻게 되나
+## 3. 실제 적용 흐름
 
-현재 봇은 `env_overrides/*.env` 를 직접 읽지 않습니다.
-
-실제 적용 순서는 아래입니다.
+현재 세트 적용 순서는 아래입니다.
 
 1. `env_overrides/*.env` 에 세트 정의
 2. `tools/apply_strategy_set.py` 실행
-3. 이 도구가 partial env 안의 키만 현재 `.env` 에 덮어씀
+3. partial env 안의 키만 `.env.settings` 에 덮어씀
 4. 봇 재시작
-5. 재시작 후 봇은 갱신된 `.env` 를 읽음
+5. 재시작 후 봇은 `.env.settings` + `.env.secrets` 를 읽음
 
-즉 실제 런타임 기준은 항상 `.env` 입니다.
+즉 전략 세트 변경은 이제 `.env` 가 아니라 `.env.settings` 기준으로 반영됩니다.
 
 ---
 
-## 4. 예시
+## 4. 사용 예시
 
-예를 들어 혼합형 세트를 적용할 때는:
+혼합형 세트 적용:
 
 ```bash
 .venv/bin/python tools/apply_strategy_set.py --set mixed
 ```
 
-이 명령은 내부적으로
+미리보기:
 
-- `env_overrides/mixed.env`
+```bash
+.venv/bin/python tools/apply_strategy_set.py --set mixed --dry-run
+```
 
-를 읽고,
-
-- 그 안에 들어 있는 키만 `.env` 에 반영합니다.
-
-반영 후에는 알트 봇 재시작이 필요합니다.
+반영 후 알트 봇 재시작:
 
 ```bash
 .venv/bin/python bot_manager.py stop okx
@@ -99,82 +118,42 @@
 
 ---
 
-## 5. 왜 이렇게 쓰는가
+## 5. 왜 이렇게 분리했나
 
-장점은 아래와 같습니다.
+장점
 
-- `.env` 전체를 복붙하지 않아도 됨
-- 세트별 차이만 따로 관리 가능
-- 비교 실험이 쉬움
-- 실수로 API 키/운영 설정을 덮어쓸 위험이 줄어듦
-
-즉 현재 구조는
-
-- 운영 메인 파일은 하나로 유지하고
-- 전략 세트만 부분 패치 형태로 교체
-
-하는 방식입니다.
+- API 키와 일반 설정을 분리할 수 있음
+- 전략 세트 비교가 쉬워짐
+- `.env.settings` 만 교체해 실험 가능
+- 실수로 비밀정보까지 같이 덮어쓸 위험이 줄어듦
+- 앞으로 설정 시스템을 더 키워도 구조를 유지하기 쉬움
 
 ---
 
-## 6. 지금 단계에서의 역할 분담
+## 6. 지금 단계의 의미
 
-### `.env`
+현재는 “대형 설정 시스템 리팩터링 1차” 상태입니다.
 
-- 운영 메인 설정 파일
-- 실제 봇이 읽는 파일
+완료된 것
 
-### `env_overrides/*.env`
+- split env 도입
+- 중앙 로더 도입
+- 핵심 설정/실행 모듈을 중앙 로더로 전환
+- canonical 세트 파일 정리
 
-- 전략 비교 세트 파일
-- 일부 키만 포함
-- 실험/튜닝용
+아직 남은 것
 
-### `tools/apply_strategy_set.py`
-
-- partial env 를 `.env` 에 반영
-- dry-run 으로 변경 키 미리보기 가능
-
-### `reports/backtest_batches/...`
-
-- 실제 비교 결과 저장
-- 날짜/시각이 붙은 실험 결과물
-
-### `reports/backtest_registry.json`
-
-- 결과물 인덱스
-- 최근 기준선과 diff 를 한 파일에서 추적
+- 실행 중인 모든 코드/문서가 split env 기준으로 완전히 맞는지 세부 점검
+- `.env` fallback 을 장기적으로 유지할지 제거할지 결정
+- 설정 레이어를 더 구조화된 파일 시스템으로 승격할지 검토
 
 ---
 
-## 7. canonical 구조로 가면 어떻게 바뀌나
-
-현재는 `.env` 가 메인입니다.
-
-장기적으로 canonical 구조로 가면 보통 두 방향 중 하나입니다.
-
-### 방향 A. 현재 방식 유지
-
-- `.env` = 메인
-- `env_overrides/*.env` = partial 세트
-
-가장 실용적이고 현재 구조와 잘 맞습니다.
-
-### 방향 B. 전략 설정과 비밀정보 분리
-
-- `.env` = API 키, 텔레그램, 운영 비밀정보
-- `config/sets/*.env` = 전략 설정 전용 canonical 파일
-
-이 방식은 더 깔끔하지만, 지금은 리팩터링 비용이 큽니다.
-
-현재 저장소는 **방향 A** 입니다.
-
----
-
-## 8. 한 줄 요약
+## 7. 한 줄 요약
 
 현재 구조에서
 
-- `.env` 는 여전히 전체 운영 설정이 들어 있는 메인 파일이고
-- `env_overrides/*.env` 는 `.env` 를 대체하는 파일이 아니라
-- **일부 키만 덮어쓰는 전략 세트 파일** 입니다.
+- `.env.settings` + `.env.secrets` 가 실제 운영 기준 파일이고
+- `.env` 는 legacy fallback 이며
+- `env_overrides/*.env` 는 `.env.settings` 를 대체하는 파일이 아니라
+- **일부 전략 키만 덮어쓰는 partial 세트 파일** 입니다.
