@@ -9,3 +9,13 @@
 현재 적용 세트
 
 - `mixed`
+
+canonical 세트 파일
+
+- [config/sets/conservative.toml](/Users/plo/Documents/auto_coin_bot/config/sets/conservative.toml)
+- [config/sets/medium.toml](/Users/plo/Documents/auto_coin_bot/config/sets/medium.toml)
+- [config/sets/mixed.toml](/Users/plo/Documents/auto_coin_bot/config/sets/mixed.toml)
+
+현재 적용 override
+
+- [config/runtime.local.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.toml)
