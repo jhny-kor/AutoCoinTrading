@@ -1,5 +1,6 @@
 """
 수정 요약
+- latest/private/health JSON 이 부분 저장 상태여도 즉시 예외를 터뜨리지 않고 안전하게 None 으로 처리하도록 보강했다.
 - 업비트 private 웹소켓 latest/jsonl 을 읽어 myAsset 잔고와 myOrder 최근 이벤트를 런타임에서 재사용할 수 있게 확장했다.
 - 업비트 웹소켓 수집기가 저장한 최신 스냅샷과 1분 캔들 JSONL 을 읽어 전략 봇이 재사용할 수 있는 공용 provider 를 추가했다.
 - stale 판정과 짧은 파일 캐시를 함께 제공해 phase 2/3/5 에서 best bid, 1분봉, 5분/15분 리샘플 캔들을 웹소켓 우선으로 읽을 수 있게 구성했다.
@@ -48,7 +49,7 @@ class UpbitMarketDataProvider:
         path = self.latest_dir / f"{sanitize_symbol_for_filename(symbol)}.json"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
             payload = None
         self._snapshot_cache[symbol] = (now_ts, payload)
         return payload
@@ -62,7 +63,7 @@ class UpbitMarketDataProvider:
 
         try:
             payload = json.loads(self.health_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
             payload = None
         self._health_cache = (now_ts, payload)
         return payload
@@ -76,7 +77,7 @@ class UpbitMarketDataProvider:
         path = self.private_dir / f"{name}.json"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
             payload = None
         self._private_cache[name] = (now_ts, payload)
         return payload

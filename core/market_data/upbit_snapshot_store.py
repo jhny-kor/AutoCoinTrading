@@ -1,5 +1,6 @@
 """
 수정 요약
+- latest/health/private latest JSON 저장 시 임시 파일명을 고유하게 만들어 동시 저장 충돌 가능성을 줄였다.
 - 업비트 private 웹소켓의 내 주문/내 자산 이벤트를 latest/jsonl 로 저장하는 helper 를 추가했다.
 - 업비트 웹소켓 수집기가 최신 시세/호가/캔들 상태를 로컬 JSON/JSONL 파일로 저장하는 스냅샷 저장소를 추가했다.
 - latest 스냅샷은 짧은 debounce 로 저장하고 1분 캔들은 봉 기준으로 중복 없이 append 하도록 구성했다.
@@ -8,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -88,7 +90,9 @@ class UpbitSnapshotStore:
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
+        temp_path = path.with_name(
+            f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
         temp_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 시간 버킷 summary JSON 을 원자적으로 저장하고, 손상된 summary 파일은 빈 기본값으로 복구하도록 보강했다.
 - system / strategy / trade 로그를 분리 저장하는 구조화 로거를 추가
 - 전략 로그에 stage / result / reason 코드와 실제값 / 기준값을 함께 남기도록 추가
 - 퍼널 분석용 1시간 요약 파일을 자동으로 갱신하도록 추가
@@ -16,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -41,6 +43,17 @@ def _write_jsonl(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """JSON 파일을 원자적으로 저장한다."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
 
 
 def _compact_record_fields(record: dict[str, Any]) -> dict[str, Any]:
@@ -279,7 +292,28 @@ class StructuredLogManager:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
 
         if summary_path.exists():
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                summary = {
+                    "time_bucket": bucket_dt.isoformat(),
+                    "program_name": self.program_name,
+                    "symbol": symbol,
+                    "last_updated_at": record.get("recorded_at_local"),
+                    "scan_count": 0,
+                    "entry_ready_count": 0,
+                    "exit_ready_count": 0,
+                    "order_requested_count": 0,
+                    "filled_count": 0,
+                    "buy_filled_count": 0,
+                    "sell_filled_count": 0,
+                    "order_failed_count": 0,
+                    "stage_pass_counts": {},
+                    "stage_block_counts": {},
+                    "block_reason_counts": {},
+                    "filled_reason_counts": {},
+                    "top_block_reason": None,
+                }
         else:
             summary = {
                 "time_bucket": bucket_dt.isoformat(),
@@ -343,10 +377,7 @@ class StructuredLogManager:
             top_block = block_reason_counts.most_common(1)
             summary["top_block_reason"] = top_block[0][0] if top_block else None
 
-        summary_path.write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        _write_json_atomic(summary_path, summary)
 
 
 def choose_volatility_reason(
