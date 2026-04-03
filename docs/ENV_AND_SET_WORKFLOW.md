@@ -17,6 +17,9 @@
 3. `.env.secrets`
 4. `.env.local`
 5. `config/runtime.local.toml`
+
+split env 가 없을 때만 아래 fallback 이 추가됩니다.
+
 6. `.env` (legacy fallback)
 
 즉 현재 관계는 아래와 같습니다.
@@ -24,7 +27,7 @@
 - `config/runtime.toml` = canonical 운영 설정
 - `config/sets/*.toml` = canonical 전략 세트
 - `config/runtime.local.toml` = 현재 적용 세트를 담는 로컬 TOML override
-- `.env.settings` = env override 레이어
+- `.env.settings` = 선택적 env override 레이어
 - `.env.secrets` = 비밀정보 레이어
 - `.env.local` = 로컬 env override
 - `.env` = legacy fallback
@@ -136,7 +139,7 @@
 
 ## 5. 현재 단계 의미
 
-현재는 “구조화된 설정 시스템 전환 2차/3차” 상태입니다.
+현재는 “구조화된 설정 시스템 전환 3차 완료” 상태입니다.
 
 완료된 것
 
@@ -149,9 +152,9 @@
 
 아직 남은 것
 
-- 장기적으로 `os.getenv()` 접근을 typed access 로 더 줄이기
 - `env_overrides` legacy/history 정리 정책 확정
 - `config/runtime.local.toml` 운용 규칙 문서화 보강
+- typed config accessor 적용 범위를 실행/리포트 전역으로 더 넓히기
 
 ---
 

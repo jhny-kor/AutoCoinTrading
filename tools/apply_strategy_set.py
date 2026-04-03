@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-03: structured TOML nested table 세트를 runtime.local.toml 로 그대로 반영하도록 저장 로직을 확장
 - 전략 세트 canonical 경로를 env_overrides 에서 config/sets TOML 로 승격하고, 현재 적용은 config/runtime.local.toml 에 반영하도록 리팩터링
 - conservative, medium, mixed 세트 별칭과 직접 TOML 파일 지정 방식을 모두 지원
 - dry-run 으로 변경될 section/key 를 먼저 확인할 수 있게 구성
@@ -17,6 +18,7 @@ import argparse
 import tomllib
 from pathlib import Path
 from typing import Any
+import re
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -45,17 +47,17 @@ def resolve_set_path(name_or_path: str) -> Path:
     raise FileNotFoundError(f"세트 파일을 찾지 못했습니다: {name_or_path}")
 
 
-def parse_set_file(path: Path) -> dict[str, dict[str, str]]:
+def parse_set_file(path: Path) -> dict[str, dict[str, object]]:
     """TOML 또는 legacy env partial 파일을 section dict 로 읽는다."""
     if path.suffix.lower() == ".toml":
         payload = tomllib.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             return {}
-        result: dict[str, dict[str, str]] = {}
+        result: dict[str, dict[str, object]] = {}
         for section, values in payload.items():
             if not isinstance(values, dict):
                 continue
-            result[str(section)] = {str(key): str(value) for key, value in values.items()}
+            result[str(section)] = {str(key): value for key, value in values.items()}
         return result
 
     # legacy env partial fallback
@@ -69,8 +71,14 @@ def parse_set_file(path: Path) -> dict[str, dict[str, str]]:
     return {"strategy": {key.lower().removeprefix("strategy_"): value for key, value in pairs.items()}}
 
 
-def render_toml_value(value: str) -> str:
+def render_toml_value(value: object) -> str:
     """문자열 값을 TOML 표현으로 렌더링한다."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(value)
     lowered = value.strip().lower()
     if lowered in {"true", "false"}:
         return lowered
@@ -88,7 +96,34 @@ def render_toml_value(value: str) -> str:
     return f'"{escaped}"'
 
 
-def write_runtime_local(path: Path, payload: dict[str, dict[str, str]]) -> None:
+def quote_toml_key(key: str) -> str:
+    """TOML key 가 bare key 로 안전하지 않으면 quoted key 로 만든다."""
+    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return key
+    escaped = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _write_table(lines: list[str], table_path: list[str], payload: dict[str, object]) -> None:
+    """중첩 dict 를 TOML table 로 재귀 저장한다."""
+    if table_path:
+        lines.append(f"[{'.'.join(quote_toml_key(part) for part in table_path)}]")
+    scalar_items: list[tuple[str, object]] = []
+    nested_items: list[tuple[str, dict[str, object]]] = []
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            nested_items.append((key, value))
+        else:
+            scalar_items.append((key, value))
+    for key, value in scalar_items:
+        lines.append(f"{quote_toml_key(key)} = {render_toml_value(value)}")
+    if scalar_items:
+        lines.append("")
+    for key, nested in nested_items:
+        _write_table(lines, [*table_path, key], nested)
+
+
+def write_runtime_local(path: Path, payload: dict[str, dict[str, object]]) -> None:
     """runtime.local.toml 파일을 저장한다."""
     lines = [
         "# Auto Coin Bot runtime local override",
@@ -96,20 +131,25 @@ def write_runtime_local(path: Path, payload: dict[str, dict[str, str]]) -> None:
         "",
     ]
     for section in sorted(payload):
-        lines.append(f"[{section}]")
-        for key in sorted(payload[section]):
-            lines.append(f"{key} = {render_toml_value(payload[section][key])}")
-        lines.append("")
+        section_payload = payload[section]
+        if not isinstance(section_payload, dict):
+            continue
+        _write_table(lines, [section], section_payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def collect_changed_keys(payload: dict[str, dict[str, str]]) -> list[str]:
+def collect_changed_keys(payload: dict[str, dict[str, object]]) -> list[str]:
     """section.key 형식으로 변경 목록을 만든다."""
     changed: list[str] = []
+    def visit(prefix: list[str], value: object) -> None:
+        if isinstance(value, dict):
+            for key in sorted(value):
+                visit([*prefix, key], value[key])
+            return
+        changed.append(".".join(prefix))
     for section in sorted(payload):
-        for key in sorted(payload[section]):
-            changed.append(f"{section}.{key}")
+        visit([section], payload[section])
     return changed
 
 

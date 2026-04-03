@@ -1,5 +1,6 @@
 # Auto Coin Bot runtime config example
-# generated from split env source
+# structured TOML format
+# 2026-04-03: canonical runtime config 예시로 승격
 
 [btc_trend]
 version = "btc_mid_v1"

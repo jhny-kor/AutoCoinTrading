@@ -1,6 +1,6 @@
 """
 수정 요약
-- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+- 2026-04-03: 공통 전략 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 - BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄일 수 있게 공통 설정을 추가했다.
 - BTC 레짐 기반 알트 신규 진입 비중을 심볼별 override map 으로 세분화해 ETH 는 더 보수적으로, XRP 는 완만하게 축소할 수 있게 확장
 - 알트 신규 진입 비중에 BTC 레짐 기반 추가 스케일을 곱할 수 있게 확장해 BTC 가 LOW_ENERGY 일 때 먼저 포지션을 축소할 수 있게 보강
@@ -14,30 +14,37 @@
 - ETH/KRW 같은 특정 심볼만 별도로 수익을 지키도록 브레이크이븐 가드 설정을 공통 알트 전략에 추가
 - 부분 익절 직후 같은 코인 재진입과 추가 매수를 잠시 막는 전용 쿨다운 설정을 공통 알트 전략에 추가
 - 수수료를 제하고도 순익이 남는 상태에서 메인 추세가 꺾이면 빠르게 전량 익절하는 공통 알트 청산 설정을 추가
-- 알트 전략에서 심볼별 부분익절/부분손절 대상과 비율을 .env 에서 읽도록 확장
-- 공통 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
+- 알트 전략에서 심볼별 부분익절/부분손절 대상과 비율을 canonical config 에서 읽도록 확장
+- 공통 전략 버전 이름을 canonical config 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
 - 알트 봇에 보수형 trend_follow_entry 설정을 추가해 골든크로스가 아니어도 제한적으로 추세 유지 진입을 허용할 수 있게 개선
-- 연속 MA 상단 유지와 직전 대비 상승 조건을 .env 에서 제어할 수 있도록 확장
-- 심볼별 거래량 기준 오버라이드를 .env 에서 읽어 DOGE 같은 고변동 알트의 진입 품질을 코인별로 분리 조정할 수 있게 개선
-- 알트 심볼 목록과 운영/분석 대상 심볼 목록도 공통으로 .env 에서 읽도록 확장
+- 연속 MA 상단 유지와 직전 대비 상승 조건을 canonical config 에서 제어할 수 있도록 확장
+- 심볼별 거래량 기준 오버라이드를 canonical config 에서 읽어 DOGE 같은 고변동 알트의 진입 품질을 코인별로 분리 조정할 수 있게 개선
+- 알트 심볼 목록과 운영/분석 대상 심볼 목록도 공통으로 canonical config 에서 읽도록 확장
 - 빈 문자열로 설정한 알트 심볼 목록은 기본값으로 되돌리지 않고 비활성화로 처리하도록 보정
 
 공통 전략 설정 로더
 
-- 두 거래소 봇이 같은 전략 값을 .env 에서 읽도록 돕는 모듈
+- 두 거래소 봇이 같은 전략 값을 canonical config 에서 읽도록 돕는 모듈
 - 공통 전략 값은 STRATEGY_ 접두사로 관리
 - 최소 주문 금액은 거래소별로 달라서 별도 키를 사용
-- 심볼별 이격도 기준 오버라이드를 .env 에서 읽을 수 있도록 지원
-- 심볼별 익절률/손절률 오버라이드를 .env 에서 읽을 수 있도록 지원
-- 상위 타임프레임 추세 필터 설정을 .env 에서 읽을 수 있도록 지원
-- 거래량 필터와 변동성 필터 설정을 .env 에서 읽을 수 있도록 지원
-- 심볼별 최소 주문 수량 오버라이드를 .env 에서 읽을 수 있도록 지원
+- 심볼별 이격도 기준 오버라이드를 canonical config 에서 읽을 수 있도록 지원
+- 심볼별 익절률/손절률 오버라이드를 canonical config 에서 읽을 수 있도록 지원
+- 상위 타임프레임 추세 필터 설정을 canonical config 에서 읽을 수 있도록 지원
+- 거래량 필터와 변동성 필터 설정을 canonical config 에서 읽을 수 있도록 지원
+- 심볼별 최소 주문 수량 오버라이드를 canonical config 에서 읽을 수 있도록 지원
 - 알트 봇 감시 심볼과 텔레그램/분석 수집 대상 심볼도 공통 규칙으로 재사용할 수 있도록 지원
 """
 
-import os
 from dataclasses import dataclass
 
+from settings.config_access import (
+    config_bool,
+    config_float,
+    config_int,
+    config_section_float,
+    config_str,
+    config_value,
+)
 from settings.env import load_project_env
 
 DEFAULT_OKX_ALT_SYMBOLS = ["PI/USDT"]
@@ -252,8 +259,16 @@ def parse_symbol_list(raw: str | None, default: list[str] | None = None) -> list
     return result
 
 
-def parse_symbol_float_map(raw: str) -> dict[str, float]:
-    """BTC/USDT:0.15,PI/USDT:2.5 형태의 문자열을 사전으로 바꾼다."""
+def parse_symbol_float_map(raw: str | dict[str, object]) -> dict[str, float]:
+    """문자열 또는 dict 형태의 심볼 float map 을 사전으로 바꾼다."""
+    if isinstance(raw, dict):
+        result: dict[str, float] = {}
+        for key, value in raw.items():
+            try:
+                result[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return result
     result: dict[str, float] = {}
     for item in raw.split(","):
         item = item.strip()
@@ -268,8 +283,20 @@ def parse_symbol_float_map(raw: str) -> dict[str, float]:
     return result
 
 
-def parse_symbol_regime_float_map(raw: str) -> dict[str, dict[str, float]]:
-    """ETH/KRW|LOW_ENERGY:0.35 형태의 문자열을 심볼별 레짐 스케일 사전으로 바꾼다."""
+def parse_symbol_regime_float_map(raw: str | dict[str, object]) -> dict[str, dict[str, float]]:
+    """문자열 또는 dict 형태의 심볼별 레짐 스케일 사전을 만든다."""
+    if isinstance(raw, dict):
+        result: dict[str, dict[str, float]] = {}
+        for symbol, inner in raw.items():
+            if not isinstance(inner, dict):
+                continue
+            symbol_key = str(symbol)
+            for regime, value in inner.items():
+                try:
+                    result.setdefault(symbol_key, {})[str(regime)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+        return result
     result: dict[str, dict[str, float]] = {}
     for item in raw.split(","):
         item = item.strip()
@@ -289,8 +316,16 @@ def parse_symbol_regime_float_map(raw: str) -> dict[str, dict[str, float]]:
     return result
 
 
-def parse_float_float_map(raw: str) -> dict[float, float]:
-    """0.18:0.70 형태의 문자열을 float 사전으로 바꾼다."""
+def parse_float_float_map(raw: str | dict[object, object]) -> dict[float, float]:
+    """문자열 또는 dict 형태의 float map 을 만든다."""
+    if isinstance(raw, dict):
+        result: dict[float, float] = {}
+        for key, value in raw.items():
+            try:
+                result[float(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return result
     result: dict[float, float] = {}
     for item in raw.split(","):
         item = item.strip()
@@ -310,6 +345,16 @@ def parse_bool(raw: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def resolve_exchange_section_from_env_key(env_key: str) -> str | None:
+    """거래소 접두사 env key 를 canonical section 이름으로 바꾼다."""
+    normalized = env_key.strip().upper()
+    if normalized.startswith("OKX_"):
+        return "okx"
+    if normalized.startswith("UPBIT_"):
+        return "upbit"
+    return None
 
 
 def build_market_entry(symbol: str) -> dict[str, str]:
@@ -336,12 +381,12 @@ def load_alt_symbols(exchange_name: str) -> list[str]:
     exchange_key = exchange_name.strip().lower()
     if exchange_key == "okx":
         return parse_symbol_list(
-            os.getenv("OKX_ALT_SYMBOLS"),
+            config_str("okx", "alt_symbols", "", env_key="OKX_ALT_SYMBOLS") or None,
             DEFAULT_OKX_ALT_SYMBOLS,
         )
     if exchange_key == "upbit":
         return parse_symbol_list(
-            os.getenv("UPBIT_ALT_SYMBOLS"),
+            config_str("upbit", "alt_symbols", "", env_key="UPBIT_ALT_SYMBOLS") or None,
             DEFAULT_UPBIT_ALT_SYMBOLS,
         )
     raise ValueError(f"지원하지 않는 거래소입니다: {exchange_name}")
@@ -359,11 +404,15 @@ def load_managed_symbols(exchange_name: str) -> list[str]:
     exchange_key = exchange_name.strip().lower()
     if exchange_key == "okx":
         default_symbols = [DEFAULT_OKX_BTC_SYMBOL, *load_alt_symbols("okx")]
-        extra_symbols = parse_symbol_list(os.getenv("ANALYSIS_OKX_SYMBOLS"))
+        extra_symbols = parse_symbol_list(
+            config_str("analysis", "okx_symbols", "", env_key="ANALYSIS_OKX_SYMBOLS") or None
+        )
         return parse_symbol_list(None, [*default_symbols, *extra_symbols])
     if exchange_key == "upbit":
         default_symbols = [DEFAULT_UPBIT_BTC_SYMBOL, *load_alt_symbols("upbit")]
-        extra_symbols = parse_symbol_list(os.getenv("ANALYSIS_UPBIT_SYMBOLS"))
+        extra_symbols = parse_symbol_list(
+            config_str("analysis", "upbit_symbols", "", env_key="ANALYSIS_UPBIT_SYMBOLS") or None
+        )
         return parse_symbol_list(None, [*default_symbols, *extra_symbols])
     raise ValueError(f"지원하지 않는 거래소입니다: {exchange_name}")
 
@@ -375,239 +424,97 @@ def load_strategy_settings(
     load_project_env()
 
     return StrategySettings(
-        version=os.getenv("STRATEGY_VERSION", "alt_v1").strip(),
-        buy_split_ratio=float(os.getenv("STRATEGY_BUY_SPLIT_RATIO", "0.10")),
-        sell_split_ratio=float(os.getenv("STRATEGY_SELL_SPLIT_RATIO", "0.10")),
-        max_entry_count=int(os.getenv("STRATEGY_MAX_ENTRY_COUNT", "3")),
-        min_trade_interval_sec=int(
-            os.getenv("STRATEGY_MIN_TRADE_INTERVAL_SEC", "300")
-        ),
-        enable_trend_follow_entry=parse_bool(
-            os.getenv("STRATEGY_ENABLE_TREND_FOLLOW_ENTRY", "false"),
-            default=False,
-        ),
-        trend_follow_requires_prev_above_ma=parse_bool(
-            os.getenv("STRATEGY_TREND_FOLLOW_REQUIRE_PREV_ABOVE_MA", "true"),
-            default=True,
-        ),
-        trend_follow_requires_price_rising=parse_bool(
-            os.getenv("STRATEGY_TREND_FOLLOW_REQUIRE_PRICE_RISING", "true"),
-            default=True,
-        ),
-        trend_follow_requires_ma_slope_positive=parse_bool(
-            os.getenv("STRATEGY_TREND_FOLLOW_REQUIRE_MA_SLOPE_POSITIVE", "true"),
-            default=True,
-        ),
-        trend_slope_lookback=int(
-            os.getenv("STRATEGY_TREND_SLOPE_LOOKBACK", "3")
-        ),
-        enable_higher_timeframe_filter=parse_bool(
-            os.getenv("STRATEGY_ENABLE_HIGHER_TIMEFRAME_FILTER", "true"),
-            default=True,
-        ),
+        version=config_str("strategy", "version", "alt_v1", env_key="STRATEGY_VERSION").strip(),
+        buy_split_ratio=config_float("strategy", "buy_split_ratio", 0.10, env_key="STRATEGY_BUY_SPLIT_RATIO"),
+        sell_split_ratio=config_float("strategy", "sell_split_ratio", 0.10, env_key="STRATEGY_SELL_SPLIT_RATIO"),
+        max_entry_count=config_int("strategy", "max_entry_count", 3, env_key="STRATEGY_MAX_ENTRY_COUNT"),
+        min_trade_interval_sec=config_int("strategy", "min_trade_interval_sec", 300, env_key="STRATEGY_MIN_TRADE_INTERVAL_SEC"),
+        enable_trend_follow_entry=config_bool("strategy", "enable_trend_follow_entry", False, env_key="STRATEGY_ENABLE_TREND_FOLLOW_ENTRY"),
+        trend_follow_requires_prev_above_ma=config_bool("strategy", "trend_follow_require_prev_above_ma", True, env_key="STRATEGY_TREND_FOLLOW_REQUIRE_PREV_ABOVE_MA"),
+        trend_follow_requires_price_rising=config_bool("strategy", "trend_follow_require_price_rising", True, env_key="STRATEGY_TREND_FOLLOW_REQUIRE_PRICE_RISING"),
+        trend_follow_requires_ma_slope_positive=config_bool("strategy", "trend_follow_require_ma_slope_positive", True, env_key="STRATEGY_TREND_FOLLOW_REQUIRE_MA_SLOPE_POSITIVE"),
+        trend_slope_lookback=config_int("strategy", "trend_slope_lookback", 3, env_key="STRATEGY_TREND_SLOPE_LOOKBACK"),
+        enable_higher_timeframe_filter=config_bool("strategy", "enable_higher_timeframe_filter", True, env_key="STRATEGY_ENABLE_HIGHER_TIMEFRAME_FILTER"),
         block_entry_when_htf_bearish_symbols=tuple(
             parse_symbol_list(
-                os.getenv("STRATEGY_BLOCK_ENTRY_WHEN_HTF_BEARISH_SYMBOLS", "")
+                config_str("strategy", "block_entry_when_htf_bearish_symbols", "", env_key="STRATEGY_BLOCK_ENTRY_WHEN_HTF_BEARISH_SYMBOLS")
             )
         ),
-        higher_timeframe=os.getenv("STRATEGY_HIGHER_TIMEFRAME", "5m"),
-        higher_timeframe_ma_period=int(
-            os.getenv("STRATEGY_HIGHER_TIMEFRAME_MA_PERIOD", "20")
-        ),
-        enable_rsi_filter=parse_bool(
-            os.getenv("STRATEGY_ENABLE_RSI_FILTER", "true"),
-            default=True,
-        ),
-        rsi_period=int(os.getenv("STRATEGY_RSI_PERIOD", "14")),
-        rsi_entry_min=float(os.getenv("STRATEGY_RSI_ENTRY_MIN", "40")),
-        rsi_entry_max=float(os.getenv("STRATEGY_RSI_ENTRY_MAX", "70")),
-        enable_macd_filter=parse_bool(
-            os.getenv("STRATEGY_ENABLE_MACD_FILTER", "true"),
-            default=True,
-        ),
-        macd_fast_period=int(os.getenv("STRATEGY_MACD_FAST_PERIOD", "12")),
-        macd_slow_period=int(os.getenv("STRATEGY_MACD_SLOW_PERIOD", "26")),
-        macd_signal_period=int(os.getenv("STRATEGY_MACD_SIGNAL_PERIOD", "9")),
-        enable_noise_ratio_adaptation=parse_bool(
-            os.getenv("STRATEGY_ENABLE_NOISE_RATIO_ADAPTATION", "true"),
-            default=True,
-        ),
-        noise_ratio_lookback=int(
-            os.getenv("STRATEGY_NOISE_RATIO_LOOKBACK", "20")
-        ),
-        noise_ratio_baseline=float(
-            os.getenv("STRATEGY_NOISE_RATIO_BASELINE", "0.50")
-        ),
-        noise_ratio_min_multiplier=float(
-            os.getenv("STRATEGY_NOISE_RATIO_MIN_MULTIPLIER", "0.70")
-        ),
-        noise_ratio_max_multiplier=float(
-            os.getenv("STRATEGY_NOISE_RATIO_MAX_MULTIPLIER", "1.30")
-        ),
-        enable_volume_filter=parse_bool(
-            os.getenv("STRATEGY_ENABLE_VOLUME_FILTER", "true"),
-            default=True,
-        ),
-        volume_lookback=int(os.getenv("STRATEGY_VOLUME_LOOKBACK", "20")),
-        min_volume_ratio=float(os.getenv("STRATEGY_MIN_VOLUME_RATIO", "1.2")),
-        min_volume_ratio_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_MIN_VOLUME_RATIO_MAP", "")
-        ),
-        position_ratio_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_POSITION_RATIO_MAP", "")
-        ),
-        enable_regime_position_scaling=parse_bool(
-            os.getenv("STRATEGY_ENABLE_REGIME_POSITION_SCALING", "true"),
-            default=True,
-        ),
-        regime_position_scale_map=parse_symbol_float_map(
-            os.getenv(
-                "STRATEGY_REGIME_POSITION_SCALE_MAP",
-                "TRENDING:1.00,BREAKOUT_ATTEMPT:0.80,CHOPPY:0.40,LOW_ENERGY:0.00,OVERHEATED:0.20,EXHAUSTION_RISK:0.00",
+        higher_timeframe=config_str("strategy", "higher_timeframe", "5m", env_key="STRATEGY_HIGHER_TIMEFRAME"),
+        higher_timeframe_ma_period=config_int("strategy", "higher_timeframe_ma_period", 20, env_key="STRATEGY_HIGHER_TIMEFRAME_MA_PERIOD"),
+        enable_rsi_filter=config_bool("strategy", "enable_rsi_filter", True, env_key="STRATEGY_ENABLE_RSI_FILTER"),
+        rsi_period=config_int("strategy", "rsi_period", 14, env_key="STRATEGY_RSI_PERIOD"),
+        rsi_entry_min=config_float("strategy", "rsi_entry_min", 40, env_key="STRATEGY_RSI_ENTRY_MIN"),
+        rsi_entry_max=config_float("strategy", "rsi_entry_max", 70, env_key="STRATEGY_RSI_ENTRY_MAX"),
+        enable_macd_filter=config_bool("strategy", "enable_macd_filter", True, env_key="STRATEGY_ENABLE_MACD_FILTER"),
+        macd_fast_period=config_int("strategy", "macd_fast_period", 12, env_key="STRATEGY_MACD_FAST_PERIOD"),
+        macd_slow_period=config_int("strategy", "macd_slow_period", 26, env_key="STRATEGY_MACD_SLOW_PERIOD"),
+        macd_signal_period=config_int("strategy", "macd_signal_period", 9, env_key="STRATEGY_MACD_SIGNAL_PERIOD"),
+        enable_noise_ratio_adaptation=config_bool("strategy", "enable_noise_ratio_adaptation", True, env_key="STRATEGY_ENABLE_NOISE_RATIO_ADAPTATION"),
+        noise_ratio_lookback=config_int("strategy", "noise_ratio_lookback", 20, env_key="STRATEGY_NOISE_RATIO_LOOKBACK"),
+        noise_ratio_baseline=config_float("strategy", "noise_ratio_baseline", 0.50, env_key="STRATEGY_NOISE_RATIO_BASELINE"),
+        noise_ratio_min_multiplier=config_float("strategy", "noise_ratio_min_multiplier", 0.70, env_key="STRATEGY_NOISE_RATIO_MIN_MULTIPLIER"),
+        noise_ratio_max_multiplier=config_float("strategy", "noise_ratio_max_multiplier", 1.30, env_key="STRATEGY_NOISE_RATIO_MAX_MULTIPLIER"),
+        enable_volume_filter=config_bool("strategy", "enable_volume_filter", True, env_key="STRATEGY_ENABLE_VOLUME_FILTER"),
+        volume_lookback=config_int("strategy", "volume_lookback", 20, env_key="STRATEGY_VOLUME_LOOKBACK"),
+        min_volume_ratio=config_float("strategy", "min_volume_ratio", 1.2, env_key="STRATEGY_MIN_VOLUME_RATIO"),
+        min_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "min_volume_ratio_map", {}, env_key="STRATEGY_MIN_VOLUME_RATIO_MAP")),
+        position_ratio_map=parse_symbol_float_map(config_value("strategy", "position_ratio_map", {}, env_key="STRATEGY_POSITION_RATIO_MAP")),
+        enable_regime_position_scaling=config_bool("strategy", "enable_regime_position_scaling", True, env_key="STRATEGY_ENABLE_REGIME_POSITION_SCALING"),
+        regime_position_scale_map=parse_symbol_float_map(config_value("strategy", "regime_position_scale_map", {}, env_key="STRATEGY_REGIME_POSITION_SCALE_MAP")),
+        enable_btc_regime_position_scaling=config_bool("strategy", "enable_btc_regime_position_scaling", True, env_key="STRATEGY_ENABLE_BTC_REGIME_POSITION_SCALING"),
+        btc_regime_position_scale_map=parse_symbol_float_map(config_value("strategy", "btc_regime_position_scale_map", {}, env_key="STRATEGY_BTC_REGIME_POSITION_SCALE_MAP")),
+        btc_regime_position_scale_override_map=parse_symbol_regime_float_map(config_value("strategy", "btc_regime_position_scale_override_map", {}, env_key="STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP")),
+        enable_btc_atr_position_scaling=config_bool("strategy", "enable_btc_atr_position_scaling", True, env_key="STRATEGY_ENABLE_BTC_ATR_POSITION_SCALING"),
+        btc_atr_position_scale_lookback=config_int("strategy", "btc_atr_position_scale_lookback", 14, env_key="STRATEGY_BTC_ATR_POSITION_SCALE_LOOKBACK"),
+        btc_atr_position_scale_threshold_map=parse_float_float_map(config_value("strategy", "btc_atr_position_scale_threshold_map", {}, env_key="STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP")),
+        enable_volatility_filter=config_bool("strategy", "enable_volatility_filter", True, env_key="STRATEGY_ENABLE_VOLATILITY_FILTER"),
+        volatility_lookback=config_int("strategy", "volatility_lookback", 20, env_key="STRATEGY_VOLATILITY_LOOKBACK"),
+        min_volatility_pct=config_float("strategy", "min_volatility_pct", 0.05, env_key="STRATEGY_MIN_VOLATILITY_PCT"),
+        max_volatility_pct=config_float("strategy", "max_volatility_pct", 5.0, env_key="STRATEGY_MAX_VOLATILITY_PCT"),
+        min_crossover_gap_pct=config_float("strategy", "min_crossover_gap_pct", 1.2, env_key="STRATEGY_MIN_CROSSOVER_GAP_PCT"),
+        averaging_down_gap_pct=config_float("strategy", "averaging_down_gap_pct", 2.0, env_key="STRATEGY_AVERAGING_DOWN_GAP_PCT"),
+        min_take_profit_pct=config_float("strategy", "min_take_profit_pct", 1.0, env_key="STRATEGY_MIN_TAKE_PROFIT_PCT"),
+        stop_loss_pct=config_float("strategy", "stop_loss_pct", 1.5, env_key="STRATEGY_STOP_LOSS_PCT"),
+        enable_fee_protect_exit=config_bool("strategy", "enable_fee_protect_exit", True, env_key="STRATEGY_ENABLE_FEE_PROTECT_EXIT"),
+        fee_protect_min_net_pnl_pct=config_float("strategy", "fee_protect_min_net_pnl_pct", 0.20, env_key="STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT"),
+        fee_protect_min_net_pnl_pct_map=parse_symbol_float_map(config_value("strategy", "fee_protect_min_net_pnl_pct_map", {}, env_key="STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT_MAP")),
+        enable_break_even_guard=config_bool("strategy", "enable_break_even_guard", True, env_key="STRATEGY_ENABLE_BREAK_EVEN_GUARD"),
+        break_even_guard_min_mfe_pct=config_float("strategy", "break_even_guard_min_mfe_pct", 0.0, env_key="STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT"),
+        break_even_guard_min_mfe_pct_map=parse_symbol_float_map(config_value("strategy", "break_even_guard_min_mfe_pct_map", {}, env_key="STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP")),
+        break_even_guard_floor_net_pnl_pct=config_float("strategy", "break_even_guard_floor_net_pnl_pct", 0.0, env_key="STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT"),
+        break_even_guard_floor_net_pnl_pct_map=parse_symbol_float_map(config_value("strategy", "break_even_guard_floor_net_pnl_pct_map", {}, env_key="STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP")),
+        break_even_guard_max_profit_retrace_pct=config_float("strategy", "break_even_guard_max_profit_retrace_pct", 0.6, env_key="STRATEGY_BREAK_EVEN_GUARD_MAX_PROFIT_RETRACE_PCT"),
+        signal_score_min=config_float("strategy", "signal_score_min", 55, env_key="STRATEGY_SIGNAL_SCORE_MIN"),
+        dynamic_signal_score_min=config_float("strategy", "dynamic_signal_score_min", 70, env_key="STRATEGY_DYNAMIC_SIGNAL_SCORE_MIN"),
+        entry_confirmation_loops=config_int("strategy", "entry_confirmation_loops", 2, env_key="STRATEGY_ENTRY_CONFIRMATION_LOOPS"),
+        enable_correlation_filter=config_bool("strategy", "enable_correlation_filter", True, env_key="STRATEGY_ENABLE_CORRELATION_FILTER"),
+        correlation_lookback=config_int("strategy", "correlation_lookback", 20, env_key="STRATEGY_CORRELATION_LOOKBACK"),
+        max_correlation_with_btc=config_float("strategy", "max_correlation_with_btc", 0.70, env_key="STRATEGY_MAX_CORRELATION_WITH_BTC"),
+        enable_fill_quality_guard=config_bool("strategy", "enable_fill_quality_guard", True, env_key="STRATEGY_ENABLE_FILL_QUALITY_GUARD"),
+        fill_quality_lookback_sec=config_int("strategy", "fill_quality_lookback_sec", 3600, env_key="STRATEGY_FILL_QUALITY_LOOKBACK_SEC"),
+        fill_quality_min_fill_ratio=config_float("strategy", "fill_quality_min_fill_ratio", 0.95, env_key="STRATEGY_FILL_QUALITY_MIN_FILL_RATIO"),
+        fill_quality_min_sample_count=config_int("strategy", "fill_quality_min_sample_count", 1, env_key="STRATEGY_FILL_QUALITY_MIN_SAMPLE_COUNT"),
+        min_buy_order_value=(
+            config_section_float(
+                resolve_exchange_section_from_env_key(min_buy_order_env_key) or "strategy",
+                "min_buy_order_value",
+                default_min_buy_order_value,
+                env_key=min_buy_order_env_key,
             )
         ),
-        enable_btc_regime_position_scaling=parse_bool(
-            os.getenv("STRATEGY_ENABLE_BTC_REGIME_POSITION_SCALING", "true"),
-            default=True,
-        ),
-        btc_regime_position_scale_map=parse_symbol_float_map(
-            os.getenv(
-                "STRATEGY_BTC_REGIME_POSITION_SCALE_MAP",
-                "LOW_ENERGY:0.50",
-            )
-        ),
-        btc_regime_position_scale_override_map=parse_symbol_regime_float_map(
-            os.getenv(
-                "STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP",
-                "",
-            )
-        ),
-        enable_btc_atr_position_scaling=parse_bool(
-            os.getenv("STRATEGY_ENABLE_BTC_ATR_POSITION_SCALING", "true"),
-            default=True,
-        ),
-        btc_atr_position_scale_lookback=int(
-            os.getenv("STRATEGY_BTC_ATR_POSITION_SCALE_LOOKBACK", "14")
-        ),
-        btc_atr_position_scale_threshold_map=parse_float_float_map(
-            os.getenv(
-                "STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP",
-                "0.18:0.70,0.15:0.45,0.12:0.25",
-            )
-        ),
-        enable_volatility_filter=parse_bool(
-            os.getenv("STRATEGY_ENABLE_VOLATILITY_FILTER", "true"),
-            default=True,
-        ),
-        volatility_lookback=int(os.getenv("STRATEGY_VOLATILITY_LOOKBACK", "20")),
-        min_volatility_pct=float(
-            os.getenv("STRATEGY_MIN_VOLATILITY_PCT", "0.05")
-        ),
-        max_volatility_pct=float(
-            os.getenv("STRATEGY_MAX_VOLATILITY_PCT", "5.0")
-        ),
-        min_crossover_gap_pct=float(
-            os.getenv("STRATEGY_MIN_CROSSOVER_GAP_PCT", "1.2")
-        ),
-        averaging_down_gap_pct=float(
-            os.getenv("STRATEGY_AVERAGING_DOWN_GAP_PCT", "2.0")
-        ),
-        min_take_profit_pct=float(
-            os.getenv("STRATEGY_MIN_TAKE_PROFIT_PCT", "1.0")
-        ),
-        stop_loss_pct=float(
-            os.getenv("STRATEGY_STOP_LOSS_PCT", "1.5")
-        ),
-        enable_fee_protect_exit=parse_bool(
-            os.getenv("STRATEGY_ENABLE_FEE_PROTECT_EXIT", "true"),
-            default=True,
-        ),
-        fee_protect_min_net_pnl_pct=float(
-            os.getenv("STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT", "0.20")
-        ),
-        fee_protect_min_net_pnl_pct_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT_MAP", "")
-        ),
-        enable_break_even_guard=parse_bool(
-            os.getenv("STRATEGY_ENABLE_BREAK_EVEN_GUARD", "true"),
-            default=True,
-        ),
-        break_even_guard_min_mfe_pct=float(
-            os.getenv("STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT", "0.0")
-        ),
-        break_even_guard_min_mfe_pct_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP", "")
-        ),
-        break_even_guard_floor_net_pnl_pct=float(
-            os.getenv("STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT", "0.0")
-        ),
-        break_even_guard_floor_net_pnl_pct_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP", "")
-        ),
-        break_even_guard_max_profit_retrace_pct=float(
-            os.getenv("STRATEGY_BREAK_EVEN_GUARD_MAX_PROFIT_RETRACE_PCT", "0.6")
-        ),
-        signal_score_min=float(
-            os.getenv("STRATEGY_SIGNAL_SCORE_MIN", "55")
-        ),
-        dynamic_signal_score_min=float(
-            os.getenv("STRATEGY_DYNAMIC_SIGNAL_SCORE_MIN", "70")
-        ),
-        entry_confirmation_loops=int(
-            os.getenv("STRATEGY_ENTRY_CONFIRMATION_LOOPS", "2")
-        ),
-        enable_correlation_filter=parse_bool(
-            os.getenv("STRATEGY_ENABLE_CORRELATION_FILTER", "true"),
-            default=True,
-        ),
-        correlation_lookback=int(
-            os.getenv("STRATEGY_CORRELATION_LOOKBACK", "20")
-        ),
-        max_correlation_with_btc=float(
-            os.getenv("STRATEGY_MAX_CORRELATION_WITH_BTC", "0.70")
-        ),
-        enable_fill_quality_guard=parse_bool(
-            os.getenv("STRATEGY_ENABLE_FILL_QUALITY_GUARD", "true"),
-            default=True,
-        ),
-        fill_quality_lookback_sec=int(
-            os.getenv("STRATEGY_FILL_QUALITY_LOOKBACK_SEC", "3600")
-        ),
-        fill_quality_min_fill_ratio=float(
-            os.getenv("STRATEGY_FILL_QUALITY_MIN_FILL_RATIO", "0.95")
-        ),
-        fill_quality_min_sample_count=int(
-            os.getenv("STRATEGY_FILL_QUALITY_MIN_SAMPLE_COUNT", "1")
-        ),
-        min_buy_order_value=float(
-            os.getenv(min_buy_order_env_key, str(default_min_buy_order_value))
-        ),
-        loop_interval_sec=int(os.getenv("STRATEGY_LOOP_INTERVAL_SEC", "10")),
-        min_crossover_gap_pct_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_MIN_CROSSOVER_GAP_PCT_MAP", "")
-        ),
-        min_take_profit_pct_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_MIN_TAKE_PROFIT_PCT_MAP", "")
-        ),
-        stop_loss_pct_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_STOP_LOSS_PCT_MAP", "")
-        ),
-        min_order_amount_map=parse_symbol_float_map(
-            os.getenv("STRATEGY_MIN_ORDER_AMOUNT_MAP", "")
-        ),
+        loop_interval_sec=config_int("strategy", "loop_interval_sec", 10, env_key="STRATEGY_LOOP_INTERVAL_SEC"),
+        min_crossover_gap_pct_map=parse_symbol_float_map(config_value("strategy", "min_crossover_gap_pct_map", {}, env_key="STRATEGY_MIN_CROSSOVER_GAP_PCT_MAP")),
+        min_take_profit_pct_map=parse_symbol_float_map(config_value("strategy", "min_take_profit_pct_map", {}, env_key="STRATEGY_MIN_TAKE_PROFIT_PCT_MAP")),
+        stop_loss_pct_map=parse_symbol_float_map(config_value("strategy", "stop_loss_pct_map", {}, env_key="STRATEGY_STOP_LOSS_PCT_MAP")),
+        min_order_amount_map=parse_symbol_float_map(config_value("strategy", "min_order_amount_map", {}, env_key="STRATEGY_MIN_ORDER_AMOUNT_MAP")),
         partial_take_profit_symbols=tuple(
-            parse_symbol_list(os.getenv("STRATEGY_PARTIAL_TAKE_PROFIT_SYMBOLS"), [])
+            parse_symbol_list(config_str("strategy", "partial_take_profit_symbols", "", env_key="STRATEGY_PARTIAL_TAKE_PROFIT_SYMBOLS"), [])
         ),
         partial_stop_loss_symbols=tuple(
-            parse_symbol_list(os.getenv("STRATEGY_PARTIAL_STOP_LOSS_SYMBOLS"), [])
+            parse_symbol_list(config_str("strategy", "partial_stop_loss_symbols", "", env_key="STRATEGY_PARTIAL_STOP_LOSS_SYMBOLS"), [])
         ),
-        partial_take_profit_ratio=float(
-            os.getenv("STRATEGY_PARTIAL_TP_RATIO", "0.5")
-        ),
-        partial_stop_loss_ratio=float(
-            os.getenv("STRATEGY_PARTIAL_SL_RATIO", "0.5")
-        ),
-        partial_take_profit_reentry_cooldown_sec=int(
-            os.getenv("STRATEGY_PARTIAL_TP_REENTRY_COOLDOWN_SEC", "900")
-        ),
+        partial_take_profit_ratio=config_float("strategy", "partial_tp_ratio", 0.5, env_key="STRATEGY_PARTIAL_TP_RATIO"),
+        partial_stop_loss_ratio=config_float("strategy", "partial_sl_ratio", 0.5, env_key="STRATEGY_PARTIAL_SL_RATIO"),
+        partial_take_profit_reentry_cooldown_sec=config_int("strategy", "partial_tp_reentry_cooldown_sec", 900, env_key="STRATEGY_PARTIAL_TP_REENTRY_COOLDOWN_SEC"),
     )

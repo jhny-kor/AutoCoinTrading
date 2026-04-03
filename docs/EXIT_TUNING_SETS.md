@@ -1,5 +1,11 @@
 # 청산 보정 세트 정리
 
+현재 기준 요약
+
+- canonical 기본값: [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+- canonical 세트: [config/sets](/Users/plo/Documents/auto_coin_bot/config/sets)
+- 현재 적용 override: [config/runtime.local.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.toml)
+
 현재 canonical 문서입니다.
 
 상세 내용

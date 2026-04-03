@@ -14,12 +14,12 @@
 
 ### 공통 전략 설정
 
-- [strategy_settings.py](/Users/plo/Documents/auto_coin_bot/strategy_settings.py)
+- [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
   - 알트 공통 전략 설정 로더
   - 공통 전략 값, 심볼별 이격도/익절률/손절률/거래량 기준
   - 감시 심볼 목록과 운영 심볼 목록 로드
 
-- [btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/btc_trend_settings.py)
+- [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
   - BTC 전용 EMA 추세추종 설정 로더
   - EMA, ATR, 거래량, 트레일링, 부분 익절, 순익 보호, 피라미딩 설정 관리
 

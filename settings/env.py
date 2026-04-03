@@ -1,13 +1,14 @@
 """
 수정 요약
-- canonical structured config 로 `config/runtime.toml`, `config/runtime.local.toml` 을 먼저 읽고 이후 env 파일이 override 하도록 확장
+- 2026-04-03: `config/runtime.toml` 을 canonical 기준으로 읽고 `config/runtime.local.toml` 을 최종 override 로 적용하도록 정리
+- 2026-04-03: 프로세스에 이미 주입된 env 값은 파일 로더가 덮어쓰지 않도록 보존 순서를 보강
 - `.env.settings`, `.env.secrets`, `.env.local` 이 있으면 우선 사용하고, 없을 때만 legacy `.env` 를 읽는 중앙 환경 로더로 확장
 - 여러 모듈이 직접 `load_dotenv()` 를 호출하던 구조를 공통 로더로 정리할 수 있는 기반을 마련
 
 환경 로더
 
 - 기본 호환성: 기존 `.env` 만 있어도 그대로 동작한다.
-- 확장 경로: `.env.settings`, `.env.secrets`, `.env.local` 을 순서대로 덮어써 로딩한다.
+- 확장 경로: `config/runtime.toml` -> env override 레이어 -> `config/runtime.local.toml` 순서로 로딩한다.
 """
 
 from __future__ import annotations
@@ -74,6 +75,15 @@ def _stringify_config_value(value: object) -> str:
         return str(value)
     if isinstance(value, list):
         return ",".join(str(item) for item in value)
+    if isinstance(value, dict):
+        items: list[str] = []
+        for key, inner_value in value.items():
+            if isinstance(inner_value, dict):
+                for nested_key, nested_value in inner_value.items():
+                    items.append(f"{key}|{nested_key}:{nested_value}")
+            else:
+                items.append(f"{key}:{inner_value}")
+        return ",".join(items)
     return str(value)
 
 
@@ -108,6 +118,7 @@ def load_structured_config(paths: list[Path]) -> tuple[str, ...]:
 @lru_cache(maxsize=1)
 def load_project_env() -> tuple[str, ...]:
     """프로젝트 환경 파일을 한 번만 로드하고 실제 읽은 경로를 반환한다."""
+    preserved_env = dict(os.environ)
     loaded: list[str] = []
     loaded.extend(load_structured_config(BASE_TOML_PATHS))
     for path in get_env_paths():
@@ -116,4 +127,5 @@ def load_project_env() -> tuple[str, ...]:
         load_dotenv(path, override=True)
         loaded.append(str(path))
     loaded.extend(load_structured_config([RUNTIME_LOCAL_TOML_PATH]))
+    os.environ.update(preserved_env)
     return tuple(loaded)

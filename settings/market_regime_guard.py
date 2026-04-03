@@ -1,7 +1,9 @@
 """
+수정 요약
+- 2026-04-03: 레짐/저에너지 가드 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 저에너지 장 감지 공통 모듈
 
-- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+- `config/runtime.toml`, `config/runtime.local.toml`, env override/secrets 레이어를 중앙 로더로 함께 읽는다.
 
 - 2차 확장으로 fresh cross 요구와 부분익절 비율 배수까지 레짐별 정책에 포함하도록 확장했다.
 - ADX 기반 추세 강도 판정과 레짐별 진입/리스크 정책 프로파일을 추가했다.
@@ -17,21 +19,14 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from settings.config_access import config_bool, config_float, config_int
 from settings.env import load_project_env
 from log_path_utils import current_date_str
-
-
-def parse_bool(raw: str | None, default: bool = False) -> bool:
-    """문자열 불리언 값을 파싱한다."""
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def safe_float(value) -> float | None:
@@ -120,40 +115,17 @@ def load_regime_thresholds() -> dict[str, float | int | bool]:
     """심볼별 레짐 분류에 사용할 임계값을 읽는다."""
     load_project_env()
     return {
-        "alert_enabled": parse_bool(
-            os.getenv("REGIME_ALERT_ENABLED", "false"),
-            False,
-        ),
-        "breakout_volume_ratio_threshold": float(
-            os.getenv("REGIME_BREAKOUT_VOLUME_RATIO_THRESHOLD", "1.20")
-        ),
-        "breakout_gap_pct_threshold": float(
-            os.getenv("REGIME_BREAKOUT_GAP_PCT_THRESHOLD", "0.12")
-        ),
-        "trending_volume_ratio_threshold": float(
-            os.getenv("REGIME_TRENDING_VOLUME_RATIO_THRESHOLD", "1.00")
-        ),
-        "trending_avg_abs_change_pct_threshold": float(
-            os.getenv("REGIME_TRENDING_AVG_ABS_CHANGE_PCT_THRESHOLD", "0.08")
-        ),
-        "exhaustion_rsi_threshold": float(
-            os.getenv("REGIME_EXHAUSTION_RSI_THRESHOLD", "80")
-        ),
-        "overheated_rsi_threshold": float(
-            os.getenv("REGIME_OVERHEATED_RSI_THRESHOLD", "90")
-        ),
-        "overheated_volume_ratio_threshold": float(
-            os.getenv("REGIME_OVERHEATED_VOLUME_RATIO_THRESHOLD", "1.50")
-        ),
-        "adx_trending_threshold": float(
-            os.getenv("REGIME_ADX_TRENDING_THRESHOLD", "25")
-        ),
-        "adx_choppy_threshold": float(
-            os.getenv("REGIME_ADX_CHOPPY_THRESHOLD", "20")
-        ),
-        "alert_min_interval_sec": int(
-            os.getenv("REGIME_ALERT_MIN_INTERVAL_SEC", "900")
-        ),
+        "alert_enabled": config_bool("regime", "alert_enabled", False, env_key="REGIME_ALERT_ENABLED"),
+        "breakout_volume_ratio_threshold": config_float("regime", "breakout_volume_ratio_threshold", 1.20, env_key="REGIME_BREAKOUT_VOLUME_RATIO_THRESHOLD"),
+        "breakout_gap_pct_threshold": config_float("regime", "breakout_gap_pct_threshold", 0.12, env_key="REGIME_BREAKOUT_GAP_PCT_THRESHOLD"),
+        "trending_volume_ratio_threshold": config_float("regime", "trending_volume_ratio_threshold", 1.00, env_key="REGIME_TRENDING_VOLUME_RATIO_THRESHOLD"),
+        "trending_avg_abs_change_pct_threshold": config_float("regime", "trending_avg_abs_change_pct_threshold", 0.08, env_key="REGIME_TRENDING_AVG_ABS_CHANGE_PCT_THRESHOLD"),
+        "exhaustion_rsi_threshold": config_float("regime", "exhaustion_rsi_threshold", 80, env_key="REGIME_EXHAUSTION_RSI_THRESHOLD"),
+        "overheated_rsi_threshold": config_float("regime", "overheated_rsi_threshold", 90, env_key="REGIME_OVERHEATED_RSI_THRESHOLD"),
+        "overheated_volume_ratio_threshold": config_float("regime", "overheated_volume_ratio_threshold", 1.50, env_key="REGIME_OVERHEATED_VOLUME_RATIO_THRESHOLD"),
+        "adx_trending_threshold": config_float("regime", "adx_trending_threshold", 25, env_key="REGIME_ADX_TRENDING_THRESHOLD"),
+        "adx_choppy_threshold": config_float("regime", "adx_choppy_threshold", 20, env_key="REGIME_ADX_CHOPPY_THRESHOLD"),
+        "alert_min_interval_sec": config_int("regime", "alert_min_interval_sec", 900, env_key="REGIME_ALERT_MIN_INTERVAL_SEC"),
     }
 
 
@@ -346,20 +318,11 @@ def load_low_energy_guard_settings() -> LowEnergyGuardSettings:
     """저에너지 장 가드 설정을 환경 변수에서 읽는다."""
     load_project_env()
     return LowEnergyGuardSettings(
-        enabled=parse_bool(os.getenv("MARKET_GUARD_ENABLE_LOW_ENERGY", "true"), True),
-        avg_volume_ratio_threshold=float(
-            os.getenv("MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO", "0.80")
-        ),
-        avg_abs_change_pct_threshold=float(
-            os.getenv("MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT", "0.05")
-        ),
-        require_ready_count_zero=parse_bool(
-            os.getenv("MARKET_GUARD_LOW_ENERGY_REQUIRE_READY_COUNT_ZERO", "true"),
-            True,
-        ),
-        max_record_age_sec=int(
-            os.getenv("MARKET_GUARD_LOW_ENERGY_MAX_RECORD_AGE_SEC", "180")
-        ),
+        enabled=config_bool("market_guard", "enable_low_energy", True, env_key="MARKET_GUARD_ENABLE_LOW_ENERGY"),
+        avg_volume_ratio_threshold=config_float("market_guard", "low_energy_avg_volume_ratio", 0.80, env_key="MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO"),
+        avg_abs_change_pct_threshold=config_float("market_guard", "low_energy_avg_abs_change_pct", 0.05, env_key="MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT"),
+        require_ready_count_zero=config_bool("market_guard", "low_energy_require_ready_count_zero", True, env_key="MARKET_GUARD_LOW_ENERGY_REQUIRE_READY_COUNT_ZERO"),
+        max_record_age_sec=config_int("market_guard", "low_energy_max_record_age_sec", 180, env_key="MARKET_GUARD_LOW_ENERGY_MAX_RECORD_AGE_SEC"),
     )
 
 

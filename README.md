@@ -129,7 +129,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `run/upbit_btc_ema_trend_bot.py`: 업비트 BTC 전용 EMA+ATR 추세추종 실행 진입점
 - `config/runtime.toml`: canonical 운영 설정
 - `config/runtime.local.toml`: 현재 적용 세트 / 로컬 TOML override
-- `.env.settings`: env override 레이어
+- `.env.settings`: 선택적 env override 레이어
 - `.env.secrets`: API 키, 텔레그램 토큰 같은 비밀정보
 - `.env`: split env / TOML 이 없을 때만 쓰는 legacy fallback
 
@@ -475,8 +475,10 @@ BTC는 현재 1분봉 다중코인 전략보다 더 느린 추세형 접근이 �
 docker pull ghcr.io/jhny-kor/autocointrading:latest
 cp config/runtime.example.toml config/runtime.toml   # canonical 운영 설정 채우기
 cp .env.secrets.example .env.secrets     # API 키/토큰 채우기
+cp config/runtime.local.example.toml config/runtime.local.toml  # 필요 시 현재 세트 override 작성
 docker run -d --name autocoin-bot 
 -v "$(pwd)/config/runtime.toml:/app/config/runtime.toml" 
+-v "$(pwd)/config/runtime.local.toml:/app/config/runtime.local.toml" 
 -v "$(pwd)/.env.secrets:/app/.env.secrets" 
 -v "$(pwd)/logs:/app/logs" 
 --restart unless-stopped 
@@ -487,4 +489,5 @@ ghcr.io/jhny-kor/autocointrading:latest start all
 ### Windows 실행파일
 - Releases에서 최신 버전 다운로드 → 압축 풀기
 - `config/runtime.toml`, `.env.secrets` 파일 만들고 값 채우기
+- 세트 override 가 필요하면 `config/runtime.local.toml` 도 함께 작성
 - `AutoCoinTrading.exe start all` 더블클릭 또는 cmd에서 실행

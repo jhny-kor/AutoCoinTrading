@@ -1,7 +1,9 @@
 """
+수정 요약
+- 2026-04-03: BTC 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 BTC 전용 EMA 추세추종 설정 로더
 
-- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+- `config/runtime.toml`, `config/runtime.local.toml`, env override/secrets 레이어를 중앙 로더로 함께 읽는다.
 
 - 레짐별 포지션 비중 스케일 설정을 추가해 BTC도 상승장/횡보장/저에너지장에 따라 진입 크기를 다르게 조절할 수 있게 확장했다.
 - 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장했다.
@@ -14,31 +16,24 @@ BTC 전용 EMA 추세추종 설정 로더
 - BTC 수익성 청산 직후에는 재진입과 추가매수를 잠시 막는 전용 쿨다운 설정을 추가했다.
 - 수수료를 반영해도 순익이 남을 때 추세 약화가 나오면 빠르게 보호 익절하는 설정을 추가했다.
 - BTC 손절 직후에는 일반 거래 간격보다 더 길게 쉬도록 전용 재진입 쿨다운 설정을 추가했다.
-- BTC 는 수익 구간에서 1회만 추가매수하는 보수적 피라미딩 설정을 .env 에서 읽도록 확장했다.
-- BTC 전략 버전 이름을 .env 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
+- BTC 는 수익 구간에서 1회만 추가매수하는 보수적 피라미딩 설정을 canonical config 에서 읽도록 확장했다.
+- BTC 전략 버전 이름을 canonical config 에서 읽어 로그와 체결 이력에 함께 남길 수 있도록 확장
 - BTC 진입 신호를 골든크로스뿐 아니라 EMA 상승 정렬 유지 구간까지 허용하는 설정을 추가했다.
-- BTC 전용 최소 거래 간격 기본값을 300초로 낮춰 실환경 .env 와 기본 동작을 맞췄다.
-- BTC 전용 전략에서 사용할 타임프레임, EMA, ATR, 거래량 기준을 .env 에서 읽는다.
+- BTC 전용 최소 거래 간격 기본값을 300초로 낮춰 현재 canonical config 와 기본 동작을 맞췄다.
+- BTC 전용 전략에서 사용할 타임프레임, EMA, ATR, 거래량 기준을 canonical config 에서 읽는다.
 - 5분봉 또는 15분봉 기반 추세추종을 실험할 수 있도록 공통 설정을 제공한다.
 - 손절/익절은 ATR 또는 최근 스윙 기준 중 선택할 수 있도록 지원한다.
-- OKX BTC 최소 주문수량 같은 거래소별 주문 기준도 .env 에서 읽어 선제 차단할 수 있도록 지원한다.
+- OKX BTC 최소 주문수량 같은 거래소별 주문 기준도 canonical config 에서 읽어 선제 차단할 수 있도록 지원한다.
 - 익절 구간 진입 후 최고가 대비 되돌림으로 전량 청산하는 트레일링 설정도 함께 읽도록 지원한다.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
+from settings.config_access import config_bool, config_float, config_int, config_str, config_value
 from settings.env import load_project_env
 from strategy_settings import parse_symbol_float_map
-
-
-def parse_bool(raw: str | None, default: bool = False) -> bool:
-    """문자열 불리언 값을 파싱한다."""
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 @dataclass(frozen=True)
@@ -157,168 +152,73 @@ def load_btc_trend_settings() -> BtcTrendSettings:
     load_project_env()
 
     return BtcTrendSettings(
-        version=os.getenv("BTC_TREND_VERSION", "btc_mid_v1").strip(),
-        timeframe=os.getenv("BTC_TREND_TIMEFRAME", "5m"),
-        confirm_timeframe=os.getenv("BTC_TREND_CONFIRM_TIMEFRAME", "15m"),
-        enable_confirm_timeframe_filter=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_CONFIRM_FILTER", "true"),
-            default=True,
-        ),
-        fast_ema_period=int(os.getenv("BTC_TREND_FAST_EMA_PERIOD", "9")),
-        slow_ema_period=int(os.getenv("BTC_TREND_SLOW_EMA_PERIOD", "21")),
-        confirm_ema_period=int(os.getenv("BTC_TREND_CONFIRM_EMA_PERIOD", "21")),
-        enable_trend_follow_entry=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_TREND_FOLLOW_ENTRY", "true"),
-            default=True,
-        ),
-        trend_follow_requires_price_above_fast=parse_bool(
-            os.getenv("BTC_TREND_REQUIRE_PRICE_ABOVE_FAST", "true"),
-            default=True,
-        ),
-        trend_follow_requires_ema_slope_positive=parse_bool(
-            os.getenv("BTC_TREND_REQUIRE_EMA_SLOPE_POSITIVE", "true"),
-            default=True,
-        ),
-        ema_slope_lookback=int(os.getenv("BTC_TREND_EMA_SLOPE_LOOKBACK", "3")),
-        enable_rsi_filter=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_RSI_FILTER", "true"),
-            default=True,
-        ),
-        rsi_period=int(os.getenv("BTC_TREND_RSI_PERIOD", "14")),
-        rsi_entry_min=float(os.getenv("BTC_TREND_RSI_ENTRY_MIN", "40")),
-        rsi_entry_max=float(os.getenv("BTC_TREND_RSI_ENTRY_MAX", "72")),
-        enable_bb_width_filter=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_BB_WIDTH_FILTER", "true"),
-            default=True,
-        ),
-        bb_period=int(os.getenv("BTC_TREND_BB_PERIOD", "20")),
-        bb_stddev_multiplier=float(
-            os.getenv("BTC_TREND_BB_STDDEV_MULTIPLIER", "2.0")
-        ),
-        min_bb_width_pct=float(os.getenv("BTC_TREND_MIN_BB_WIDTH_PCT", "0.20")),
-        max_bb_width_pct=float(os.getenv("BTC_TREND_MAX_BB_WIDTH_PCT", "8.00")),
-        signal_score_min=float(os.getenv("BTC_TREND_SIGNAL_SCORE_MIN", "55")),
-        enable_noise_ratio_adaptation=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_NOISE_RATIO_ADAPTATION", "true"),
-            default=True,
-        ),
-        noise_ratio_lookback=int(os.getenv("BTC_TREND_NOISE_RATIO_LOOKBACK", "20")),
-        noise_ratio_baseline=float(
-            os.getenv("BTC_TREND_NOISE_RATIO_BASELINE", "0.50")
-        ),
-        noise_ratio_min_multiplier=float(
-            os.getenv("BTC_TREND_NOISE_RATIO_MIN_MULTIPLIER", "0.70")
-        ),
-        noise_ratio_max_multiplier=float(
-            os.getenv("BTC_TREND_NOISE_RATIO_MAX_MULTIPLIER", "1.30")
-        ),
-        noise_ratio_signal_score_weight=float(
-            os.getenv("BTC_TREND_NOISE_RATIO_SIGNAL_SCORE_WEIGHT", "12.0")
-        ),
-        entry_confirmation_loops=int(
-            os.getenv("BTC_TREND_ENTRY_CONFIRMATION_LOOPS", "2")
-        ),
-        enable_fill_quality_guard=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_FILL_QUALITY_GUARD", "true"),
-            default=True,
-        ),
-        fill_quality_lookback_sec=int(
-            os.getenv("BTC_TREND_FILL_QUALITY_LOOKBACK_SEC", "3600")
-        ),
-        fill_quality_min_fill_ratio=float(
-            os.getenv("BTC_TREND_FILL_QUALITY_MIN_FILL_RATIO", "0.95")
-        ),
-        fill_quality_min_sample_count=int(
-            os.getenv("BTC_TREND_FILL_QUALITY_MIN_SAMPLE_COUNT", "1")
-        ),
-        min_ema_spread_pct=float(os.getenv("BTC_TREND_MIN_EMA_SPREAD_PCT", "0.002")),
-        min_ema_spread_pct_map=parse_symbol_float_map(
-            os.getenv("BTC_TREND_MIN_EMA_SPREAD_PCT_MAP", "")
-        ),
-        enable_fee_protect_exit=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_FEE_PROTECT_EXIT", "true"),
-            default=True,
-        ),
-        fee_protect_min_net_pnl_pct=float(
-            os.getenv("BTC_TREND_FEE_PROTECT_MIN_NET_PNL_PCT", "0.12")
-        ),
-        enable_bull_pullback_hold=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_BULL_PULLBACK_HOLD", "true"),
-            default=True,
-        ),
-        bull_pullback_tolerance_pct=float(
-            os.getenv("BTC_TREND_BULL_PULLBACK_TOLERANCE_PCT", "0.20")
-        ),
-        bull_pullback_min_spread_pct=float(
-            os.getenv("BTC_TREND_BULL_PULLBACK_MIN_SPREAD_PCT", "0.10")
-        ),
-        atr_period=int(os.getenv("BTC_TREND_ATR_PERIOD", "14")),
-        min_atr_pct=float(os.getenv("BTC_TREND_MIN_ATR_PCT", "0.08")),
-        min_atr_pct_map=parse_symbol_float_map(
-            os.getenv("BTC_TREND_MIN_ATR_PCT_MAP", "")
-        ),
-        max_atr_pct=float(os.getenv("BTC_TREND_MAX_ATR_PCT", "2.50")),
-        volume_lookback=int(os.getenv("BTC_TREND_VOLUME_LOOKBACK", "20")),
-        min_volume_ratio=float(os.getenv("BTC_TREND_MIN_VOLUME_RATIO", "1.05")),
-        min_volume_ratio_map=parse_symbol_float_map(
-            os.getenv("BTC_TREND_MIN_VOLUME_RATIO_MAP", "")
-        ),
-        choppy_min_volume_ratio_map=parse_symbol_float_map(
-            os.getenv("BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP", "")
-        ),
-        position_ratio=float(os.getenv("BTC_TREND_POSITION_RATIO", "0.25")),
-        position_ratio_map=parse_symbol_float_map(
-            os.getenv("BTC_TREND_POSITION_RATIO_MAP", "")
-        ),
-        enable_regime_position_scaling=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_REGIME_POSITION_SCALING", "true"),
-            default=True,
-        ),
-        regime_position_scale_map=parse_symbol_float_map(
-            os.getenv(
-                "BTC_TREND_REGIME_POSITION_SCALE_MAP",
-                "TRENDING:1.10,BREAKOUT_ATTEMPT:0.90,CHOPPY:0.50,LOW_ENERGY:0.00,OVERHEATED:0.30,EXHAUSTION_RISK:0.00",
-            )
-        ),
-        min_order_amount=float(os.getenv("BTC_TREND_MIN_ORDER_AMOUNT", "0.00001")),
-        min_trade_interval_sec=int(os.getenv("BTC_TREND_MIN_TRADE_INTERVAL_SEC", "300")),
-        stop_loss_reentry_cooldown_sec=int(
-            os.getenv("BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC", "600")
-        ),
-        profit_exit_reentry_cooldown_sec=int(
-            os.getenv("BTC_TREND_PROFIT_EXIT_REENTRY_COOLDOWN_SEC", "600")
-        ),
-        enable_partial_take_profit=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_PARTIAL_TAKE_PROFIT", "true"),
-            default=True,
-        ),
-        partial_take_profit_ratio=float(
-            os.getenv("BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO", "0.5")
-        ),
-        enable_pyramid_add_on=parse_bool(
-            os.getenv("BTC_TREND_ENABLE_PYRAMID_ADD_ON", "true"),
-            default=True,
-        ),
-        pyramid_trigger_profit_pct=float(
-            os.getenv("BTC_TREND_PYRAMID_TRIGGER_PROFIT_PCT", "0.35")
-        ),
-        pyramid_position_ratio=float(
-            os.getenv("BTC_TREND_PYRAMID_POSITION_RATIO", "0.15")
-        ),
-        pyramid_max_add_ons=int(os.getenv("BTC_TREND_PYRAMID_MAX_ADD_ONS", "1")),
-        stop_mode=os.getenv("BTC_TREND_STOP_MODE", "atr").strip().lower(),
-        take_profit_mode=os.getenv("BTC_TREND_TAKE_PROFIT_MODE", "atr").strip().lower(),
-        stop_atr_multiple=float(os.getenv("BTC_TREND_STOP_ATR_MULTIPLE", "1.5")),
-        take_profit_atr_multiple=float(
-            os.getenv("BTC_TREND_TAKE_PROFIT_ATR_MULTIPLE", "2.5")
-        ),
-        trailing_drawdown_pct=float(
-            os.getenv("BTC_TREND_TRAILING_DRAWDOWN_PCT", "0.8")
-        ),
-        swing_lookback=int(os.getenv("BTC_TREND_SWING_LOOKBACK", "10")),
-        exit_on_bearish_cross=parse_bool(
-            os.getenv("BTC_TREND_EXIT_ON_BEARISH_CROSS", "true"),
-            default=True,
-        ),
-        loop_interval_sec=int(os.getenv("BTC_TREND_LOOP_INTERVAL_SEC", "20")),
+        version=config_str("btc_trend", "version", "btc_mid_v1", env_key="BTC_TREND_VERSION").strip(),
+        timeframe=config_str("btc_trend", "timeframe", "5m", env_key="BTC_TREND_TIMEFRAME"),
+        confirm_timeframe=config_str("btc_trend", "confirm_timeframe", "15m", env_key="BTC_TREND_CONFIRM_TIMEFRAME"),
+        enable_confirm_timeframe_filter=config_bool("btc_trend", "enable_confirm_filter", True, env_key="BTC_TREND_ENABLE_CONFIRM_FILTER"),
+        fast_ema_period=config_int("btc_trend", "fast_ema_period", 9, env_key="BTC_TREND_FAST_EMA_PERIOD"),
+        slow_ema_period=config_int("btc_trend", "slow_ema_period", 21, env_key="BTC_TREND_SLOW_EMA_PERIOD"),
+        confirm_ema_period=config_int("btc_trend", "confirm_ema_period", 21, env_key="BTC_TREND_CONFIRM_EMA_PERIOD"),
+        enable_trend_follow_entry=config_bool("btc_trend", "enable_trend_follow_entry", True, env_key="BTC_TREND_ENABLE_TREND_FOLLOW_ENTRY"),
+        trend_follow_requires_price_above_fast=config_bool("btc_trend", "require_price_above_fast", True, env_key="BTC_TREND_REQUIRE_PRICE_ABOVE_FAST"),
+        trend_follow_requires_ema_slope_positive=config_bool("btc_trend", "require_ema_slope_positive", True, env_key="BTC_TREND_REQUIRE_EMA_SLOPE_POSITIVE"),
+        ema_slope_lookback=config_int("btc_trend", "ema_slope_lookback", 3, env_key="BTC_TREND_EMA_SLOPE_LOOKBACK"),
+        enable_rsi_filter=config_bool("btc_trend", "enable_rsi_filter", True, env_key="BTC_TREND_ENABLE_RSI_FILTER"),
+        rsi_period=config_int("btc_trend", "rsi_period", 14, env_key="BTC_TREND_RSI_PERIOD"),
+        rsi_entry_min=config_float("btc_trend", "rsi_entry_min", 40, env_key="BTC_TREND_RSI_ENTRY_MIN"),
+        rsi_entry_max=config_float("btc_trend", "rsi_entry_max", 72, env_key="BTC_TREND_RSI_ENTRY_MAX"),
+        enable_bb_width_filter=config_bool("btc_trend", "enable_bb_width_filter", True, env_key="BTC_TREND_ENABLE_BB_WIDTH_FILTER"),
+        bb_period=config_int("btc_trend", "bb_period", 20, env_key="BTC_TREND_BB_PERIOD"),
+        bb_stddev_multiplier=config_float("btc_trend", "bb_stddev_multiplier", 2.0, env_key="BTC_TREND_BB_STDDEV_MULTIPLIER"),
+        min_bb_width_pct=config_float("btc_trend", "min_bb_width_pct", 0.20, env_key="BTC_TREND_MIN_BB_WIDTH_PCT"),
+        max_bb_width_pct=config_float("btc_trend", "max_bb_width_pct", 8.00, env_key="BTC_TREND_MAX_BB_WIDTH_PCT"),
+        signal_score_min=config_float("btc_trend", "signal_score_min", 55, env_key="BTC_TREND_SIGNAL_SCORE_MIN"),
+        enable_noise_ratio_adaptation=config_bool("btc_trend", "enable_noise_ratio_adaptation", True, env_key="BTC_TREND_ENABLE_NOISE_RATIO_ADAPTATION"),
+        noise_ratio_lookback=config_int("btc_trend", "noise_ratio_lookback", 20, env_key="BTC_TREND_NOISE_RATIO_LOOKBACK"),
+        noise_ratio_baseline=config_float("btc_trend", "noise_ratio_baseline", 0.50, env_key="BTC_TREND_NOISE_RATIO_BASELINE"),
+        noise_ratio_min_multiplier=config_float("btc_trend", "noise_ratio_min_multiplier", 0.70, env_key="BTC_TREND_NOISE_RATIO_MIN_MULTIPLIER"),
+        noise_ratio_max_multiplier=config_float("btc_trend", "noise_ratio_max_multiplier", 1.30, env_key="BTC_TREND_NOISE_RATIO_MAX_MULTIPLIER"),
+        noise_ratio_signal_score_weight=config_float("btc_trend", "noise_ratio_signal_score_weight", 12.0, env_key="BTC_TREND_NOISE_RATIO_SIGNAL_SCORE_WEIGHT"),
+        entry_confirmation_loops=config_int("btc_trend", "entry_confirmation_loops", 2, env_key="BTC_TREND_ENTRY_CONFIRMATION_LOOPS"),
+        enable_fill_quality_guard=config_bool("btc_trend", "enable_fill_quality_guard", True, env_key="BTC_TREND_ENABLE_FILL_QUALITY_GUARD"),
+        fill_quality_lookback_sec=config_int("btc_trend", "fill_quality_lookback_sec", 3600, env_key="BTC_TREND_FILL_QUALITY_LOOKBACK_SEC"),
+        fill_quality_min_fill_ratio=config_float("btc_trend", "fill_quality_min_fill_ratio", 0.95, env_key="BTC_TREND_FILL_QUALITY_MIN_FILL_RATIO"),
+        fill_quality_min_sample_count=config_int("btc_trend", "fill_quality_min_sample_count", 1, env_key="BTC_TREND_FILL_QUALITY_MIN_SAMPLE_COUNT"),
+        min_ema_spread_pct=config_float("btc_trend", "min_ema_spread_pct", 0.002, env_key="BTC_TREND_MIN_EMA_SPREAD_PCT"),
+        min_ema_spread_pct_map=parse_symbol_float_map(config_value("btc_trend", "min_ema_spread_pct_map", {}, env_key="BTC_TREND_MIN_EMA_SPREAD_PCT_MAP")),
+        enable_fee_protect_exit=config_bool("btc_trend", "enable_fee_protect_exit", True, env_key="BTC_TREND_ENABLE_FEE_PROTECT_EXIT"),
+        fee_protect_min_net_pnl_pct=config_float("btc_trend", "fee_protect_min_net_pnl_pct", 0.12, env_key="BTC_TREND_FEE_PROTECT_MIN_NET_PNL_PCT"),
+        enable_bull_pullback_hold=config_bool("btc_trend", "enable_bull_pullback_hold", True, env_key="BTC_TREND_ENABLE_BULL_PULLBACK_HOLD"),
+        bull_pullback_tolerance_pct=config_float("btc_trend", "bull_pullback_tolerance_pct", 0.20, env_key="BTC_TREND_BULL_PULLBACK_TOLERANCE_PCT"),
+        bull_pullback_min_spread_pct=config_float("btc_trend", "bull_pullback_min_spread_pct", 0.10, env_key="BTC_TREND_BULL_PULLBACK_MIN_SPREAD_PCT"),
+        atr_period=config_int("btc_trend", "atr_period", 14, env_key="BTC_TREND_ATR_PERIOD"),
+        min_atr_pct=config_float("btc_trend", "min_atr_pct", 0.08, env_key="BTC_TREND_MIN_ATR_PCT"),
+        min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "min_atr_pct_map", {}, env_key="BTC_TREND_MIN_ATR_PCT_MAP")),
+        max_atr_pct=config_float("btc_trend", "max_atr_pct", 2.50, env_key="BTC_TREND_MAX_ATR_PCT"),
+        volume_lookback=config_int("btc_trend", "volume_lookback", 20, env_key="BTC_TREND_VOLUME_LOOKBACK"),
+        min_volume_ratio=config_float("btc_trend", "min_volume_ratio", 1.05, env_key="BTC_TREND_MIN_VOLUME_RATIO"),
+        min_volume_ratio_map=parse_symbol_float_map(config_value("btc_trend", "min_volume_ratio_map", {}, env_key="BTC_TREND_MIN_VOLUME_RATIO_MAP")),
+        choppy_min_volume_ratio_map=parse_symbol_float_map(config_value("btc_trend", "choppy_min_volume_ratio_map", {}, env_key="BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP")),
+        position_ratio=config_float("btc_trend", "position_ratio", 0.25, env_key="BTC_TREND_POSITION_RATIO"),
+        position_ratio_map=parse_symbol_float_map(config_value("btc_trend", "position_ratio_map", {}, env_key="BTC_TREND_POSITION_RATIO_MAP")),
+        enable_regime_position_scaling=config_bool("btc_trend", "enable_regime_position_scaling", True, env_key="BTC_TREND_ENABLE_REGIME_POSITION_SCALING"),
+        regime_position_scale_map=parse_symbol_float_map(config_value("btc_trend", "regime_position_scale_map", {}, env_key="BTC_TREND_REGIME_POSITION_SCALE_MAP")),
+        min_order_amount=config_float("btc_trend", "min_order_amount", 0.00001, env_key="BTC_TREND_MIN_ORDER_AMOUNT"),
+        min_trade_interval_sec=config_int("btc_trend", "min_trade_interval_sec", 300, env_key="BTC_TREND_MIN_TRADE_INTERVAL_SEC"),
+        stop_loss_reentry_cooldown_sec=config_int("btc_trend", "stop_loss_reentry_cooldown_sec", 600, env_key="BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC"),
+        profit_exit_reentry_cooldown_sec=config_int("btc_trend", "profit_exit_reentry_cooldown_sec", 600, env_key="BTC_TREND_PROFIT_EXIT_REENTRY_COOLDOWN_SEC"),
+        enable_partial_take_profit=config_bool("btc_trend", "enable_partial_take_profit", True, env_key="BTC_TREND_ENABLE_PARTIAL_TAKE_PROFIT"),
+        partial_take_profit_ratio=config_float("btc_trend", "partial_take_profit_ratio", 0.5, env_key="BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO"),
+        enable_pyramid_add_on=config_bool("btc_trend", "enable_pyramid_add_on", True, env_key="BTC_TREND_ENABLE_PYRAMID_ADD_ON"),
+        pyramid_trigger_profit_pct=config_float("btc_trend", "pyramid_trigger_profit_pct", 0.35, env_key="BTC_TREND_PYRAMID_TRIGGER_PROFIT_PCT"),
+        pyramid_position_ratio=config_float("btc_trend", "pyramid_position_ratio", 0.15, env_key="BTC_TREND_PYRAMID_POSITION_RATIO"),
+        pyramid_max_add_ons=config_int("btc_trend", "pyramid_max_add_ons", 1, env_key="BTC_TREND_PYRAMID_MAX_ADD_ONS"),
+        stop_mode=config_str("btc_trend", "stop_mode", "atr", env_key="BTC_TREND_STOP_MODE").strip().lower(),
+        take_profit_mode=config_str("btc_trend", "take_profit_mode", "atr", env_key="BTC_TREND_TAKE_PROFIT_MODE").strip().lower(),
+        stop_atr_multiple=config_float("btc_trend", "stop_atr_multiple", 1.5, env_key="BTC_TREND_STOP_ATR_MULTIPLE"),
+        take_profit_atr_multiple=config_float("btc_trend", "take_profit_atr_multiple", 2.5, env_key="BTC_TREND_TAKE_PROFIT_ATR_MULTIPLE"),
+        trailing_drawdown_pct=config_float("btc_trend", "trailing_drawdown_pct", 0.8, env_key="BTC_TREND_TRAILING_DRAWDOWN_PCT"),
+        swing_lookback=config_int("btc_trend", "swing_lookback", 10, env_key="BTC_TREND_SWING_LOOKBACK"),
+        exit_on_bearish_cross=config_bool("btc_trend", "exit_on_bearish_cross", True, env_key="BTC_TREND_EXIT_ON_BEARISH_CROSS"),
+        loop_interval_sec=config_int("btc_trend", "loop_interval_sec", 20, env_key="BTC_TREND_LOOP_INTERVAL_SEC"),
     )
