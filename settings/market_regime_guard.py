@@ -1,6 +1,7 @@
 """
 저에너지 장 감지 공통 모듈
 
+- 2차 확장으로 fresh cross 요구와 부분익절 비율 배수까지 레짐별 정책에 포함하도록 확장했다.
 - ADX 기반 추세 강도 판정과 레짐별 진입/리스크 정책 프로파일을 추가했다.
 - 레짐 변경 알림 메시지가 실제 줄바꿈으로 보이도록 정리했다.
 - 레짐 알림은 환경 변수로 끌 수 있도록 바꾸고, 기본값은 비활성화로 둬 운영 중 과도한 메시지를 막도록 조정했다.
@@ -111,6 +112,7 @@ class RegimePolicy:
     min_atr_multiplier: float
     trailing_drawdown_multiplier: float
     pyramid_max_add_ons_delta: int
+    partial_take_profit_ratio_multiplier: float
 
 
 def load_regime_thresholds() -> dict[str, float | int | bool]:
@@ -168,6 +170,7 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "OVERHEATED": RegimePolicy(
             pause_new_entry=True,
@@ -180,6 +183,7 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=0.75,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "EXHAUSTION_RISK": RegimePolicy(
             pause_new_entry=True,
@@ -192,18 +196,20 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "CHOPPY": RegimePolicy(
             pause_new_entry=False,
             require_strong_signal=True,
-            require_fresh_cross=False,
+            require_fresh_cross=True,
             allow_dynamic_overweight=False,
             stop_loss_multiplier=0.8,
             take_profit_bonus_pct=0.25,
-            max_entry_count_delta=-1,
+            max_entry_count_delta=-99,
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "TRENDING": RegimePolicy(
             pause_new_entry=False,
@@ -216,11 +222,12 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=0.85,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=1,
+            partial_take_profit_ratio_multiplier=0.8,
         ),
         "BREAKOUT_ATTEMPT": RegimePolicy(
             pause_new_entry=False,
             require_strong_signal=True,
-            require_fresh_cross=False,
+            require_fresh_cross=True,
             allow_dynamic_overweight=True,
             stop_loss_multiplier=1.0,
             take_profit_bonus_pct=0.0,
@@ -228,6 +235,7 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=0.9,
         ),
     }
     return policy_map.get(
@@ -243,6 +251,7 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
     )
 
@@ -261,6 +270,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.2,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=-99,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "OVERHEATED": RegimePolicy(
             pause_new_entry=True,
@@ -273,6 +283,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=0.75,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "EXHAUSTION_RISK": RegimePolicy(
             pause_new_entry=True,
@@ -285,6 +296,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=0.9,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "CHOPPY": RegimePolicy(
             pause_new_entry=False,
@@ -297,6 +309,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.1,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=-1,
+            partial_take_profit_ratio_multiplier=1.0,
         ),
         "TRENDING": RegimePolicy(
             pause_new_entry=False,
@@ -309,6 +322,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=0.85,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=1,
+            partial_take_profit_ratio_multiplier=0.8,
         ),
         "BREAKOUT_ATTEMPT": RegimePolicy(
             pause_new_entry=False,
@@ -321,6 +335,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             min_atr_multiplier=1.0,
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=0.9,
         ),
     }
     return policy_map.get(regime or "", get_alt_regime_policy(regime))

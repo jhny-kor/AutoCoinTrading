@@ -37,6 +37,7 @@
   - 현재 적용 핵심값:
     - `BTC_TREND_MIN_EMA_SPREAD_PCT_MAP=BTC/USDT:0.030,BTC/KRW:0.030`
     - `BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP=BTC/USDT:2.00,BTC/KRW:2.00`
+    - `BTC_TREND_REGIME_POSITION_SCALE_MAP=TRENDING:1.10,BREAKOUT_ATTEMPT:0.90,CHOPPY:0.50,LOW_ENERGY:0.00,OVERHEATED:0.30,EXHAUSTION_RISK:0.00`
     - `BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC=900`
     - `BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO=0.4`
     - `BTC_TREND_TAKE_PROFIT_ATR_MULTIPLE=1.8`
@@ -59,9 +60,11 @@
     - `ETH/KRW` 최소 거래량 배수 `1.05`
     - `XRP/KRW` 순익 보호 최소 순익률 `0.16`
     - `XRP/USDT` 순익 보호 최소 순익률 `0.18`
+    - `STRATEGY_REGIME_POSITION_SCALE_MAP=TRENDING:1.00,BREAKOUT_ATTEMPT:0.80,CHOPPY:0.40,LOW_ENERGY:0.00,OVERHEATED:0.20,EXHAUSTION_RISK:0.00`
   - 현재 해석:
     - `ETH/USDT`, `ETH/KRW` 는 최근 손절이 잦아 진입 품질을 먼저 높이는 쪽으로 조정
     - `XRP/KRW`, `XRP/USDT` 는 수익은 나지만 보호 청산이 빨라 러너를 덜 먹는 구간이 보여 순익 보호를 조금 늦춤
+    - 레짐별 포지션 비중 1차 적용으로 상승장/횡보장/저에너지장에 따라 진입 크기도 다르게 조절
 
 장타/스윙 전용 구조와 초기 전략안은 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 에 정리합니다.
 
@@ -232,6 +235,31 @@ BTC를 볼 때 핵심 질문
   입니다.
 - 이 단계는 현재 캐시 적용 후에도 `api_latency_ms` 나 429 빈도가 체감상 크게 안 줄 때 진행합니다.
 - 상세 설계안은 [docs/UPBIT_WEBSOCKET_TRANSITION_PLAN.md](/Users/plo/Documents/auto_coin_bot/docs/UPBIT_WEBSOCKET_TRANSITION_PLAN.md)에 따로 정리합니다.
+
+### 5단계. 레짐별 포지션 비중 2차 설계
+
+- 1차는 레짐별 `포지션 크기만` 조절합니다.
+- 2차는 아래 확장을 검토합니다.
+  - `TRENDING`에서 부분익절 비율 축소
+  - `CHOPPY`에서 추가매수 비활성화
+  - `LOW_ENERGY`에서 신규 진입 0 유지 + 보유 포지션만 관리
+  - `BREAKOUT_ATTEMPT`에서 fresh cross 요구 강화
+  - `OVERHEATED`에서 포지션 0.1~0.2x 유지 + 익절 빠르게
+- 2차 설계 목표
+  - 레짐별 진입 크기뿐 아니라 `익절/손절/추가매수 정책`도 분리
+  - 동일 레짐이어도 `BTC`와 `알트`를 다르게 처리
+  - 필요 시 심볼별 레짐 스케일 override 도입
+
+2차 설계 후보 예시:
+
+| 구분 | 1차 현재값 | 2차 후보 |
+| --- | --- | --- |
+| 알트 `TRENDING` | `1.00x` | `1.00x` 유지 + 부분익절 비율 축소 |
+| 알트 `BREAKOUT_ATTEMPT` | `0.80x` | `0.70x` + fresh signal 요구 강화 |
+| 알트 `CHOPPY` | `0.40x` | `0.25x` + 추가매수 비활성화 |
+| BTC `TRENDING` | `1.10x` | `1.10x` 유지 + 러너 보유 우대 |
+| BTC `BREAKOUT_ATTEMPT` | `0.90x` | `0.80x` + 진입 확인 루프 강화 |
+| BTC `CHOPPY` | `0.50x` | `0.30x` + trend_follow 축소 |
 
 ## BTC가 초기에 잘 안 거래되던 이유 (과거 메모, 날짜 미기록)
 

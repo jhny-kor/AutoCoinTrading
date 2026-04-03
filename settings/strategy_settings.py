@@ -1,5 +1,6 @@
 """
 수정 요약
+- 알트 전략에 레짐별 포지션 비중 스케일 설정을 추가해 상승장/횡보장/저에너지장에 따라 진입 크기를 다르게 조절할 수 있게 확장
 - 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 알트 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장
 - 2차 강화용으로 진입 상태 머신, BTC 상관관계 가드, 체결률 품질 가드 설정을 추가했다.
 - 알트 공통 전략에 RSI, MACD, 기울기, 신호 스코어 설정을 추가해 진입 품질을 더 세밀하게 조정할 수 있게 확장
@@ -78,6 +79,8 @@ class StrategySettings:
     min_volume_ratio: float
     min_volume_ratio_map: dict[str, float]
     position_ratio_map: dict[str, float]
+    enable_regime_position_scaling: bool
+    regime_position_scale_map: dict[str, float]
     enable_volatility_filter: bool
     volatility_lookback: int
     min_volatility_pct: float
@@ -136,6 +139,14 @@ class StrategySettings:
     def get_min_order_amount(self, symbol: str) -> float:
         """심볼별 최소 주문 수량 오버라이드가 있으면 그 값을, 없으면 0을 반환한다."""
         return self.min_order_amount_map.get(symbol, 0.0)
+
+    def get_regime_position_scale(self, regime: str | None) -> float:
+        """레짐별 포지션 비중 스케일을 반환한다."""
+        if not self.enable_regime_position_scaling:
+            return 1.0
+        if not regime:
+            return 1.0
+        return self.regime_position_scale_map.get(regime, 1.0)
 
     def get_break_even_guard_min_mfe_pct(self, symbol: str) -> float:
         """심볼별 브레이크이븐 가드 최소 MFE 기준을 반환한다."""
@@ -359,6 +370,16 @@ def load_strategy_settings(
         ),
         position_ratio_map=parse_symbol_float_map(
             os.getenv("STRATEGY_POSITION_RATIO_MAP", "")
+        ),
+        enable_regime_position_scaling=parse_bool(
+            os.getenv("STRATEGY_ENABLE_REGIME_POSITION_SCALING", "true"),
+            default=True,
+        ),
+        regime_position_scale_map=parse_symbol_float_map(
+            os.getenv(
+                "STRATEGY_REGIME_POSITION_SCALE_MAP",
+                "TRENDING:1.00,BREAKOUT_ATTEMPT:0.80,CHOPPY:0.40,LOW_ENERGY:0.00,OVERHEATED:0.20,EXHAUSTION_RISK:0.00",
+            )
         ),
         enable_volatility_filter=parse_bool(
             os.getenv("STRATEGY_ENABLE_VOLATILITY_FILTER", "true"),

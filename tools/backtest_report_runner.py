@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 1분봉 배치 백테스트는 가능하면 웹소켓 수집기의 로컬 1분봉 파일을 우선 사용하도록 보강해 공개 API 의존을 줄였다.
+- since 시점 이전 실거래 포지션을 백테스트 초기 상태로 주입하는 position-aware 비교를 추가해 carry-over 포지션이 있는 구간도 더 공정하게 비교하도록 확장
 - 배치 실행 전 오래된 로그 압축/잔재 폴더 정리를 먼저 수행해 7일 초과 structured 로그 폴더가 자동으로 정리되도록 연결
 - snapshot 도 기간에 맞춰 fetch 범위를 자동 확장할 수 있도록 보강해 기준선 스냅샷과 주간 배치의 비교 조건을 맞추도록 개선
 - weekly 기본 fetch 범위를 타임프레임과 일수에 맞춰 자동 확장하고, 배치 요약에 실제 데이터 커버 구간과 표본 부족 상태 플래그를 함께 남기도록 보강
@@ -26,6 +28,8 @@ from typing import Any
 
 from analysis_log_collector import create_okx_public_client, create_upbit_public_client
 from backtest_replay import (
+    AltReplayInitialState,
+    BtcReplayInitialState,
     build_output_dir,
     load_candles,
     parse_timeframe_to_minutes,
@@ -40,6 +44,10 @@ from backtest_replay import (
 )
 from compare_backtest_to_live import build_comparison_payload, save_comparison_payload
 from log_archive_manager import run_archive_maintenance
+from state_recovery import (
+    load_program_daily_realized_pnl_quote_as_of,
+    restore_program_position_states_as_of,
+)
 from strategy_settings import load_managed_symbols
 
 
@@ -73,9 +81,51 @@ def fetch_symbol_ohlcv(
     limit: int,
 ) -> list[list[float]]:
     """공개 거래소에서 심볼별 OHLCV 를 가져온다."""
+    if exchange_name.lower() == "upbit" and timeframe.strip().lower() == "1m":
+        local_rows = load_local_upbit_ws_ohlcv(symbol=symbol, limit=limit)
+        if local_rows:
+            return local_rows
     if exchange_name.lower() == "okx":
         return fetch_okx_ohlcv_paginated(symbol=symbol, timeframe=timeframe, limit=limit)
     return fetch_upbit_ohlcv_paginated(symbol=symbol, timeframe=timeframe, limit=limit)
+
+
+def load_local_upbit_ws_ohlcv(*, symbol: str, limit: int) -> list[list[float]]:
+    """업비트 웹소켓 수집기가 저장한 로컬 1분봉을 읽는다."""
+    path = Path("logs/runtime/upbit_ws/candles_1m") / f"{sanitize_symbol(symbol)}.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    rows: list[list[float]] = []
+    for line in lines[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        candle_time = str(payload.get("candle_date_time_kst", "") or "")
+        if not candle_time:
+            continue
+        try:
+            timestamp_ms = int(datetime.fromisoformat(f"{candle_time}+09:00").timestamp() * 1000)
+        except ValueError:
+            continue
+        try:
+            rows.append(
+                [
+                    timestamp_ms,
+                    float(payload["opening_price"]),
+                    float(payload["high_price"]),
+                    float(payload["low_price"]),
+                    float(payload["trade_price"]),
+                    float(payload["candle_acc_trade_volume"]),
+                ]
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return rows
 
 
 def fetch_okx_ohlcv_paginated(*, symbol: str, timeframe: str, limit: int) -> list[list[float]]:
@@ -245,6 +295,69 @@ def run_single_backtest(
         data_end = datetime.fromtimestamp(rows[-1][0] / 1000).astimezone().isoformat()
         covered_days = max(0.0, (rows[-1][0] - rows[0][0]) / 1000 / 60 / 60 / 24)
     initial_cash = infer_initial_cash(symbol)
+    start_timestamp_ms = None
+    alt_initial_state = None
+    btc_initial_state = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(f"{since}T00:00:00+09:00")
+            start_timestamp_ms = int(since_dt.timestamp() * 1000)
+            program_name = {
+                ("alt", "okx"): "ma_crossover_bot",
+                ("alt", "upbit"): "upbit_ma_crossover_bot",
+                ("btc", "okx"): "okx_btc_ema_trend_bot",
+                ("btc", "upbit"): "upbit_btc_ema_trend_bot",
+            }.get((strategy_type, exchange_name.lower()))
+            if program_name:
+                recovered = restore_program_position_states_as_of(
+                    program_name=program_name,
+                    as_of_ts=since_dt.timestamp(),
+                    symbols=[symbol],
+                ).get(symbol)
+                daily_realized_pnl_quote = load_program_daily_realized_pnl_quote_as_of(
+                    program_name=program_name,
+                    target_date=since_dt.date(),
+                    as_of_ts=since_dt.timestamp(),
+                )
+                if recovered is not None and recovered.remaining_amount > 0:
+                    estimated_cash_quote = max(0.0, initial_cash - recovered.cost_basis_quote)
+                    if strategy_type == "alt":
+                        alt_initial_state = AltReplayInitialState(
+                            cash_quote=estimated_cash_quote,
+                            units=recovered.remaining_amount,
+                            average_entry_price=recovered.average_entry_price,
+                            entry_count=recovered.cycle_buy_count,
+                            highest_price_since_entry=recovered.highest_price_since_entry,
+                            lowest_price_since_entry=recovered.lowest_price_since_entry,
+                            partial_take_profit_done=recovered.partial_take_profit_done,
+                            partial_stop_loss_done=recovered.partial_stop_loss_done,
+                            last_trade_ts=recovered.last_trade_at_ts * 1000,
+                            last_partial_take_profit_ts=recovered.last_partial_take_profit_at_ts * 1000,
+                            daily_realized_pnl_quote=daily_realized_pnl_quote,
+                        )
+                    else:
+                        btc_initial_state = BtcReplayInitialState(
+                            cash_quote=estimated_cash_quote,
+                            units=recovered.remaining_amount,
+                            entry_price=recovered.average_entry_price,
+                            partial_take_profit_done=recovered.partial_take_profit_done,
+                            add_on_count=max(0, recovered.cycle_buy_count - 1),
+                            highest_price_since_entry=recovered.highest_price_since_entry,
+                            lowest_price_since_entry=recovered.lowest_price_since_entry,
+                            trailing_armed=recovered.trailing_armed,
+                            trailing_armed_at_ts=(
+                                recovered.trailing_armed_at_ts * 1000
+                                if recovered.trailing_armed_at_ts is not None
+                                else None
+                            ),
+                            trailing_activation_price=recovered.trailing_activation_price,
+                            last_trade_ts=recovered.last_trade_at_ts * 1000,
+                            last_stop_loss_ts=recovered.last_stop_loss_at_ts * 1000,
+                            last_profit_exit_ts=recovered.last_profit_exit_at_ts * 1000,
+                            daily_realized_pnl_quote=daily_realized_pnl_quote,
+                        )
+        except ValueError:
+            start_timestamp_ms = None
     fee_rate_pct = resolve_default_fee_rate(exchange_name)
     min_buy_order_value = resolve_default_min_buy_order_value(exchange_name)
     max_daily_loss_quote = resolve_default_max_daily_loss(exchange_name)
@@ -259,6 +372,8 @@ def run_single_backtest(
             risk_per_trade=risk_per_trade,
             min_buy_order_value=min_buy_order_value,
             max_daily_loss_quote=max_daily_loss_quote,
+            initial_state=alt_initial_state,
+            start_timestamp_ms=start_timestamp_ms,
         )
     else:
         summary, trades, equity_curve = simulate_btc_strategy(
@@ -271,6 +386,8 @@ def run_single_backtest(
             risk_per_trade=risk_per_trade,
             min_buy_order_value=min_buy_order_value,
             max_daily_loss_quote=max_daily_loss_quote,
+            initial_state=btc_initial_state,
+            start_timestamp_ms=start_timestamp_ms,
         )
 
     result_dir = batch_root / "results" / f"{strategy_type}__{exchange_name}__{sanitize_symbol(symbol)}"
@@ -316,6 +433,7 @@ def run_single_backtest(
         "data_end": data_end,
         "covered_days": covered_days,
         "expected_days": expected_days,
+        "position_aware": bool(alt_initial_state or btc_initial_state),
         "flags": flags,
         "summary": summary,
         "comparison": comparison_payload,

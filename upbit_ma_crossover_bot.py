@@ -1,5 +1,6 @@
 """
 수정 요약
+- 무포지션 경로에서도 순손익 관련 지역변수가 항상 초기화되도록 helper 를 추가해 UnboundLocalError 재발을 막고 회귀 테스트 기준을 맞췄다.
 - 업비트 알트 상위 타임프레임 5분봉도 웹소켓 1분봉 리샘플 우선, stale 시 REST fallback 으로 바꿔 REST 캔들 호출을 더 줄이도록 확장했다.
 - 업비트 1분봉 조회를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 바꿔 phase 3 전환을 시작했다.
 - 업비트 best bid 조회를 웹소켓 latest 스냅샷 우선, stale 시 REST fallback 으로 바꿔 phase 2 전환을 시작했다.
@@ -85,6 +86,7 @@ from core.logging.metrics import build_alt_common_metrics
 from core.positions.lifecycle import clear_alt_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_alt_allocation
+from core.risk.allocation import apply_regime_position_scale
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
@@ -235,6 +237,17 @@ def calc_sma(prices, period: int) -> float:
         raise ValueError("가격 데이터가 이동평균 기간보다 적습니다.")
     window = prices[-period:]
     return sum(window) / len(window)
+
+
+def build_empty_position_runtime_metrics() -> dict[str, float | None]:
+    """무포지션 경로에서 참조할 기본 포지션 지표를 반환한다."""
+    return {
+        "pnl_pct": None,
+        "mfe_pct": None,
+        "mae_pct": None,
+        "current_net_realized_pnl_quote": None,
+        "current_net_realized_pnl_pct": None,
+    }
 
 
 def detect_crossover(
@@ -624,6 +637,7 @@ def run_bot():
                     not has_position and regime_policy.pause_new_entry
                 )
                 symbol_regime_requires_strong_signal = regime_policy.require_strong_signal
+                symbol_regime_requires_fresh_cross = regime_policy.require_fresh_cross
                 should_alert, previous_regime = update_regime_state(
                     exchange_name="upbit",
                     symbol=symbol,
@@ -803,6 +817,7 @@ def run_bot():
                     and not low_energy_guard_active
                     and not correlation_entry_blocked
                     and not fill_quality_entry_blocked
+                    and (not symbol_regime_requires_fresh_cross or bullish)
                 )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
                 entry_timing_snapshot = update_entry_timing_state(
@@ -918,9 +933,12 @@ def run_bot():
                         f"{strategy.averaging_down_gap_pct}% 이상 낮지 않습니다."
                     )
 
-                pnl_pct = None
-                mfe_pct = None
-                mae_pct = None
+                position_runtime_metrics = build_empty_position_runtime_metrics()
+                pnl_pct = position_runtime_metrics["pnl_pct"]
+                mfe_pct = position_runtime_metrics["mfe_pct"]
+                mae_pct = position_runtime_metrics["mae_pct"]
+                current_net_realized_pnl_quote = position_runtime_metrics["current_net_realized_pnl_quote"]
+                current_net_realized_pnl_pct = position_runtime_metrics["current_net_realized_pnl_pct"]
                 if has_position and avg_entry_price:
                     position_metrics = compute_alt_position_metrics(
                         has_position=has_position,
@@ -959,6 +977,11 @@ def run_bot():
                 partial_take_profit_pending = (
                     partial_take_profit_enabled
                     and not partial_take_profit_done.get(symbol, False)
+                )
+                effective_partial_take_profit_ratio = min(
+                    1.0,
+                    strategy.partial_take_profit_ratio
+                    * regime_policy.partial_take_profit_ratio_multiplier,
                 )
                 partial_stop_loss_pending = (
                     partial_stop_loss_enabled
@@ -1050,11 +1073,19 @@ def run_bot():
                         f"[{symbol}] 손절 조건 충족: 현재 수익률 {pnl_pct:.2f}% <= -{stop_loss_pct:.2f}%"
                     )
 
-                position_ratio = strategy.get_position_ratio(
+                base_position_ratio = strategy.get_position_ratio(
                     symbol,
                     config["risk_per_trade"],
                 )
-                log(f"[{symbol}] 적용 매수 비중: {position_ratio:.4f}")
+                regime_position_scale = strategy.get_regime_position_scale(symbol_regime)
+                position_ratio = apply_regime_position_scale(
+                    base_position_ratio=base_position_ratio,
+                    regime_scale=regime_position_scale,
+                )
+                log(
+                    f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
+                    f"레짐 스케일 {regime_position_scale:.2f}x | 최종 {position_ratio:.4f}"
+                )
                 dynamic_bonus_eligible = is_dynamic_bonus_eligible(
                     has_position=has_position,
                     base_signal=bullish,
@@ -1163,9 +1194,14 @@ def run_bot():
                     symbol_regime=symbol_regime,
                     symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                     symbol_regime_requires_strong_signal=symbol_regime_requires_strong_signal,
+                    symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
+                    regime_position_scale=regime_position_scale,
+                    base_position_ratio=base_position_ratio,
+                    effective_position_ratio=position_ratio,
                     regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
                     regime_stop_loss_multiplier=regime_policy.stop_loss_multiplier,
                     regime_take_profit_bonus_pct=regime_policy.take_profit_bonus_pct,
+                    regime_partial_take_profit_ratio_multiplier=regime_policy.partial_take_profit_ratio_multiplier,
                     partial_take_profit_cooldown_active=partial_take_profit_cooldown_active,
                     partial_take_profit_cooldown_remaining_sec=partial_take_profit_cooldown_remaining,
                     partial_take_profit_pending=partial_take_profit_pending,
@@ -1554,7 +1590,7 @@ def run_bot():
                         exit_reason_key = "break_even_guard_take_profit"
                         sell_reason = "브레이크이븐보호익절"
                     elif partial_take_profit_pending:
-                        sell_ratio = strategy.partial_take_profit_ratio
+                        sell_ratio = effective_partial_take_profit_ratio
                         exit_reason_key = "partial_take_profit"
                         sell_reason = "부분익절"
 

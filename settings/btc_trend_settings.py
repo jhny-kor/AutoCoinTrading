@@ -1,6 +1,7 @@
 """
 BTC 전용 EMA 추세추종 설정 로더
 
+- 레짐별 포지션 비중 스케일 설정을 추가해 BTC도 상승장/횡보장/저에너지장에 따라 진입 크기를 다르게 조절할 수 있게 확장했다.
 - 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장했다.
 - 2차 강화용으로 진입 상태 머신과 체결률 품질 가드 설정을 추가했다.
 - BTC 전용 전략에 RSI, 볼린저 밴드 폭, EMA 기울기 필터와 신호 스코어 기준을 추가해 진입 품질을 강화했다.
@@ -92,6 +93,8 @@ class BtcTrendSettings:
     choppy_min_volume_ratio_map: dict[str, float]
     position_ratio: float
     position_ratio_map: dict[str, float]
+    enable_regime_position_scaling: bool
+    regime_position_scale_map: dict[str, float]
     min_order_amount: float
     min_trade_interval_sec: int
     stop_loss_reentry_cooldown_sec: int
@@ -126,6 +129,14 @@ class BtcTrendSettings:
     def get_min_atr_pct(self, symbol: str) -> float:
         """심볼별 최소 ATR 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.min_atr_pct_map.get(symbol, self.min_atr_pct)
+
+    def get_regime_position_scale(self, regime: str | None) -> float:
+        """레짐별 포지션 비중 스케일을 반환한다."""
+        if not self.enable_regime_position_scaling:
+            return 1.0
+        if not regime:
+            return 1.0
+        return self.regime_position_scale_map.get(regime, 1.0)
 
     def get_effective_min_volume_ratio(
         self, symbol: str, regime: str | None = None
@@ -257,6 +268,16 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         position_ratio=float(os.getenv("BTC_TREND_POSITION_RATIO", "0.25")),
         position_ratio_map=parse_symbol_float_map(
             os.getenv("BTC_TREND_POSITION_RATIO_MAP", "")
+        ),
+        enable_regime_position_scaling=parse_bool(
+            os.getenv("BTC_TREND_ENABLE_REGIME_POSITION_SCALING", "true"),
+            default=True,
+        ),
+        regime_position_scale_map=parse_symbol_float_map(
+            os.getenv(
+                "BTC_TREND_REGIME_POSITION_SCALE_MAP",
+                "TRENDING:1.10,BREAKOUT_ATTEMPT:0.90,CHOPPY:0.50,LOW_ENERGY:0.00,OVERHEATED:0.30,EXHAUSTION_RISK:0.00",
+            )
         ),
         min_order_amount=float(os.getenv("BTC_TREND_MIN_ORDER_AMOUNT", "0.00001")),
         min_trade_interval_sec=int(os.getenv("BTC_TREND_MIN_TRADE_INTERVAL_SEC", "300")),

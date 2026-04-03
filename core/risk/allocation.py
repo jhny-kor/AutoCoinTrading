@@ -1,10 +1,23 @@
 """
-작업 요약
+수정 요약
+- 레짐별 포지션 스케일을 적용하되 최소 0, 최대 1.2 범위로 제한하는 공통 helper 를 추가했다.
 - 알트/BTC 신규 진입과 추가매수의 포트폴리오 배분 호출을 공통 래퍼로 분리했다.
 - 배분 계산 호출 방식이 봇마다 갈라지지 않도록 정리했다.
 """
 
 from __future__ import annotations
+
+
+def apply_regime_position_scale(
+    *,
+    base_position_ratio: float,
+    regime_scale: float,
+    min_ratio: float = 0.0,
+    max_ratio: float = 1.2,
+) -> float:
+    """기본 포지션 비중에 레짐 스케일을 적용하고 안전 범위로 제한한다."""
+    scaled = base_position_ratio * regime_scale
+    return max(min_ratio, min(max_ratio, scaled))
 
 
 def build_alt_allocation(

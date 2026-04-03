@@ -1,5 +1,6 @@
 """
 수정 요약
+- 기준 시각 이전까지의 체결만 반영한 포지션 복구와 당일 실현 손익 복구를 지원해 position-aware 백테스트 비교에 사용할 수 있도록 확장
 - trade_history.jsonl 기반으로 프로그램별 포지션 상태를 복구하는 공통 모듈을 추가
 - 평균 진입가, 남은 수량, 분할 진입 카운트, 부분 익절/부분 손절 플래그, 최근 거래 시각을 함께 복구하도록 확장
 - 프로그램별 당일 실현 손익을 trade_history 기준으로 다시 계산하는 helper 를 추가
@@ -108,6 +109,19 @@ def restore_program_position_states(
     symbols: list[str] | None = None,
 ) -> dict[str, RecoveredPositionState]:
     """체결 이력을 읽어 프로그램의 현재 포지션 상태를 복구한다."""
+    return restore_program_position_states_as_of(
+        program_name=program_name,
+        as_of_ts=None,
+        symbols=symbols,
+    )
+
+
+def restore_program_position_states_as_of(
+    program_name: str,
+    as_of_ts: float | None,
+    symbols: list[str] | None = None,
+) -> dict[str, RecoveredPositionState]:
+    """기준 시각 이전 체결만 반영한 프로그램의 현재 포지션 상태를 복구한다."""
     target_symbols = set(symbols or [])
     states: dict[str, dict[str, Any]] = {}
 
@@ -115,6 +129,7 @@ def restore_program_position_states(
         record
         for record in read_trade_history()
         if str(record.get("program_name", "")) == program_name
+        and (as_of_ts is None or (_recorded_timestamp(record) or 0.0) < as_of_ts)
     ]
     records.sort(
         key=lambda record: (
@@ -318,6 +333,19 @@ def load_program_daily_realized_pnl_quote(
     target_date: date | None = None,
 ) -> float:
     """프로그램의 당일 실현 손익을 trade_history 기준으로 다시 계산한다."""
+    return load_program_daily_realized_pnl_quote_as_of(
+        program_name=program_name,
+        target_date=target_date,
+        as_of_ts=None,
+    )
+
+
+def load_program_daily_realized_pnl_quote_as_of(
+    program_name: str,
+    target_date: date | None = None,
+    as_of_ts: float | None = None,
+) -> float:
+    """프로그램의 기준 시각 이전 당일 실현 손익을 trade_history 기준으로 계산한다."""
     today = target_date or datetime.now().date()
     total = 0.0
     for record in read_trade_history():
@@ -327,6 +355,9 @@ def load_program_daily_realized_pnl_quote(
             continue
         recorded_date = _recorded_date(record)
         if recorded_date != today:
+            continue
+        recorded_ts = _recorded_timestamp(record) or 0.0
+        if as_of_ts is not None and recorded_ts >= as_of_ts:
             continue
         pnl_value = _to_float(record.get("net_realized_pnl_quote"))
         if pnl_value is None:

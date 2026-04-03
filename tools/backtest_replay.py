@@ -1,5 +1,6 @@
 """
 수정 요약
+- 기준 시각 이전 실거래 포지션을 초기 상태로 주입할 수 있게 position-aware 리플레이 초기 상태를 추가해 실거래 비교 정확도를 높이도록 확장
 - 실거래와의 차이를 줄이기 위해 알트/BTC 리플레이도 공통 신호 계산, 레짐 정책, 노이즈 비율, 진입 상태 머신을 반영하도록 확장
 - 혼합 청산 세트를 위해 알트 리플레이도 심볼별 순익 보호 익절 기준 map 을 읽도록 확장
 - 로컬 OHLCV 파일과 공개 거래소 시세를 이용해 전략을 오프라인으로 재생하는 백테스트/리플레이 CLI 를 추가
@@ -106,6 +107,43 @@ class EquityPoint:
     cash_quote: float
     position_amount: float
     close: float
+
+
+@dataclass(frozen=True)
+class AltReplayInitialState:
+    """알트 리플레이 시작 시 주입할 초기 포지션 상태."""
+
+    cash_quote: float
+    units: float
+    average_entry_price: float | None
+    entry_count: int
+    highest_price_since_entry: float | None
+    lowest_price_since_entry: float | None
+    partial_take_profit_done: bool
+    partial_stop_loss_done: bool
+    last_trade_ts: float
+    last_partial_take_profit_ts: float
+    daily_realized_pnl_quote: float
+
+
+@dataclass(frozen=True)
+class BtcReplayInitialState:
+    """BTC 리플레이 시작 시 주입할 초기 포지션 상태."""
+
+    cash_quote: float
+    units: float
+    entry_price: float | None
+    partial_take_profit_done: bool
+    add_on_count: int
+    highest_price_since_entry: float | None
+    lowest_price_since_entry: float | None
+    trailing_armed: bool
+    trailing_armed_at_ts: float | None
+    trailing_activation_price: float | None
+    last_trade_ts: float
+    last_stop_loss_ts: float
+    last_profit_exit_ts: float
+    daily_realized_pnl_quote: float
 
 
 def parse_bool(raw: str | None, default: bool = False) -> bool:
@@ -547,6 +585,8 @@ def simulate_alt_strategy(
     risk_per_trade: float,
     min_buy_order_value: float,
     max_daily_loss_quote: float,
+    initial_state: AltReplayInitialState | None = None,
+    start_timestamp_ms: int | None = None,
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
     """공통 알트 MA 전략을 오프라인으로 재생한다."""
     strategy = load_strategy_settings(
@@ -565,18 +605,34 @@ def simulate_alt_strategy(
         else []
     )
 
-    cash = initial_cash
-    units = 0.0
-    avg_entry_price: float | None = None
-    entry_count = 0
-    highest_price_since_entry: float | None = None
-    lowest_price_since_entry: float | None = None
-    partial_take_profit_done = False
-    partial_stop_loss_done = False
-    last_trade_ts = 0
-    last_partial_take_profit_ts = 0
-    daily_realized_pnl_quote = 0.0
-    daily_pnl_date: str | None = None
+    cash = initial_state.cash_quote if initial_state is not None else initial_cash
+    units = initial_state.units if initial_state is not None else 0.0
+    avg_entry_price: float | None = (
+        initial_state.average_entry_price if initial_state is not None else None
+    )
+    entry_count = initial_state.entry_count if initial_state is not None else 0
+    highest_price_since_entry: float | None = (
+        initial_state.highest_price_since_entry if initial_state is not None else None
+    )
+    lowest_price_since_entry: float | None = (
+        initial_state.lowest_price_since_entry if initial_state is not None else None
+    )
+    partial_take_profit_done = (
+        initial_state.partial_take_profit_done if initial_state is not None else False
+    )
+    partial_stop_loss_done = (
+        initial_state.partial_stop_loss_done if initial_state is not None else False
+    )
+    last_trade_ts = initial_state.last_trade_ts if initial_state is not None else 0
+    last_partial_take_profit_ts = (
+        initial_state.last_partial_take_profit_ts if initial_state is not None else 0
+    )
+    daily_realized_pnl_quote = (
+        initial_state.daily_realized_pnl_quote if initial_state is not None else 0.0
+    )
+    daily_pnl_date: str | None = (
+        local_date_key(start_timestamp_ms) if start_timestamp_ms is not None else None
+    )
     trade_records: list[TradeRecord] = []
     equity_curve: list[EquityPoint] = []
     entry_timing_state: dict[str, dict[str, int | str]] = {}
@@ -592,6 +648,8 @@ def simulate_alt_strategy(
     for index in range(min_required, len(candles)):
         window = candles[: index + 1]
         current = window[-1]
+        if start_timestamp_ms is not None and current.timestamp_ms < start_timestamp_ms:
+            continue
         current_date = local_date_key(current.timestamp_ms)
         if current_date != daily_pnl_date:
             daily_pnl_date = current_date
@@ -1056,6 +1114,8 @@ def simulate_btc_strategy(
     risk_per_trade: float,
     min_buy_order_value: float,
     max_daily_loss_quote: float,
+    initial_state: BtcReplayInitialState | None = None,
+    start_timestamp_ms: int | None = None,
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
     """BTC EMA 전략을 오프라인으로 재생한다."""
     settings = load_btc_trend_settings()
@@ -1067,19 +1127,35 @@ def simulate_btc_strategy(
     )
     confirm_timestamps = [candle.timestamp_ms for candle in confirm_candles]
 
-    cash = initial_cash
-    units = 0.0
-    entry_price: float | None = None
-    partial_take_profit_done = False
-    add_on_count = 0
-    highest_price_since_entry: float | None = None
-    lowest_price_since_entry: float | None = None
-    trailing_armed = False
-    last_trade_ts = 0
-    last_stop_loss_ts = 0
-    last_profit_exit_ts = 0
-    daily_realized_pnl_quote = 0.0
-    daily_pnl_date: str | None = None
+    cash = initial_state.cash_quote if initial_state is not None else initial_cash
+    units = initial_state.units if initial_state is not None else 0.0
+    entry_price: float | None = initial_state.entry_price if initial_state is not None else None
+    partial_take_profit_done = (
+        initial_state.partial_take_profit_done if initial_state is not None else False
+    )
+    add_on_count = initial_state.add_on_count if initial_state is not None else 0
+    highest_price_since_entry: float | None = (
+        initial_state.highest_price_since_entry if initial_state is not None else None
+    )
+    lowest_price_since_entry: float | None = (
+        initial_state.lowest_price_since_entry if initial_state is not None else None
+    )
+    trailing_armed = initial_state.trailing_armed if initial_state is not None else False
+    trailing_armed_at = (
+        initial_state.trailing_armed_at_ts if initial_state is not None else None
+    )
+    trailing_activation_price = (
+        initial_state.trailing_activation_price if initial_state is not None else None
+    )
+    last_trade_ts = initial_state.last_trade_ts if initial_state is not None else 0
+    last_stop_loss_ts = initial_state.last_stop_loss_ts if initial_state is not None else 0
+    last_profit_exit_ts = initial_state.last_profit_exit_ts if initial_state is not None else 0
+    daily_realized_pnl_quote = (
+        initial_state.daily_realized_pnl_quote if initial_state is not None else 0.0
+    )
+    daily_pnl_date: str | None = (
+        local_date_key(start_timestamp_ms) if start_timestamp_ms is not None else None
+    )
     trade_records: list[TradeRecord] = []
     equity_curve: list[EquityPoint] = []
     entry_timing_state: dict[str, dict[str, int | str]] = {}
@@ -1096,6 +1172,8 @@ def simulate_btc_strategy(
     for index in range(min_required, len(base_candles)):
         window = base_candles[: index + 1]
         current = window[-1]
+        if start_timestamp_ms is not None and current.timestamp_ms < start_timestamp_ms:
+            continue
         current_date = local_date_key(current.timestamp_ms)
         if current_date != daily_pnl_date:
             daily_pnl_date = current_date
@@ -1198,6 +1276,8 @@ def simulate_btc_strategy(
             highest_price_since_entry = None
             lowest_price_since_entry = None
             trailing_armed = False
+            trailing_armed_at = None
+            trailing_activation_price = None
             partial_take_profit_done = False
             add_on_count = 0
 

@@ -64,6 +64,7 @@ from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_btc_allocations
+from core.risk.allocation import apply_regime_position_scale
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.runtime.bootstrap import build_btc_runtime_state
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
@@ -530,6 +531,7 @@ def run_bot():
                 and not low_energy_guard_active
                 and not symbol_regime_blocks_entry
                 and not fill_quality_entry_blocked
+                and (not symbol_regime_requires_fresh_cross or bullish)
             )
             # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
             entry_timing_snapshot = update_entry_timing_state(
@@ -746,7 +748,17 @@ def run_bot():
             trailing_stop_triggered = bool(btc_exit_flags["trailing_stop_triggered"])
             profit_protect_triggered = bool(btc_exit_flags["profit_protect_triggered"])
             trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
-            position_ratio = settings.get_position_ratio(symbol)
+            base_position_ratio = settings.get_position_ratio(symbol)
+            regime_position_scale = settings.get_regime_position_scale(symbol_regime)
+            position_ratio = apply_regime_position_scale(
+                base_position_ratio=base_position_ratio,
+                regime_scale=regime_position_scale,
+            )
+            effective_partial_take_profit_ratio = min(
+                1.0,
+                settings.partial_take_profit_ratio
+                * regime_policy.partial_take_profit_ratio_multiplier,
+            )
             dynamic_bonus_eligible = is_dynamic_bonus_eligible(
                 has_position=has_position,
                 base_signal=entry_signal and ema_aligned and price_above_fast,
@@ -775,6 +787,10 @@ def run_bot():
                 position_ratio=position_ratio,
                 pyramid_position_ratio=settings.pyramid_position_ratio,
                 dynamic_bonus_eligible=dynamic_bonus_eligible,
+            )
+            log(
+                f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
+                f"레짐 스케일 {regime_position_scale:.2f}x | 최종 {position_ratio:.4f}"
             )
             order_value = allocation_decision.approved_order_value_quote
             add_on_order_value = add_on_allocation_decision.approved_order_value_quote
@@ -874,9 +890,13 @@ def run_bot():
                 symbol_regime=symbol_regime,
                 symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                 symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
+                regime_position_scale=regime_position_scale,
+                base_position_ratio=base_position_ratio,
+                effective_position_ratio=position_ratio,
                 regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
                 regime_min_atr_multiplier=regime_policy.min_atr_multiplier,
                 regime_trailing_drawdown_multiplier=regime_policy.trailing_drawdown_multiplier,
+                regime_partial_take_profit_ratio_multiplier=regime_policy.partial_take_profit_ratio_multiplier,
             )
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
@@ -1342,7 +1362,7 @@ def run_bot():
                     partial_amount = safe_amount_to_precision_okx(
                         exchange,
                         symbol,
-                        base_free * settings.partial_take_profit_ratio,
+                        base_free * effective_partial_take_profit_ratio,
                     )
                     remaining_after_partial = max(base_free - partial_amount, 0.0)
                     if (
@@ -1567,6 +1587,7 @@ def run_bot():
                             "partial_take_profit_triggered": partial_take_profit_triggered,
                             "partial_take_profit_full_exit": partial_take_profit_full_exit,
                             "partial_take_profit_ratio": settings.partial_take_profit_ratio,
+                            "effective_partial_take_profit_ratio": effective_partial_take_profit_ratio,
                             "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
                             "fee_protect_min_net_pnl_pct": settings.fee_protect_min_net_pnl_pct,
                             "profit_protect_triggered": profit_protect_triggered,
