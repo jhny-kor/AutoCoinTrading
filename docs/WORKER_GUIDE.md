@@ -46,7 +46,7 @@
 
 ### `settings/`
 
-- `.env.settings` / `.env.secrets` 를 실제 구조체로 읽는 본체입니다.
+- `config/runtime.toml` + override / secrets 레이어를 실제 구조체로 읽는 본체입니다.
 - 알트 공통 전략은 [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py), BTC 전략은 [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)에서 읽습니다.
 
 ### 전략 본체 파일
@@ -87,13 +87,13 @@
 ### 전략 수치 조정
 
 - 먼저 [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md), [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
-- 실제 값 반영: [`.env.settings.example`](/Users/plo/Documents/auto_coin_bot/.env.settings.example), [`.env.secrets.example`](/Users/plo/Documents/auto_coin_bot/.env.secrets.example), [`.env.settings`](/Users/plo/Documents/auto_coin_bot/.env.settings), [`.env.secrets`](/Users/plo/Documents/auto_coin_bot/.env.secrets)
+- 실제 값 반영: [config/runtime.example.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.example.toml), [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml), [`.env.secrets.example`](/Users/plo/Documents/auto_coin_bot/.env.secrets.example), [`.env.secrets`](/Users/plo/Documents/auto_coin_bot/.env.secrets)
 - 로더 확인: [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py), [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
 
 세부 순서:
 1. 최근 실거래와 백테스트 비교를 먼저 확인합니다.
 2. 바꿀 값이 알트 공통인지, BTC 전용인지 구분합니다.
-3. `.env.settings.example`, `.env.secrets.example` 와 실제 `.env.settings`, `.env.secrets` 를 같이 갱신합니다.
+3. `config/runtime.example.toml`, `.env.secrets.example` 와 실제 `config/runtime.toml`, `.env.secrets` 를 같이 갱신합니다.
 4. 로더가 해당 키를 실제로 읽는지 확인합니다.
 5. 변경 근거는 `docs/STRATEGY_DECISIONS.md`, 현재 운영 방향은 `docs/PLANS.md`에 남깁니다.
 
@@ -188,7 +188,7 @@
 
 ### 공통 체크
 
-- `.env.settings`, `.env.secrets` 와 각 example 파일 반영이 같이 되었는지 확인
+- `config/runtime.toml`, `.env.secrets` 와 각 example 파일 반영이 같이 되었는지 확인
 - 수정한 소스 최상단 `수정 요약` 주석을 갱신했는지 확인
 - 한글 설명 주석이 필요한 부분은 한글로 적었는지 확인
 - 문서 반영이 필요한지 확인
