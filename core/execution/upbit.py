@@ -1,6 +1,7 @@
 """
 수정 요약
-- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+- `config/runtime.toml` + env override 레이어를 중앙 환경 로더로 읽도록 정리
+- typed config access helper 를 사용해 업비트 설정 로딩의 문자열 파싱을 일관되게 정리
 - 업비트 myAsset latest 를 잔고 조회 우선 경로로 읽고 myOrder 최근 이벤트를 주문 응답 보강에 쓸 helper 를 추가했다.
 - 업비트 5분/15분 OHLCV 도 웹소켓 1분 캔들 리샘플 우선, stale 시 REST fallback 으로 읽게 확장했다.
 - 업비트 1분봉 OHLCV 를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 읽는 helper 를 추가해 phase 3 전환을 시작했다.
@@ -20,37 +21,36 @@ from typing import Tuple
 import ccxt
 
 from core.market_data.upbit_provider import UpbitMarketDataProvider
+from settings.config_access import env_bool, env_float, env_int, env_str
 from settings.env import load_project_env
 
 
 def load_upbit_config() -> dict:
     load_project_env()
 
-    api_key = os.getenv("UPBIT_API_KEY")
-    api_secret = os.getenv("UPBIT_API_SECRET")
+    api_key = env_str("UPBIT_API_KEY", required=True)
+    api_secret = env_str("UPBIT_API_SECRET", required=True)
 
     if not api_key or not api_secret:
         raise RuntimeError(
-            "UPBIT_API_KEY / UPBIT_API_SECRET 가 .env 에 설정되어 있지 않습니다."
+            "UPBIT_API_KEY / UPBIT_API_SECRET 가 secrets 레이어에 설정되어 있지 않습니다."
         )
 
-    risk_per_trade = float(os.getenv("UPBIT_TRADE_RISK_PER_TRADE", "0.05"))
-    fee_rate_pct = float(os.getenv("UPBIT_FEE_RATE_PCT", "0.05"))
-    max_daily_loss_quote = float(os.getenv("UPBIT_MAX_DAILY_LOSS_QUOTE", "5000"))
-    request_retry_count = int(os.getenv("UPBIT_REQUEST_RETRY_COUNT", "3"))
-    request_retry_delay_sec = float(os.getenv("UPBIT_REQUEST_RETRY_DELAY_SEC", "1.2"))
-    krw_order_buffer_pct = float(os.getenv("UPBIT_KRW_ORDER_BUFFER_PCT", "0.002"))
-    krw_order_buffer_krw = float(os.getenv("UPBIT_KRW_ORDER_BUFFER_KRW", "1000"))
-    request_timeout_ms = int(os.getenv("UPBIT_REQUEST_TIMEOUT_MS", "10000"))
-    balance_cache_ttl_sec = float(os.getenv("UPBIT_BALANCE_CACHE_TTL_SEC", "1.0"))
-    orderbook_cache_ttl_sec = float(os.getenv("UPBIT_ORDERBOOK_CACHE_TTL_SEC", "0.8"))
-    best_bid_refresh_buffer_pct = float(
-        os.getenv("UPBIT_BEST_BID_REFRESH_BUFFER_PCT", "0.30")
-    )
-    ws_provider_enabled = parse_bool(os.getenv("UPBIT_WS_PROVIDER_ENABLED", "true"))
-    ws_provider_root_dir = os.getenv("UPBIT_WS_PROVIDER_ROOT_DIR", "logs/runtime/upbit_ws").strip()
-    ws_provider_cache_ttl_sec = float(os.getenv("UPBIT_WS_PROVIDER_CACHE_TTL_SEC", "0.25"))
-    ws_provider_stale_sec = float(os.getenv("UPBIT_WS_PROVIDER_STALE_SEC", "5.0"))
+    risk_per_trade = env_float("UPBIT_TRADE_RISK_PER_TRADE", 0.05)
+    fee_rate_pct = env_float("UPBIT_FEE_RATE_PCT", 0.05)
+    max_daily_loss_quote = env_float("UPBIT_MAX_DAILY_LOSS_QUOTE", 5000)
+    request_retry_count = env_int("UPBIT_REQUEST_RETRY_COUNT", 3)
+    request_retry_delay_sec = env_float("UPBIT_REQUEST_RETRY_DELAY_SEC", 1.2)
+    krw_order_buffer_pct = env_float("UPBIT_KRW_ORDER_BUFFER_PCT", 0.002)
+    krw_order_buffer_krw = env_float("UPBIT_KRW_ORDER_BUFFER_KRW", 1000)
+    request_timeout_ms = env_int("UPBIT_REQUEST_TIMEOUT_MS", 10000)
+    balance_cache_ttl_sec = env_float("UPBIT_BALANCE_CACHE_TTL_SEC", 1.0)
+    orderbook_cache_ttl_sec = env_float("UPBIT_ORDERBOOK_CACHE_TTL_SEC", 0.8)
+    best_bid_refresh_buffer_pct = env_float("UPBIT_BEST_BID_REFRESH_BUFFER_PCT", 0.30)
+    ws_provider_enabled = env_bool("UPBIT_WS_PROVIDER_ENABLED", True)
+    ws_provider_root_dir = env_str("UPBIT_WS_PROVIDER_ROOT_DIR", "logs/runtime/upbit_ws").strip()
+    ws_provider_cache_ttl_sec = env_float("UPBIT_WS_PROVIDER_CACHE_TTL_SEC", 0.25)
+    ws_provider_stale_sec = env_float("UPBIT_WS_PROVIDER_STALE_SEC", 5.0)
 
     return {
         "api_key": api_key,

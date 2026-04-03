@@ -1,6 +1,7 @@
 """
 작업 요약
-- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+- `config/runtime.toml` + env override 레이어를 중앙 환경 로더로 읽도록 정리
+- typed config access helper 를 사용해 OKX 설정 로딩의 문자열 파싱을 일관되게 정리
 - OKX 설정 로드, 조회 재시도, 잔고 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
 - 알트/BTC 봇이 같은 OKX 실행 경로를 재사용하도록 정리했다.
 """
@@ -12,28 +13,29 @@ import time
 from typing import Tuple
 
 import ccxt
+from settings.config_access import env_bool, env_float, env_int, env_str
 from settings.env import load_project_env
 
 
 def load_okx_config() -> dict:
     load_project_env()
 
-    api_key = os.getenv("OKX_API_KEY")
-    api_secret = os.getenv("OKX_API_SECRET")
-    api_passphrase = os.getenv("OKX_API_PASSPHRASE")
+    api_key = env_str("OKX_API_KEY", required=True)
+    api_secret = env_str("OKX_API_SECRET", required=True)
+    api_passphrase = env_str("OKX_API_PASSPHRASE", required=True)
 
     if not api_key or not api_secret or not api_passphrase:
         raise RuntimeError(
-            "OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE 가 .env 에 설정되어 있지 않습니다."
+            "OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE 가 secrets 레이어에 설정되어 있지 않습니다."
         )
 
-    sandbox = os.getenv("OKX_SANDBOX", "true").lower() == "true"
-    risk_per_trade = float(os.getenv("OKX_TRADE_RISK_PER_TRADE", "0.05"))
-    fee_rate_pct = float(os.getenv("OKX_FEE_RATE_PCT", "1.0"))
-    max_daily_loss_quote = float(os.getenv("OKX_MAX_DAILY_LOSS_QUOTE", "5.0"))
-    request_retry_count = int(os.getenv("OKX_REQUEST_RETRY_COUNT", "2"))
-    request_retry_delay_sec = float(os.getenv("OKX_REQUEST_RETRY_DELAY_SEC", "1.0"))
-    timeout_ms = int(os.getenv("OKX_REQUEST_TIMEOUT_MS", "15000"))
+    sandbox = env_bool("OKX_SANDBOX", True)
+    risk_per_trade = env_float("OKX_TRADE_RISK_PER_TRADE", 0.05)
+    fee_rate_pct = env_float("OKX_FEE_RATE_PCT", 1.0)
+    max_daily_loss_quote = env_float("OKX_MAX_DAILY_LOSS_QUOTE", 5.0)
+    request_retry_count = env_int("OKX_REQUEST_RETRY_COUNT", 2)
+    request_retry_delay_sec = env_float("OKX_REQUEST_RETRY_DELAY_SEC", 1.0)
+    timeout_ms = env_int("OKX_REQUEST_TIMEOUT_MS", 15000)
 
     return {
         "api_key": api_key,

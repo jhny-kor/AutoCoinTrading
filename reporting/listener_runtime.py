@@ -10,6 +10,7 @@ from pathlib import Path
 
 from bot_logger import BotLogger
 from reporting.telegram_notifier import format_telegram_request_error
+from settings.config_access import env_bool, env_int, env_path, env_str
 from settings.env import load_project_env
 from strategy_settings import load_managed_symbols
 
@@ -60,30 +61,24 @@ def load_listener_settings() -> ListenerSettings:
     log_dir.mkdir(exist_ok=True)
 
     return ListenerSettings(
-        poll_interval_sec=int(os.getenv("TELEGRAM_COMMAND_POLL_INTERVAL_SEC", "5")),
+        poll_interval_sec=env_int("TELEGRAM_COMMAND_POLL_INTERVAL_SEC", 5),
         offset_path=log_dir / "telegram_command_listener.offset",
         report_state_path=log_dir / "telegram_daily_report_state.json",
-        analysis_log_dir=Path(os.getenv("ANALYSIS_LOG_DIR", "analysis_logs")),
+        analysis_log_dir=env_path("ANALYSIS_LOG_DIR", "analysis_logs"),
         okx_symbols=load_managed_symbols("okx"),
         upbit_symbols=load_managed_symbols("upbit"),
-        recent_log_line_count=int(os.getenv("TELEGRAM_RECENT_LOG_LINE_COUNT", "5")),
-        daily_report_enabled=parse_bool(
-            os.getenv("TELEGRAM_DAILY_REPORT_ENABLED", "true"),
-            default=True,
-        ),
-        morning_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_MORNING_HOUR", "8")),
-        noon_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_NOON_HOUR", "12")),
-        evening_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_EVENING_HOUR", "18")),
-        night_report_hour=int(os.getenv("TELEGRAM_DAILY_REPORT_NIGHT_HOUR", "21")),
-        weekly_report_enabled=parse_bool(
-            os.getenv("TELEGRAM_WEEKLY_REPORT_ENABLED", "true"),
-            default=True,
-        ),
+        recent_log_line_count=env_int("TELEGRAM_RECENT_LOG_LINE_COUNT", 5),
+        daily_report_enabled=env_bool("TELEGRAM_DAILY_REPORT_ENABLED", True),
+        morning_report_hour=env_int("TELEGRAM_DAILY_REPORT_MORNING_HOUR", 8),
+        noon_report_hour=env_int("TELEGRAM_DAILY_REPORT_NOON_HOUR", 12),
+        evening_report_hour=env_int("TELEGRAM_DAILY_REPORT_EVENING_HOUR", 18),
+        night_report_hour=env_int("TELEGRAM_DAILY_REPORT_NIGHT_HOUR", 21),
+        weekly_report_enabled=env_bool("TELEGRAM_WEEKLY_REPORT_ENABLED", True),
         weekly_report_weekday=WEEKDAY_NAME_TO_INDEX.get(
-            os.getenv("TELEGRAM_WEEKLY_REPORT_WEEKDAY", "MON").strip().upper(),
+            env_str("TELEGRAM_WEEKLY_REPORT_WEEKDAY", "MON").strip().upper(),
             0,
         ),
-        weekly_report_hour=int(os.getenv("TELEGRAM_WEEKLY_REPORT_HOUR", "9")),
+        weekly_report_hour=env_int("TELEGRAM_WEEKLY_REPORT_HOUR", 9),
     )
 
 

@@ -1,7 +1,8 @@
 """
 텔레그램 알림 유틸
 
-- 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
+- `config/runtime.toml` + env override / secrets 레이어를 중앙 환경 로더로 읽도록 정리
+- typed config access helper 를 사용해 텔레그램 설정 로딩의 문자열 파싱을 일관되게 정리
 
 - `07:40:03`, `01-00:52:55` 같은 실행시간 문자열은 숫자 포맷터가 건드리지 않도록 보호했다.
 - 이미 쉼표가 들어간 숫자도 다시 깨지지 않도록 텔레그램 숫자 포맷터를 보정했다.
@@ -9,7 +10,7 @@
 - 날짜를 제외한 텔레그램 숫자 포맷이 %, 초, 개, bp, ms 같은 단위가 붙어도 세 자리 쉼표가 적용되도록 보완했다.
 - 오류 알림에 인시던트 ID 와 승인형 버튼(재기동/상세/수정 요청/무시)을 함께 보낼 수 있도록 확장했다.
 - 날짜 표기는 유지하고, 그 밖의 숫자는 텔레그램 전송 직전에 세 자리마다 쉼표가 들어가도록 공통 포맷을 적용했다.
-- .env 설정이 있으면 텔레그램으로 메시지를 전송한다.
+- 설정 레이어가 있으면 텔레그램으로 메시지를 전송한다.
 - 설정이 없거나 비활성화되어 있으면 조용히 아무 동작도 하지 않는다.
 - 봇 체결, 손절, 에러 같은 이벤트 알림에 사용한다.
 - 텔레그램 전송 실패 원인을 timeout, HTTP 권한 오류 기준으로 진단할 수 있게 개선했다.
@@ -31,6 +32,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from incident_manager import register_incident
+from settings.config_access import env_bool, env_str
 from settings.env import load_project_env
 
 PROTECTED_DATETIME_RE = re.compile(
@@ -340,30 +342,16 @@ def load_telegram_notifier() -> TelegramNotifier:
     load_project_env()
 
     return TelegramNotifier(
-        enabled=parse_bool(os.getenv("TELEGRAM_ENABLED", "false"), default=False),
-        bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
-        enable_buy_notification=parse_bool(
-            os.getenv("TELEGRAM_NOTIFY_BUY", "true"), default=True
-        ),
-        enable_sell_notification=parse_bool(
-            os.getenv("TELEGRAM_NOTIFY_SELL", "true"), default=True
-        ),
-        enable_stop_loss_notification=parse_bool(
-            os.getenv("TELEGRAM_NOTIFY_STOP_LOSS", "true"), default=True
-        ),
-        enable_error_notification=parse_bool(
-            os.getenv("TELEGRAM_NOTIFY_ERROR", "true"), default=True
-        ),
-        enable_daily_limit_notification=parse_bool(
-            os.getenv("TELEGRAM_NOTIFY_DAILY_LIMIT", "true"), default=True
-        ),
-        enable_attention_notification=parse_bool(
-            os.getenv("TELEGRAM_NOTIFY_ATTENTION", "true"), default=True
-        ),
-        enable_error_action_buttons=parse_bool(
-            os.getenv("TELEGRAM_ENABLE_ERROR_ACTION_BUTTONS", "true"), default=True
-        ),
+        enabled=env_bool("TELEGRAM_ENABLED", False),
+        bot_token=env_str("TELEGRAM_BOT_TOKEN", ""),
+        chat_id=env_str("TELEGRAM_CHAT_ID", ""),
+        enable_buy_notification=env_bool("TELEGRAM_NOTIFY_BUY", True),
+        enable_sell_notification=env_bool("TELEGRAM_NOTIFY_SELL", True),
+        enable_stop_loss_notification=env_bool("TELEGRAM_NOTIFY_STOP_LOSS", True),
+        enable_error_notification=env_bool("TELEGRAM_NOTIFY_ERROR", True),
+        enable_daily_limit_notification=env_bool("TELEGRAM_NOTIFY_DAILY_LIMIT", True),
+        enable_attention_notification=env_bool("TELEGRAM_NOTIFY_ATTENTION", True),
+        enable_error_action_buttons=env_bool("TELEGRAM_ENABLE_ERROR_ACTION_BUTTONS", True),
     )
 
 
