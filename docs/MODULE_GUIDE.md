@@ -64,6 +64,7 @@
   - 공개: trade / orderbook / candle.1m
   - 인증: myOrder / myAsset
   - 최신 스냅샷, 1분 캔들, private 이벤트 파일 저장
+  - 5분/15분은 로컬 1분봉 리샘플을 전략/provider가 재사용
 
 - [analyze_logs.py](/Users/plo/Documents/auto_coin_bot/analyze_logs.py)
   - 분석용 시장 로그를 거래소/심볼별로 요약
@@ -176,6 +177,7 @@
   - 최신 스냅샷/1분 캔들 파일 저장
   - 공개/인증 웹소켓 연결/재연결 처리
   - 5분/15분 리샘플과 private myOrder/myAsset provider 처리
+  - best bid, 1분봉, 5분/15분, private latest 재사용
 
 ## 6. 전략별 본체 모듈
 

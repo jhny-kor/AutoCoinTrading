@@ -8,7 +8,7 @@
 OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 재시도를 제한적으로 적용했습니다.
 `ETH/KRW` 는 최근 손절 패턴 기준으로 거래량, 최소 이격도, 브레이크이븐 보호 기준을 심볼별로 더 보수적으로 조정했습니다.
 `2026-04-01` 기준으로는 손절이 잦았던 `ETH/USDT`, `ETH/KRW`, `BTC/KRW` 진입을 더 보수화했고, 수익 러너가 비교적 좋았던 `BTC/USDT`, `XRP/KRW`, `XRP/USDT` 는 순익 보호와 부분익절을 조금 늦춰 이익을 더 가져가도록 조정했습니다.
-업비트는 주문 응답 자체의 지연은 남지만, 잔고/호가 중복 REST 조회를 줄이기 위해 짧은 TTL 캐시와 주문 직후 캐시 무효화를 추가했습니다.
+업비트는 주문 생성 자체의 지연은 남지만, 현재는 공개 웹소켓 시세/호가/1분봉과 private `myOrder`, `myAsset` 이벤트를 우선 사용하고 필요한 경우만 REST fallback 을 쓰는 구조로 전환했습니다.
 
 <div align="center">  
 <a href="https://www.instagram.com/_k.jhny" target="_blank"><img src="https://img.shields.io/badge/Instagram-E4405F?style=flat-square&logo=Instagram&logoColor=white"/></a>  

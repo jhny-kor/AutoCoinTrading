@@ -246,8 +246,8 @@ def fetch_upbit_ohlcv_with_provider(
     market_data_provider: UpbitMarketDataProvider | None = None,
 ) -> list[list[float]]:
     """업비트 OHLCV 를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
-    if market_data_provider is not None and timeframe.strip().lower() == "1m":
-        rows = market_data_provider.get_recent_ohlcv_1m(symbol, limit)
+    if market_data_provider is not None:
+        rows = market_data_provider.get_recent_ohlcv(symbol, timeframe, limit)
         if rows:
             return rows
     return fetch_upbit_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
@@ -828,11 +828,12 @@ def main():
                         limit=limit,
                         market_data_provider=upbit_market_data_provider,
                     )
-                    higher_timeframe_ohlcv = fetch_upbit_ohlcv(
+                    higher_timeframe_ohlcv = fetch_upbit_ohlcv_with_provider(
                         upbit,
-                        symbol,
+                        symbol=symbol,
                         timeframe=str(collector_settings["higher_timeframe"]),
                         limit=int(collector_settings["higher_timeframe_ma_period"]) + 5,
+                        market_data_provider=upbit_market_data_provider,
                     )
                     order_book = (
                         fetch_upbit_order_book_with_provider(

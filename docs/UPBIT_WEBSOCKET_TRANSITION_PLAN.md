@@ -61,8 +61,8 @@
 - 주문:
   - 기존 REST + `ccxt` 유지
 - 잔고:
-  - 기존 REST 유지
-  - 주문 직후 캐시 무효화 유지
+  - private `myAsset` 우선
+  - 필요 시 REST fallback 유지
 - 봇:
   - 업비트 알트 봇, 업비트 BTC 봇은 공용 시세 공급자(provider)에서 최신 데이터만 읽음
 - 장애 복구:
@@ -351,7 +351,8 @@ flowchart LR
 현재 프로젝트 기준 최적 해법은 다음입니다.
 
 - `시장 데이터는 WebSocket 수집기 1개로 공유`
-- `주문과 잔고는 REST 유지`
+- `주문 생성만 REST 유지`
+- `잔고/주문 이벤트는 private WebSocket 우선`
 - `stale 시만 REST fallback`
 - `단계적으로 교체`
 
