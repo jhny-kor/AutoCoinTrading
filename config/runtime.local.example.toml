@@ -1,0 +1,8 @@
+# Auto Coin Bot local runtime override example
+# 현재 적용 세트나 장비별 임시 오버라이드만 이 파일에 둡니다.
+
+[strategy]
+# fee_protect_min_net_pnl_pct = 0.15
+
+[upbit]
+# request_timeout_ms = 12000

@@ -1,99 +1,102 @@
-# .env / 전략 세트 파일 구조 한 페이지 정리
+# 설정 파일 구조 한 페이지 정리
 
 ## 핵심 결론
 
-현재 구조에서 **실제 운영 기준 파일은 `.env.settings` + `.env.secrets`** 입니다.
+현재 구조에서 **canonical 운영 설정은 `config/runtime.toml`** 입니다.
 
-`env_overrides/*.env` 는 이 메인 설정 파일을 대체하는 파일이 아니라,
-**일부 전략 키만 덮어쓰는 partial 세트 파일** 입니다.
+전략 세트 canonical 파일은 아래입니다.
+
+- `config/sets/conservative.toml`
+- `config/sets/medium.toml`
+- `config/sets/mixed.toml`
+
+실제 런타임에서는 아래 레이어가 순서대로 합쳐집니다.
+
+1. `config/runtime.toml`
+2. `.env.settings`
+3. `.env.secrets`
+4. `.env.local`
+5. `config/runtime.local.toml`
+6. `.env` (legacy fallback)
 
 즉 현재 관계는 아래와 같습니다.
 
-- `.env.settings` = 운영 설정 본체
-- `.env.secrets` = 비밀정보 본체
-- `.env.local` = 로컬 오버라이드
+- `config/runtime.toml` = canonical 운영 설정
+- `config/sets/*.toml` = canonical 전략 세트
+- `config/runtime.local.toml` = 현재 적용 세트를 담는 로컬 TOML override
+- `.env.settings` = env override 레이어
+- `.env.secrets` = 비밀정보 레이어
+- `.env.local` = 로컬 env override
 - `.env` = legacy fallback
-- `env_overrides/*.env` = 비교/튜닝용 partial 전략 세트
-- `tools/apply_strategy_set.py` = partial 세트를 `.env.settings` 에 반영하는 도구
 
 ---
 
-## 1. 현재 실제로 읽는 파일
+## 1. 각 파일 역할
 
-현재 중앙 로더는 아래 순서로 환경 파일을 읽습니다.
+### `config/runtime.toml`
 
-1. `.env.settings`
-2. `.env.secrets`
-3. `.env.local`
-4. `.env` (split env 가 없을 때만 fallback)
+- canonical 운영 설정 파일
+- 전략, 리스크, 포트폴리오, 텔레그램 일반 설정의 기준값
 
-즉 split env 가 있으면 `.env` 가 아니라 `.env.settings` + `.env.secrets` 가 실제 기준입니다.
+### `config/sets/*.toml`
 
----
+- canonical 전략 세트 파일
+- 보수형/중간형/혼합형 같은 비교 세트를 구조화된 형태로 정의
 
-## 2. 각 파일 역할
+예:
+
+- `config/sets/conservative.toml`
+- `config/sets/medium.toml`
+- `config/sets/mixed.toml`
+
+### `config/runtime.local.toml`
+
+- 현재 적용 세트 또는 로컬 TOML override
+- `tools/apply_strategy_set.py` 가 갱신하는 파일
 
 ### `.env.settings`
 
-- 운영 메인 설정 파일
-- 전략 설정
-- 리스크 설정
-- 포트폴리오 설정
-- 텔레그램 일반 설정
-- 최소 주문 금액, 타임프레임, 맵 기반 전략값
+- env 기반 운영 override
+- TOML 위에 덮어쓰는 값
 
 ### `.env.secrets`
 
 - 비밀정보 파일
 - 거래소 API 키
-- 텔레그램 Bot 토큰
-- 텔레그램 chat id
+- 텔레그램 토큰 / chat id
 
 ### `.env.local`
 
-- 로컬 환경 전용 오버라이드
-- 개인 장비에서만 잠깐 바꿔볼 값
+- 로컬 env override
 
 ### `.env`
 
 - legacy fallback
-- 예전 방식과 호환성 유지를 위한 파일
-- split env 가 없는 환경에서만 기준 역할
+- split env / TOML 이 없을 때만 기준 역할
 
-### `env_overrides/*.env`
+### `env_overrides/*`
 
-- 비교/튜닝용 partial env
-- 일부 전략 키만 포함
-- 전체 설정 파일이 아님
-
-예:
-
-- `env_overrides/conservative.env`
-- `env_overrides/medium.env`
-- `env_overrides/mixed.env`
-
-### `env_overrides/history/*`
-
-- 과거 세트 이력 보관
-- 날짜 붙은 기준선 파일
+- legacy / history 보관용
+- 현재 canonical 세트 파일은 아님
 
 ---
 
-## 3. 실제 적용 흐름
+## 2. 실제 적용 흐름
 
-현재 세트 적용 순서는 아래입니다.
+현재 전략 세트 적용 순서는 아래입니다.
 
-1. `env_overrides/*.env` 에 세트 정의
-2. `tools/apply_strategy_set.py` 실행
-3. partial env 안의 키만 `.env.settings` 에 덮어씀
-4. 봇 재시작
-5. 재시작 후 봇은 `.env.settings` + `.env.secrets` 를 읽음
+1. `config/runtime.toml` 에 canonical 기본값 유지
+2. `config/sets/*.toml` 에 비교 세트 정의
+3. `tools/apply_strategy_set.py` 실행
+4. 선택한 세트 내용을 `config/runtime.local.toml` 에 반영
+5. 봇 재시작
+6. 재시작 후 봇은 `config/runtime.toml` + env 레이어 + `config/runtime.local.toml` 을 함께 읽음
 
-즉 전략 세트 변경은 이제 `.env` 가 아니라 `.env.settings` 기준으로 반영됩니다.
+즉 전략 세트 변경은 이제 **`config/runtime.local.toml` 기준**으로 반영됩니다.
 
 ---
 
-## 4. 사용 예시
+## 3. 사용 예시
 
 혼합형 세트 적용:
 
@@ -118,42 +121,45 @@
 
 ---
 
-## 5. 왜 이렇게 분리했나
+## 4. 왜 이렇게 바꿨나
 
 장점
 
-- API 키와 일반 설정을 분리할 수 있음
+- canonical 운영 설정과 전략 세트 경로가 분명해짐
+- 현재 적용 세트를 `config/runtime.local.toml` 에서 바로 확인 가능
 - 전략 세트 비교가 쉬워짐
-- `.env.settings` 만 교체해 실험 가능
-- 실수로 비밀정보까지 같이 덮어쓸 위험이 줄어듦
-- 앞으로 설정 시스템을 더 키워도 구조를 유지하기 쉬움
+- 비밀정보와 운영 설정을 분리 가능
+- env 기반 호환성도 유지 가능
+- 장기적으로 typed config 시스템으로 확장하기 쉬움
 
 ---
 
-## 6. 지금 단계의 의미
+## 5. 현재 단계 의미
 
-현재는 “대형 설정 시스템 리팩터링 1차” 상태입니다.
+현재는 “구조화된 설정 시스템 전환 2차/3차” 상태입니다.
 
 완료된 것
 
+- canonical TOML 운영 설정 도입
+- canonical TOML 전략 세트 도입
 - split env 도입
 - 중앙 로더 도입
 - 핵심 설정/실행 모듈을 중앙 로더로 전환
-- canonical 세트 파일 정리
+- 세트 적용 도구를 `runtime.local.toml` 기준으로 전환
 
 아직 남은 것
 
-- 실행 중인 모든 코드/문서가 split env 기준으로 완전히 맞는지 세부 점검
-- `.env` fallback 을 장기적으로 유지할지 제거할지 결정
-- 설정 레이어를 더 구조화된 파일 시스템으로 승격할지 검토
+- 장기적으로 `os.getenv()` 접근을 typed access 로 더 줄이기
+- `env_overrides` legacy/history 정리 정책 확정
+- `config/runtime.local.toml` 운용 규칙 문서화 보강
 
 ---
 
-## 7. 한 줄 요약
+## 6. 한 줄 요약
 
 현재 구조에서
 
-- `.env.settings` + `.env.secrets` 가 실제 운영 기준 파일이고
-- `.env` 는 legacy fallback 이며
-- `env_overrides/*.env` 는 `.env.settings` 를 대체하는 파일이 아니라
-- **일부 전략 키만 덮어쓰는 partial 세트 파일** 입니다.
+- `config/runtime.toml` 이 canonical 운영 설정이고
+- `config/sets/*.toml` 이 canonical 전략 세트이며
+- `config/runtime.local.toml` 이 현재 적용 세트를 담는 override 파일이고
+- `.env.settings` / `.env.secrets` 는 추가 override / secret 레이어입니다.

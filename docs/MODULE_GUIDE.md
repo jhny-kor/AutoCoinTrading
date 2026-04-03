@@ -25,9 +25,29 @@
 
 ### 환경 변수
 
+- [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+  - canonical 운영 설정 파일
+  - 전략, 리스크, 포트폴리오, 텔레그램 일반 설정의 기준값
+
+- [config/runtime.example.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.example.toml)
+  - canonical 운영 설정 예시 파일
+
+- [config/runtime.local.example.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.example.toml)
+  - local TOML override 예시 파일
+
+- [config/sets](/Users/plo/Documents/auto_coin_bot/config/sets)
+  - canonical 전략 세트 TOML 모음
+  - 보수형/중간형/혼합형 세트 정의
+
 - [.env.example](/Users/plo/Documents/auto_coin_bot/.env.example)
-  - 실제로 사용하는 키 기준 예시
-  - 새 설정을 추가할 때 같이 갱신하는 기준 문서
+  - legacy 전체 예시 파일
+  - split env / TOML 을 쓰지 않는 환경용 호환 예시
+
+- [.env.settings.example](/Users/plo/Documents/auto_coin_bot/.env.settings.example)
+  - 운영 override 예시 파일
+
+- [.env.secrets.example](/Users/plo/Documents/auto_coin_bot/.env.secrets.example)
+  - 비밀정보 예시 파일
 
 ## 2. 공통 로그 / 분석 모듈
 
@@ -83,9 +103,9 @@
   - 배치 요약과 전후 diff 요약 Markdown/JSON 생성
 
 - [tools/apply_strategy_set.py](/Users/plo/Documents/auto_coin_bot/tools/apply_strategy_set.py)
-  - `env_overrides` 아래 partial env 세트를 현재 `.env` 에 반영
+  - `config/sets` 아래 TOML 세트를 현재 `config/runtime.local.toml` 에 반영
   - 보수형/중간형/혼합형 별칭 지원
-  - dry-run 으로 변경 키 미리보기 지원
+  - dry-run 으로 변경될 `section.key` 미리보기 지원
 
 - [tools/update_backtest_registry.py](/Users/plo/Documents/auto_coin_bot/tools/update_backtest_registry.py)
   - `reports/backtest_batches` 아래 batch/diff 결과를 인덱싱
