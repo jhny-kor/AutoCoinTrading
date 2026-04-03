@@ -82,6 +82,20 @@
   - fetch -> run -> compare 흐름을 심볼별로 자동 수행
   - 배치 요약과 전후 diff 요약 Markdown/JSON 생성
 
+- [tools/apply_strategy_set.py](/Users/plo/Documents/auto_coin_bot/tools/apply_strategy_set.py)
+  - `env_overrides` 아래 partial env 세트를 현재 `.env` 에 반영
+  - 보수형/중간형/혼합형 별칭 지원
+  - dry-run 으로 변경 키 미리보기 지원
+
+- [tools/update_backtest_registry.py](/Users/plo/Documents/auto_coin_bot/tools/update_backtest_registry.py)
+  - `reports/backtest_batches` 아래 batch/diff 결과를 인덱싱
+  - `reports/backtest_registry.json` 자동 갱신
+  - label, path, symbols, before/after 경로를 한 파일에서 조회 가능
+
+- [update_backtest_registry.py](/Users/plo/Documents/auto_coin_bot/update_backtest_registry.py)
+  - 루트 호환 실행 진입점
+  - `tools.update_backtest_registry` 를 그대로 실행
+
 - [compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/compare_backtest_to_live.py)
   - 백테스트 결과와 실거래 체결 이력을 같은 기준으로 비교
   - 승률, 순손익, 평균 손익률, 종료 사유를 함께 요약

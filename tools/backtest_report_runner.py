@@ -49,11 +49,14 @@ from state_recovery import (
     restore_program_position_states_as_of,
 )
 from strategy_settings import load_managed_symbols
+from tools.update_backtest_registry import build_registry_entries, write_registry
 
 
 DEFAULT_WEEKLY_DAYS = 7
 DEFAULT_FETCH_LIMIT = 3000
 DEFAULT_WEEKLY_BUFFER_MULTIPLIER = 1.2
+BACKTEST_BATCH_DIR = Path("reports/backtest_batches")
+BACKTEST_REGISTRY_PATH = Path("reports/backtest_registry.json")
 
 
 def infer_strategy_type(symbol: str) -> str:
@@ -560,6 +563,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
         ),
         encoding="utf-8",
     )
+    write_registry(BACKTEST_REGISTRY_PATH, build_registry_entries(BACKTEST_BATCH_DIR))
     print(f"배치 리포트 완료: {batch_root}")
     return 0
 
@@ -605,6 +609,7 @@ def run_diff(args: argparse.Namespace) -> int:
             f"MDD {row['before_max_drawdown_pct']:.2f}% -> {row['after_max_drawdown_pct']:.2f}%"
         )
     (output_dir / "diff_summary.md").write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
+    write_registry(BACKTEST_REGISTRY_PATH, build_registry_entries(BACKTEST_BATCH_DIR))
     print(f"전후 비교 완료: {output_dir}")
     return 0
 
