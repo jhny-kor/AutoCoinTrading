@@ -1,0 +1,50 @@
+import os
+import unittest
+from unittest.mock import patch
+
+from strategy_settings import load_strategy_settings
+
+
+class StrategySettingsTests(unittest.TestCase):
+    def test_loads_btc_regime_position_scale_map(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_ENABLE_BTC_REGIME_POSITION_SCALING": "true",
+                "STRATEGY_BTC_REGIME_POSITION_SCALE_MAP": "LOW_ENERGY:0.50,CHOPPY:0.80",
+                "STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP": (
+                    "ETH/KRW|LOW_ENERGY:0.35,XRP/KRW|LOW_ENERGY:0.60"
+                ),
+                "STRATEGY_ENABLE_BTC_ATR_POSITION_SCALING": "true",
+                "STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP": (
+                    "0.18:0.70,0.15:0.45,0.12:0.25"
+                ),
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertTrue(settings.enable_btc_regime_position_scaling)
+        self.assertEqual(settings.get_btc_regime_position_scale("LOW_ENERGY"), 0.5)
+        self.assertEqual(settings.get_btc_regime_position_scale("CHOPPY"), 0.8)
+        self.assertEqual(settings.get_btc_regime_position_scale("TRENDING"), 1.0)
+        self.assertEqual(
+            settings.get_btc_regime_position_scale_for_symbol("ETH/KRW", "LOW_ENERGY"),
+            0.35,
+        )
+        self.assertEqual(
+            settings.get_btc_regime_position_scale_for_symbol("XRP/KRW", "LOW_ENERGY"),
+            0.6,
+        )
+        self.assertEqual(
+            settings.get_btc_regime_position_scale_for_symbol("ETH/KRW", "CHOPPY"),
+            0.8,
+        )
+        self.assertEqual(settings.get_btc_atr_position_scale(0.20), 1.0)
+        self.assertEqual(settings.get_btc_atr_position_scale(0.17), 0.7)
+        self.assertEqual(settings.get_btc_atr_position_scale(0.14), 0.45)
+        self.assertEqual(settings.get_btc_atr_position_scale(0.10), 0.25)
+
+
+if __name__ == "__main__":
+    unittest.main()

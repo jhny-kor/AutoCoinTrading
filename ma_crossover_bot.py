@@ -1,5 +1,8 @@
 """
 수정 요약
+- BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄이는 보정을 추가했다.
+- BTC LOW_ENERGY 축소 스케일에 심볼별 override 를 적용해 ETH/USDT 는 더 보수적으로, XRP/USDT 는 덜 보수적으로 진입 비중을 줄이도록 조정했다.
+- BTC 레짐 기반 알트 신규 진입 비중 스케일을 추가해 BTC 가 LOW_ENERGY 일 때는 알트 포지션을 먼저 축소하도록 보강했다.
 - 노이즈 비율 기반 동적 이격도 보정을 추가해 알트 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강
 - 2차 강화로 진입 상태 머신, BTC 상관관계 가드, 체결률 기반 진입 차단을 추가했다.
 - 알트 진입에 RSI, MACD, MA 기울기, 신호 스코어를 추가하고 레짐별 손절/익절/분할진입 정책을 반영하도록 강화
@@ -75,6 +78,7 @@ from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from core.strategy.indicators import (
+    calc_atr,
     calc_macd_histogram,
     calc_noise_ratio,
     calc_pct_slope,
@@ -362,7 +366,12 @@ def run_bot():
 
         btc_reference_closes: list[float] = []
         btc_reference_above_ma = False
-        if strategy.enable_correlation_filter:
+        btc_reference_regime = "UNKNOWN"
+        btc_reference_atr_pct = None
+        if (
+            strategy.enable_correlation_filter
+            or strategy.enable_btc_atr_position_scaling
+        ):
             try:
                 btc_ohlcv = fetch_ohlcv(
                     exchange,
@@ -374,8 +383,25 @@ def run_bot():
                 if len(btc_reference_closes) >= ma_period:
                     btc_reference_ma = calc_sma(btc_reference_closes, ma_period)
                     btc_reference_above_ma = btc_reference_closes[-1] > btc_reference_ma
+                btc_reference_atr_value = calc_atr(
+                    btc_ohlcv,
+                    strategy.btc_atr_position_scale_lookback,
+                )
+                if btc_reference_atr_value is not None and btc_reference_closes:
+                    last_btc_close = btc_reference_closes[-1]
+                    if last_btc_close > 0:
+                        btc_reference_atr_pct = (
+                            btc_reference_atr_value / last_btc_close * 100
+                        )
             except Exception as exc:
                 log(f"[BTC/USDT] 상관관계 기준 시세 조회 실패: {exc}")
+        btc_reference_regime_snapshot = classify_symbol_regime(
+            load_latest_symbol_record(
+                exchange_name="okx",
+                symbol=DEFAULT_OKX_BTC_SYMBOL,
+            )
+        )
+        btc_reference_regime = btc_reference_regime_snapshot.regime
 
         for m in markets:
             symbol = m["symbol"]
@@ -617,9 +643,23 @@ def run_bot():
                     config["risk_per_trade"],
                 )
                 regime_position_scale = strategy.get_regime_position_scale(symbol_regime)
+                btc_regime_position_scale = (
+                    strategy.get_btc_regime_position_scale_for_symbol(
+                        symbol,
+                        btc_reference_regime,
+                    )
+                )
+                btc_atr_position_scale = strategy.get_btc_atr_position_scale(
+                    btc_reference_atr_pct
+                )
+                combined_position_scale = (
+                    regime_position_scale
+                    * btc_regime_position_scale
+                    * btc_atr_position_scale
+                )
                 position_ratio = apply_regime_position_scale(
                     base_position_ratio=base_position_ratio,
-                    regime_scale=regime_position_scale,
+                    regime_scale=combined_position_scale,
                 )
                 alt_signal_state = compute_alt_signal_state(
                     prev_close=prev_close,
@@ -740,7 +780,10 @@ def run_bot():
                     )
                 log(
                     f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
-                    f"레짐 스케일 {regime_position_scale:.2f}x | 최종 {position_ratio:.4f}"
+                    f"심볼 레짐 스케일 {regime_position_scale:.2f}x | "
+                    f"BTC 레짐({btc_reference_regime}) 스케일 {btc_regime_position_scale:.2f}x | "
+                    f"BTC ATR({0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%) 스케일 {btc_atr_position_scale:.2f}x | "
+                    f"최종 {position_ratio:.4f}"
                 )
                 log(
                     f"[{symbol}] RSI: {rsi_value:.2f} | MACD 히스토그램: "
@@ -1080,11 +1123,16 @@ def run_bot():
                     low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                     low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
                     low_energy_ready_count=low_energy_snapshot.ready_count,
+                    btc_reference_regime=btc_reference_regime,
+                    btc_regime_position_scale=btc_regime_position_scale,
+                    btc_reference_atr_pct=btc_reference_atr_pct,
+                    btc_atr_position_scale=btc_atr_position_scale,
                     symbol_regime=symbol_regime,
                     symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                     symbol_regime_requires_strong_signal=symbol_regime_requires_strong_signal,
                     symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
                     regime_position_scale=regime_position_scale,
+                    combined_regime_position_scale=combined_position_scale,
                     base_position_ratio=base_position_ratio,
                     effective_position_ratio=position_ratio,
                     regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,

@@ -1,5 +1,6 @@
 """
 작업 요약
+- 최근 ATR 과 ATR 퍼센트를 공통으로 계산하는 helper 를 추가해 BTC 변동성 기반 진입 비중 조절에 재사용할 수 있게 확장했다.
 - 알트/BTC/분석 수집기가 함께 쓰는 공통 보조지표 계산 함수를 추가했다.
 - RSI, MACD 히스토그램, 볼린저 밴드 폭, ADX, 기울기 계산을 한 곳에서 재사용하도록 정리했다.
 - 수익률 상관계수 계산 helper 를 추가해 BTC-알트 동조화 진입을 제어할 수 있게 보강했다.
@@ -165,6 +166,28 @@ def calc_adx(ohlcv: list[list[float]], period: int) -> float | None:
         return None
     recent_dx = dx_values[-period:] if len(dx_values) >= period else dx_values
     return sum(recent_dx) / len(recent_dx)
+
+
+def calc_atr(ohlcv: list[list[float]], period: int) -> float | None:
+    """최근 완료 봉 기준 단순 ATR 값을 계산한다."""
+    if period <= 0 or len(ohlcv) < period + 2:
+        return None
+
+    completed = ohlcv[:-1]
+    if len(completed) < period + 1:
+        return None
+
+    true_ranges: list[float] = []
+    for prev, curr in zip(completed[:-1], completed[1:]):
+        prev_close = prev[4]
+        high = curr[2]
+        low = curr[3]
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+
+    if len(true_ranges) < period:
+        return None
+    recent_tr = true_ranges[-period:]
+    return sum(recent_tr) / len(recent_tr)
 
 
 def calc_return_correlation(

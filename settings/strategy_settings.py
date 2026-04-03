@@ -1,5 +1,8 @@
 """
 수정 요약
+- BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄일 수 있게 공통 설정을 추가했다.
+- BTC 레짐 기반 알트 신규 진입 비중을 심볼별 override map 으로 세분화해 ETH 는 더 보수적으로, XRP 는 완만하게 축소할 수 있게 확장
+- 알트 신규 진입 비중에 BTC 레짐 기반 추가 스케일을 곱할 수 있게 확장해 BTC 가 LOW_ENERGY 일 때 먼저 포지션을 축소할 수 있게 보강
 - 알트 전략에 레짐별 포지션 비중 스케일 설정을 추가해 상승장/횡보장/저에너지장에 따라 진입 크기를 다르게 조절할 수 있게 확장
 - 노이즈 비율 기반 동적 진입 문턱값 설정을 추가해 알트 진입 기준을 장 상태에 맞춰 자동 보정할 수 있게 확장
 - 2차 강화용으로 진입 상태 머신, BTC 상관관계 가드, 체결률 품질 가드 설정을 추가했다.
@@ -81,6 +84,12 @@ class StrategySettings:
     position_ratio_map: dict[str, float]
     enable_regime_position_scaling: bool
     regime_position_scale_map: dict[str, float]
+    enable_btc_regime_position_scaling: bool
+    btc_regime_position_scale_map: dict[str, float]
+    btc_regime_position_scale_override_map: dict[str, dict[str, float]]
+    enable_btc_atr_position_scaling: bool
+    btc_atr_position_scale_lookback: int
+    btc_atr_position_scale_threshold_map: dict[float, float]
     enable_volatility_filter: bool
     volatility_lookback: int
     min_volatility_pct: float
@@ -147,6 +156,45 @@ class StrategySettings:
         if not regime:
             return 1.0
         return self.regime_position_scale_map.get(regime, 1.0)
+
+    def get_btc_regime_position_scale(self, regime: str | None) -> float:
+        """BTC 레짐 기준 알트 포지션 비중 스케일을 반환한다."""
+        if not self.enable_btc_regime_position_scaling:
+            return 1.0
+        if not regime:
+            return 1.0
+        return self.btc_regime_position_scale_map.get(regime, 1.0)
+
+    def get_btc_regime_position_scale_for_symbol(
+        self,
+        symbol: str,
+        regime: str | None,
+    ) -> float:
+        """BTC 레짐 기준 알트 포지션 비중 스케일을 심볼별 override 포함으로 반환한다."""
+        if not self.enable_btc_regime_position_scaling:
+            return 1.0
+        if not regime:
+            return 1.0
+        symbol_map = self.btc_regime_position_scale_override_map.get(symbol, {})
+        if regime in symbol_map:
+            return symbol_map[regime]
+        return self.get_btc_regime_position_scale(regime)
+
+    def get_btc_atr_position_scale(self, atr_pct: float | None) -> float:
+        """BTC ATR 퍼센트 기준 알트 포지션 비중 스케일을 반환한다."""
+        if not self.enable_btc_atr_position_scaling:
+            return 1.0
+        if atr_pct is None:
+            return 1.0
+
+        matched_scales = [
+            scale
+            for threshold, scale in self.btc_atr_position_scale_threshold_map.items()
+            if atr_pct < threshold
+        ]
+        if not matched_scales:
+            return 1.0
+        return min(matched_scales)
 
     def get_break_even_guard_min_mfe_pct(self, symbol: str) -> float:
         """심볼별 브레이크이븐 가드 최소 MFE 기준을 반환한다."""
@@ -217,6 +265,43 @@ def parse_symbol_float_map(raw: str) -> dict[str, float]:
         if not symbol or not value:
             continue
         result[symbol] = float(value)
+    return result
+
+
+def parse_symbol_regime_float_map(raw: str) -> dict[str, dict[str, float]]:
+    """ETH/KRW|LOW_ENERGY:0.35 형태의 문자열을 심볼별 레짐 스케일 사전으로 바꾼다."""
+    result: dict[str, dict[str, float]] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or ":" not in item or "|" not in item:
+            continue
+        symbol_regime, value = item.split(":", 1)
+        symbol_regime = symbol_regime.strip()
+        value = value.strip()
+        if not symbol_regime or not value or "|" not in symbol_regime:
+            continue
+        symbol, regime = symbol_regime.split("|", 1)
+        symbol = symbol.strip()
+        regime = regime.strip()
+        if not symbol or not regime:
+            continue
+        result.setdefault(symbol, {})[regime] = float(value)
+    return result
+
+
+def parse_float_float_map(raw: str) -> dict[float, float]:
+    """0.18:0.70 형태의 문자열을 float 사전으로 바꾼다."""
+    result: dict[float, float] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        key, value = item.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            continue
+        result[float(key)] = float(value)
     return result
 
 
@@ -379,6 +464,35 @@ def load_strategy_settings(
             os.getenv(
                 "STRATEGY_REGIME_POSITION_SCALE_MAP",
                 "TRENDING:1.00,BREAKOUT_ATTEMPT:0.80,CHOPPY:0.40,LOW_ENERGY:0.00,OVERHEATED:0.20,EXHAUSTION_RISK:0.00",
+            )
+        ),
+        enable_btc_regime_position_scaling=parse_bool(
+            os.getenv("STRATEGY_ENABLE_BTC_REGIME_POSITION_SCALING", "true"),
+            default=True,
+        ),
+        btc_regime_position_scale_map=parse_symbol_float_map(
+            os.getenv(
+                "STRATEGY_BTC_REGIME_POSITION_SCALE_MAP",
+                "LOW_ENERGY:0.50",
+            )
+        ),
+        btc_regime_position_scale_override_map=parse_symbol_regime_float_map(
+            os.getenv(
+                "STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP",
+                "",
+            )
+        ),
+        enable_btc_atr_position_scaling=parse_bool(
+            os.getenv("STRATEGY_ENABLE_BTC_ATR_POSITION_SCALING", "true"),
+            default=True,
+        ),
+        btc_atr_position_scale_lookback=int(
+            os.getenv("STRATEGY_BTC_ATR_POSITION_SCALE_LOOKBACK", "14")
+        ),
+        btc_atr_position_scale_threshold_map=parse_float_float_map(
+            os.getenv(
+                "STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP",
+                "0.18:0.70,0.15:0.45,0.12:0.25",
             )
         ),
         enable_volatility_filter=parse_bool(
