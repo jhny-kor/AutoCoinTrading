@@ -1,5 +1,6 @@
 """
 수정 요약
+- myAsset latest 가 부분 자산 이벤트만 담는 경우를 고려해 최근 myasset.jsonl 에서 통화별 최신 잔고를 보완 조회하고, 부족하면 REST fallback 으로 넘기도록 보강했다.
 - latest/private/health JSON 이 부분 저장 상태여도 즉시 예외를 터뜨리지 않고 안전하게 None 으로 처리하도록 보강했다.
 - 업비트 private 웹소켓 latest/jsonl 을 읽어 myAsset 잔고와 myOrder 최근 이벤트를 런타임에서 재사용할 수 있게 확장했다.
 - 업비트 웹소켓 수집기가 저장한 최신 스냅샷과 1분 캔들 JSONL 을 읽어 전략 봇이 재사용할 수 있는 공용 provider 를 추가했다.
@@ -205,31 +206,47 @@ class UpbitMarketDataProvider:
 
     def get_private_balances(self, base: str, quote: str) -> tuple[float, float] | None:
         """myAsset latest 에서 base/quote 잔고를 추정한다."""
-        payload = self.read_private_latest("myasset_latest")
-        if not isinstance(payload, dict):
-            return None
+        latest_payload = self.read_private_latest("myasset_latest")
+        latest_by_currency = _extract_asset_balances_by_currency(latest_payload)
 
-        candidates = payload.get("assets")
-        if not isinstance(candidates, list):
-            single_currency = payload.get("currency")
-            if single_currency:
-                candidates = [payload]
-        if not isinstance(candidates, list):
-            return None
+        base_free = latest_by_currency.get(base)
+        quote_free = latest_by_currency.get(quote)
 
-        base_free = None
-        quote_free = None
-        for item in candidates:
-            if not isinstance(item, dict):
+        if base_free is not None and quote_free is not None:
+            return float(base_free), float(quote_free)
+
+        path = self.private_dir / "myasset.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+
+        seen: dict[str, float] = {}
+        if base_free is not None:
+            seen[base] = float(base_free)
+        if quote_free is not None:
+            seen[quote] = float(quote_free)
+
+        for line in reversed(lines[-200:]):
+            if not line.strip():
                 continue
-            currency = str(item.get("currency", "") or item.get("unit_currency", "") or "")
-            if currency == base:
-                base_free = _to_float(item.get("balance"))
-            elif currency == quote:
-                quote_free = _to_float(item.get("balance"))
-        if base_free is None and quote_free is None:
-            return None
-        return float(base_free or 0.0), float(quote_free or 0.0)
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            balances = _extract_asset_balances_by_currency(payload)
+            for currency in (base, quote):
+                if currency in seen:
+                    continue
+                balance = balances.get(currency)
+                if balance is not None:
+                    seen[currency] = float(balance)
+            if base in seen and quote in seen:
+                break
+
+        if base in seen and quote in seen:
+            return float(seen[base]), float(seen[quote])
+        return None
 
     def find_recent_myorder_event(
         self,
@@ -269,6 +286,31 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _extract_asset_balances_by_currency(payload: dict[str, Any] | None) -> dict[str, float]:
+    """myAsset payload 에서 통화별 잔고를 추출한다."""
+    if not isinstance(payload, dict):
+        return {}
+
+    candidates = payload.get("assets")
+    if not isinstance(candidates, list):
+        single_currency = payload.get("currency")
+        if single_currency:
+            candidates = [payload]
+    if not isinstance(candidates, list):
+        return {}
+
+    balances: dict[str, float] = {}
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        currency = str(item.get("currency", "") or item.get("unit_currency", "") or "")
+        balance = _to_float(item.get("balance"))
+        if not currency or balance is None:
+            continue
+        balances[currency] = float(balance)
+    return balances
 
 
 def _coerce_candle_timestamp_ms(payload: dict[str, Any]) -> int | None:

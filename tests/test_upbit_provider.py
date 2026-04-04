@@ -97,6 +97,49 @@ class UpbitProviderTests(unittest.TestCase):
             self.assertIsNotNone(event)
             self.assertEqual(event["state"], "done")
 
+    def test_provider_backfills_private_balances_from_jsonl_when_latest_is_partial(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            private_dir = root / "private"
+            private_dir.mkdir(parents=True, exist_ok=True)
+
+            (private_dir / "myasset_latest.json").write_text(
+                json.dumps(
+                    {
+                        "assets": [
+                            {"currency": "KRW", "balance": "1000.0"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (private_dir / "myasset.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "assets": [
+                                    {"currency": "ETH", "balance": "0.02483831"},
+                                ]
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "assets": [
+                                    {"currency": "KRW", "balance": "1000.0"},
+                                ]
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            provider = UpbitMarketDataProvider(root_dir=root, cache_ttl_sec=0.0, stale_sec=5.0)
+            balances = provider.get_private_balances("ETH", "KRW")
+            self.assertEqual(balances, (0.02483831, 1000.0))
+
     def test_provider_reads_recent_ohlcv_1m(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
