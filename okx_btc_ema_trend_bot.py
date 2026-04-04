@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC ATR 퍼센트가 낮을 때 신규 진입 비중을 단계형으로 줄이는 보정을 추가했다.
 - BTC 포지션 평가 helper 호출을 한 번만 수행하도록 정리해 중복 분기를 줄였다.
 - 노이즈 비율 기반 동적 EMA 스프레드/신호 스코어 보정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강했다.
 - 2차 강화로 진입 상태 머신과 체결률 기반 진입 차단을 추가했다.
@@ -750,9 +751,10 @@ def run_bot():
             trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
             base_position_ratio = settings.get_position_ratio(symbol)
             regime_position_scale = settings.get_regime_position_scale(symbol_regime)
+            atr_position_scale = settings.get_atr_position_scale(atr_pct)
             position_ratio = apply_regime_position_scale(
                 base_position_ratio=base_position_ratio,
-                regime_scale=regime_position_scale,
+                regime_scale=(regime_position_scale * atr_position_scale),
             )
             effective_partial_take_profit_ratio = min(
                 1.0,
@@ -790,7 +792,8 @@ def run_bot():
             )
             log(
                 f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
-                f"레짐 스케일 {regime_position_scale:.2f}x | 최종 {position_ratio:.4f}"
+                f"레짐 스케일 {regime_position_scale:.2f}x | "
+                f"ATR 스케일 {atr_position_scale:.2f}x | 최종 {position_ratio:.4f}"
             )
             order_value = allocation_decision.approved_order_value_quote
             add_on_order_value = add_on_allocation_decision.approved_order_value_quote
@@ -891,6 +894,7 @@ def run_bot():
                 symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                 symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
                 regime_position_scale=regime_position_scale,
+                atr_position_scale=atr_position_scale,
                 base_position_ratio=base_position_ratio,
                 effective_position_ratio=position_ratio,
                 regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,

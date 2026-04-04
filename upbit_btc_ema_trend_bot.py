@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC ATR 퍼센트가 낮을 때 신규 진입 비중을 단계형으로 줄이는 보정을 추가했다.
 - 업비트 BTC 5분/15분 경로도 웹소켓 1분봉 리샘플 우선, stale 시 REST fallback 으로 바꿔 REST 캔들 호출을 더 줄이도록 확장했다.
 - 업비트 BTC 1분봉 경로를 웹소켓 1분 캔들 우선, stale 시 REST fallback 으로 바꿔 phase 3 전환을 시작했다.
 - 업비트 BTC best bid 조회를 웹소켓 latest 스냅샷 우선, stale 시 REST fallback 으로 바꿔 phase 2 전환을 시작했다.
@@ -790,9 +791,10 @@ def run_bot():
             trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
             base_position_ratio = settings.get_position_ratio(symbol)
             regime_position_scale = settings.get_regime_position_scale(symbol_regime)
+            atr_position_scale = settings.get_atr_position_scale(atr_pct)
             position_ratio = apply_regime_position_scale(
                 base_position_ratio=base_position_ratio,
-                regime_scale=regime_position_scale,
+                regime_scale=(regime_position_scale * atr_position_scale),
             )
             effective_partial_take_profit_ratio = min(
                 1.0,
@@ -830,7 +832,8 @@ def run_bot():
             )
             log(
                 f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
-                f"레짐 스케일 {regime_position_scale:.2f}x | 최종 {position_ratio:.4f}"
+                f"레짐 스케일 {regime_position_scale:.2f}x | "
+                f"ATR 스케일 {atr_position_scale:.2f}x | 최종 {position_ratio:.4f}"
             )
             order_value = allocation_decision.approved_order_value_quote
             add_on_order_value = add_on_allocation_decision.approved_order_value_quote
@@ -919,6 +922,7 @@ def run_bot():
                 symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                 symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
                 regime_position_scale=regime_position_scale,
+                atr_position_scale=atr_position_scale,
                 base_position_ratio=base_position_ratio,
                 effective_position_ratio=position_ratio,
                 regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,

@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC ATR 퍼센트가 낮을 때 신규 진입 비중을 단계형으로 줄일 수 있게 설정을 추가했다.
 - 2026-04-03: BTC 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 BTC 전용 EMA 추세추종 설정 로더
 
@@ -33,7 +34,7 @@ from dataclasses import dataclass
 
 from settings.config_access import config_bool, config_float, config_int, config_str, config_value
 from settings.env import load_project_env
-from strategy_settings import parse_symbol_float_map
+from strategy_settings import parse_float_float_map, parse_symbol_float_map
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,8 @@ class BtcTrendSettings:
     position_ratio_map: dict[str, float]
     enable_regime_position_scaling: bool
     regime_position_scale_map: dict[str, float]
+    enable_atr_position_scaling: bool
+    atr_position_scale_threshold_map: dict[float, float]
     min_order_amount: float
     min_trade_interval_sec: int
     stop_loss_reentry_cooldown_sec: int
@@ -133,6 +136,22 @@ class BtcTrendSettings:
         if not regime:
             return 1.0
         return self.regime_position_scale_map.get(regime, 1.0)
+
+    def get_atr_position_scale(self, atr_pct: float | None) -> float:
+        """ATR 퍼센트 기준 포지션 비중 스케일을 반환한다."""
+        if not self.enable_atr_position_scaling:
+            return 1.0
+        if atr_pct is None:
+            return 1.0
+
+        matched_scales = [
+            scale
+            for threshold, scale in self.atr_position_scale_threshold_map.items()
+            if atr_pct < threshold
+        ]
+        if not matched_scales:
+            return 1.0
+        return min(matched_scales)
 
     def get_effective_min_volume_ratio(
         self, symbol: str, regime: str | None = None
@@ -203,6 +222,8 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         position_ratio_map=parse_symbol_float_map(config_value("btc_trend", "position_ratio_map", {}, env_key="BTC_TREND_POSITION_RATIO_MAP")),
         enable_regime_position_scaling=config_bool("btc_trend", "enable_regime_position_scaling", True, env_key="BTC_TREND_ENABLE_REGIME_POSITION_SCALING"),
         regime_position_scale_map=parse_symbol_float_map(config_value("btc_trend", "regime_position_scale_map", {}, env_key="BTC_TREND_REGIME_POSITION_SCALE_MAP")),
+        enable_atr_position_scaling=config_bool("btc_trend", "enable_atr_position_scaling", True, env_key="BTC_TREND_ENABLE_ATR_POSITION_SCALING"),
+        atr_position_scale_threshold_map=parse_float_float_map(config_value("btc_trend", "atr_position_scale_threshold_map", {}, env_key="BTC_TREND_ATR_POSITION_SCALE_THRESHOLD_MAP")),
         min_order_amount=config_float("btc_trend", "min_order_amount", 0.00001, env_key="BTC_TREND_MIN_ORDER_AMOUNT"),
         min_trade_interval_sec=config_int("btc_trend", "min_trade_interval_sec", 300, env_key="BTC_TREND_MIN_TRADE_INTERVAL_SEC"),
         stop_loss_reentry_cooldown_sec=config_int("btc_trend", "stop_loss_reentry_cooldown_sec", 600, env_key="BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC"),

@@ -44,9 +44,11 @@
     - `BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO=0.4`
     - `BTC_TREND_TAKE_PROFIT_ATR_MULTIPLE=1.8`
     - `BTC_TREND_TRAILING_DRAWDOWN_PCT=0.6`
+    - `BTC_TREND_ATR_POSITION_SCALE_THRESHOLD_MAP=0.16:0.80,0.13:0.60,0.10:0.35`
   - 현재 해석:
     - `BTC/USDT` 는 최근 수익 러너가 나오는 축이라 부분익절을 줄이고 트레일링 여유를 넓혀 수익을 더 가져가도록 조정
     - `BTC/KRW` 는 약한 진입 손절을 줄이기 위해 EMA 스프레드와 CHOPPY 거래량 기준을 더 보수화
+    - BTC도 `regime`뿐 아니라 `ATR 퍼센트`가 너무 낮은 구간에서는 신규 진입 비중을 단계형으로 줄여 저변동 구간 과진입을 완화
 - 알트 전용 전략
   - 기본 개념: 1분봉 20기간 이동평균선 돌파 기반 추세 추종
   - 매수 조건: 가격이 이동평균선을 아래에서 위로 돌파하거나 상단 유지 추세 조건을 만족하고, 최소 이격도, RSI, MACD, 기울기, 상태 머신 조건을 함께 통과할 때
@@ -66,11 +68,14 @@
     - `STRATEGY_BTC_REGIME_POSITION_SCALE_MAP=LOW_ENERGY:0.50`
     - `STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP=ETH/KRW|LOW_ENERGY:0.35,XRP/KRW|LOW_ENERGY:0.60,ETH/USDT|LOW_ENERGY:0.35,XRP/USDT|LOW_ENERGY:0.60`
     - `STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP=0.18:0.70,0.15:0.45,0.12:0.25`
+    - `ANALYSIS_OKX_SYMBOLS=SOL/USDT`
+    - `ANALYSIS_UPBIT_SYMBOLS=SOL/KRW`
   - 현재 해석:
     - `ETH/USDT`, `ETH/KRW` 는 최근 손절이 잦아 진입 품질을 먼저 높이는 쪽으로 조정
     - `XRP/KRW`, `XRP/USDT` 는 수익은 나지만 보호 청산이 빨라 러너를 덜 먹는 구간이 보여 순익 보호를 조금 늦춤
     - 레짐별 포지션 비중 1차 적용으로 상승장/횡보장/저에너지장에 따라 진입 크기도 다르게 조절
     - 최근 3일 업비트 실거래 기준으로는 `BTC LOW_ENERGY`, `낮은 BTC atr_pct` 구간에서 알트 손실 캠페인이 상대적으로 많아, 알트 자체 레짐 외에 `BTC 상태 기반 축소`를 추가 적용
+    - `SOL`은 우선 분석 수집만 추가하고, 최근 `volume_ratio`, `avg_abs_change_pct`, `ready 빈도`, `실제 최소 주문 금액 적합성`이 충분히 쌓이면 실거래 후보로 올림
 
 장타/스윙 전용 구조와 초기 전략안은 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 에 정리합니다.
 
