@@ -50,6 +50,7 @@ from core.strategy.indicators import (
 from core.strategy.timing import update_entry_timing_state
 from market_regime_guard import classify_symbol_regime, get_alt_regime_policy, get_btc_regime_policy
 from strategy_settings import load_strategy_settings
+from tools.update_backtest_registry import REGISTRY_PATH, build_all_registry_entries, write_registry
 
 
 DEFAULT_OKX_FEE_RATE_PCT = 0.10
@@ -1668,6 +1669,7 @@ def run_backtest_command(args: argparse.Namespace) -> int:
     write_json(output_dir / "summary.json", summary)
     write_jsonl(output_dir / "trades.jsonl", trades)
     write_jsonl(output_dir / "equity_curve.jsonl", equity_curve)
+    write_registry(REGISTRY_PATH, build_all_registry_entries())
 
     print(f"리플레이 완료: {output_dir}")
     print(

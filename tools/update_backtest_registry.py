@@ -19,6 +19,7 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BACKTEST_BATCH_DIR = ROOT_DIR / "reports" / "backtest_batches"
+BACKTEST_SINGLE_DIR = ROOT_DIR / "reports" / "backtests"
 REGISTRY_PATH = ROOT_DIR / "reports" / "backtest_registry.json"
 
 
@@ -55,6 +56,26 @@ def build_batch_entry(batch_dir: Path) -> dict[str, Any] | None:
         "since": payload.get("since"),
         "until": payload.get("until"),
         "symbols": sorted(set(symbols)),
+    }
+
+
+def build_single_backtest_entry(backtest_dir: Path) -> dict[str, Any] | None:
+    """summary.json 기준 단일 백테스트 항목을 만든다."""
+    summary_path = backtest_dir / "summary.json"
+    payload = safe_read_json(summary_path)
+    if not isinstance(payload, dict):
+        return None
+    symbol = str(payload.get("symbol", "")).strip()
+    return {
+        "type": "single",
+        "name": backtest_dir.name,
+        "label": payload.get("label"),
+        "created_at": payload.get("created_at") or datetime.fromtimestamp(backtest_dir.stat().st_mtime).isoformat(),
+        "path": str(backtest_dir),
+        "summary_path": str(summary_path),
+        "exchange_name": payload.get("exchange_name"),
+        "strategy_type": payload.get("strategy_type"),
+        "symbols": [symbol] if symbol else [],
     }
 
 
@@ -105,6 +126,10 @@ def build_registry_entries(base_dir: Path) -> list[dict[str, Any]]:
         return entries
 
     for child in sorted((path for path in base_dir.iterdir() if path.is_dir()), reverse=True):
+        single_entry = build_single_backtest_entry(child)
+        if single_entry is not None:
+            entries.append(single_entry)
+            continue
         batch_entry = build_batch_entry(child)
         if batch_entry is not None:
             entries.append(batch_entry)
@@ -112,6 +137,14 @@ def build_registry_entries(base_dir: Path) -> list[dict[str, Any]]:
         diff_entry = build_diff_entry(child)
         if diff_entry is not None:
             entries.append(diff_entry)
+    return entries
+
+
+def build_all_registry_entries() -> list[dict[str, Any]]:
+    """단일 백테스트와 배치/비교 결과를 합쳐 전체 레지스트리를 만든다."""
+    entries = build_registry_entries(BACKTEST_SINGLE_DIR)
+    entries.extend(build_registry_entries(BACKTEST_BATCH_DIR))
+    entries.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
     return entries
 
 
@@ -138,7 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     base_dir = Path(args.base_dir)
     output_path = Path(args.output)
-    entries = build_registry_entries(base_dir)
+    if base_dir.resolve() == BACKTEST_BATCH_DIR.resolve():
+        entries = build_all_registry_entries()
+    else:
+        entries = build_registry_entries(base_dir)
     write_registry(output_path, entries)
     print(f"레지스트리 갱신 완료: {output_path}")
     print(f"- 항목 수: {len(entries)}")

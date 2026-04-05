@@ -245,6 +245,13 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 
 헬스체크는 현재 관리 대상 프로세스 PID, 최신 로그 갱신 시각, 분석 로그/구조화 로그 최근 파일을 기준으로 기본 운영 상태를 점검합니다.
 
+## 백테스트 레지스트리
+
+- 레지스트리 파일: `reports/backtest_registry.json`
+- 수동 갱신: `.venv/bin/python tools/update_backtest_registry.py`
+- 현재는 `reports/backtest_batches` 뿐 아니라 `reports/backtests` 아래의 단일 백테스트 결과도 함께 인덱싱합니다.
+- 따라서 웹 또는 단일 실행으로 백테스트를 돌려도 결과 디렉토리가 생성되면 레지스트리에 자동 반영됩니다.
+
 ## 포트폴리오 배분
 
 현재 포트폴리오 배분은 `평가금액 강제 리밸런싱`이 아니라, `신규 매수 허용 금액 제한` 방식으로 동작합니다.

@@ -93,6 +93,7 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
 ## 5. 결과 파일
 
 실행 결과는 `reports/backtests/<timestamp>__<strategy>__<symbol>/` 아래에 저장됩니다.
+단일 백테스트 실행이 끝나면 `reports/backtest_registry.json` 도 함께 갱신되어, 웹/리포트 쪽에서 최근 실행 결과를 바로 찾을 수 있습니다.
 
 - `summary.json`
   - 수익률, 거래 수, 승률, 최대 낙폭
