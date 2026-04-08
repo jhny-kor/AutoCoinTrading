@@ -1,4 +1,4 @@
-"""운영 헬스체크 리포트 생성에 대한 개발 테스트."""
+"""운영 헬스체크의 warning/strict 리포트 생성에 대한 개발 테스트."""
 
 import tempfile
 import unittest
@@ -45,6 +45,40 @@ class HealthcheckTests(unittest.TestCase):
 
             self.assertTrue(report["ok"])
             self.assertTrue(all(item["ok"] for item in report["programs"].values()))
+
+    def test_warning_mode_does_not_fail_overall_for_warning_program(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logs_dir = root / "logs" / "2026-03-29"
+            analysis_dir = root / "analysis_logs" / "2026-03-29"
+            structured_dir = root / "structured_logs" / "live" / "2026-03-29" / "x"
+            logs_dir.mkdir(parents=True)
+            analysis_dir.mkdir(parents=True)
+            structured_dir.mkdir(parents=True)
+
+            (logs_dir / "ma_crossover_bot.log").write_text("ok", encoding="utf-8")
+            (analysis_dir / "okx__ETH_USDT.jsonl").write_text("{}", encoding="utf-8")
+            (structured_dir / "strategy.jsonl").write_text("{}", encoding="utf-8")
+
+            programs = {
+                "okx": "run/ma_crossover_bot.py",
+                "upbit_stream": "run/upbit_market_data_stream.py",
+            }
+
+            def fake_path(path_str=""):
+                return root / path_str if path_str else root
+
+            with patch("tools.healthcheck.PROGRAMS", programs), \
+                 patch("tools.healthcheck.current_date_str", return_value="2026-03-29"), \
+                 patch("tools.healthcheck.read_pid_file", return_value=123), \
+                 patch("tools.healthcheck.is_pid_alive", return_value=True), \
+                 patch("tools.healthcheck.Path", side_effect=fake_path):
+                warning_report = build_health_report(1800, mode="warning")
+                strict_report = build_health_report(1800, mode="strict")
+
+            self.assertEqual("WARN", warning_report["programs"]["upbit_stream"]["status"])
+            self.assertEqual("WARN", warning_report["status"])
+            self.assertEqual("FAIL", strict_report["status"])
 
 
 if __name__ == "__main__":
