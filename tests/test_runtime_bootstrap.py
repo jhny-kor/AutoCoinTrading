@@ -56,6 +56,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
         self.assertEqual(runtime_state.partial_take_profit_done, {"ETH/USDT": True})
         self.assertEqual(runtime_state.entry_count, {"ETH/USDT": 2})
         self.assertEqual(runtime_state.last_trade_at, {"ETH/USDT": 110.0})
+        self.assertEqual(runtime_state.last_stop_loss_at, {})
 
     def test_build_btc_runtime_state_handles_missing_recovery(self):
         runtime_state = build_btc_runtime_state("BTC/USDT", None)
@@ -69,4 +70,3 @@ class RuntimeBootstrapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

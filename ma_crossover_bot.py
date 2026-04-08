@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-09: 알트 손절 후 재진입을 최소 시간 + 패턴 복구 기준으로 보도록 패턴 기반 재진입 gate 를 추가
 - 2026-04-08: 알트도 독립 레짐 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
 - 2026-04-06: 알트 Bollinger Squeeze + 거래량 확장 진입 지표 연산 연동
 - BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄이는 보정을 추가했다.
@@ -77,7 +78,11 @@ from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
 from core.runtime.bootstrap import build_alt_runtime_state
-from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
+from core.strategy.alt import (
+    compute_alt_signal_state,
+    compute_can_average_down,
+    compute_alt_stop_loss_reentry_gate,
+)
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from core.strategy.regime_router import route_alt_strategy
 from core.strategy.indicators import (
@@ -304,6 +309,7 @@ def run_bot():
     partial_take_profit_last_at = runtime_state.partial_take_profit_last_at
     entry_count = runtime_state.entry_count
     last_trade_at = runtime_state.last_trade_at
+    last_stop_loss_at = runtime_state.last_stop_loss_at
     daily_realized_pnl_quote = load_program_daily_realized_pnl_quote(
         "ma_crossover_bot",
         daily_pnl_date,
@@ -604,6 +610,10 @@ def run_bot():
                 in_cooldown = (
                     seconds_since_last_trade < strategy.min_trade_interval_sec
                 )
+                last_stop_loss_ts = last_stop_loss_at.get(symbol, 0.0)
+                seconds_since_last_stop_loss = (
+                    time.time() - last_stop_loss_ts if last_stop_loss_ts > 0 else float("inf")
+                )
                 partial_take_profit_last_ts = partial_take_profit_last_at.get(symbol, 0.0)
                 partial_take_profit_cooldown_remaining = max(
                     0.0,
@@ -748,6 +758,29 @@ def run_bot():
                 fill_quality_entry_blocked = (
                     entry_signal and not has_position and fill_quality_snapshot.active
                 )
+                stop_loss_pattern_gate = compute_alt_stop_loss_reentry_gate(
+                    enabled=(
+                        strategy.enable_stop_loss_pattern_reentry
+                        and last_stop_loss_ts > 0
+                        and not has_position
+                    ),
+                    elapsed_since_stop_loss_sec=seconds_since_last_stop_loss,
+                    min_cooldown_sec=strategy.stop_loss_pattern_min_cooldown_sec,
+                    entry_signal=entry_signal,
+                    bullish=bullish,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.stop_loss_pattern_min_signal_score,
+                    volume_ratio=volume_ratio,
+                    min_volume_ratio=effective_min_volume_ratio,
+                    min_volume_ratio_multiplier=strategy.stop_loss_pattern_min_volume_ratio_multiplier,
+                    htf_bullish=htf_bullish,
+                    require_htf_bullish=strategy.stop_loss_pattern_require_htf_bullish,
+                    require_fresh_cross=strategy.stop_loss_pattern_require_fresh_cross,
+                )
+                stop_loss_pattern_blocked = bool(
+                    stop_loss_pattern_gate["enabled"]
+                    and not stop_loss_pattern_gate["pattern_ready"]
+                )
                 raw_entry_candidate = False
                 if strategy_key == "skip":
                     raw_entry_candidate = False
@@ -759,6 +792,7 @@ def run_bot():
                         and not low_energy_guard_active
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
+                        and not stop_loss_pattern_blocked
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 else:
@@ -768,6 +802,7 @@ def run_bot():
                         and not low_energy_guard_active
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
+                        and not stop_loss_pattern_blocked
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
@@ -876,6 +911,15 @@ def run_bot():
                     log(
                         f"[{symbol}] 최근 체결비율 {fill_quality_snapshot.avg_fill_ratio * 100:.1f}% 로 낮아 "
                         f"다음 {strategy.fill_quality_lookback_sec // 60}분 동안 신규 매수를 보류합니다."
+                    )
+                if stop_loss_pattern_blocked:
+                    log(
+                        f"[{symbol}] 손절 후 패턴 재진입 대기 중입니다. "
+                        f"경과 {int(seconds_since_last_stop_loss)}초 / 최소 {strategy.stop_loss_pattern_min_cooldown_sec}초, "
+                        f"신호 점수 {signal_score:.1f}/{strategy.stop_loss_pattern_min_signal_score:.1f}, "
+                        f"거래량 {0.0 if volume_ratio is None else volume_ratio:.4f}/"
+                        f"{float(stop_loss_pattern_gate['required_min_volume_ratio']):.4f}, "
+                        f"HTF 상승={htf_bullish}, fresh_cross={bullish}"
                     )
                 if raw_entry_candidate and not entry_timing_snapshot.ready:
                     log(
@@ -1180,6 +1224,12 @@ def run_bot():
                     partial_stop_loss_pending=partial_stop_loss_pending,
                 )
 
+                entry_cooldown_active = (
+                    in_cooldown
+                    or partial_take_profit_cooldown_active
+                    or stop_loss_pattern_blocked
+                )
+
                 entry_steps = build_alt_entry_steps(
                     entry_signal=entry_signal,
                     bullish=bullish,
@@ -1199,8 +1249,15 @@ def run_bot():
                     avg_abs_change_pct=avg_abs_change_pct,
                     min_volatility_pct=strategy.min_volatility_pct,
                     max_volatility_pct=strategy.max_volatility_pct,
-                    in_cooldown=(in_cooldown or partial_take_profit_cooldown_active),
+                    in_cooldown=entry_cooldown_active,
                     seconds_since_last_trade=seconds_since_last_trade,
+                    stop_loss_pattern_blocked=stop_loss_pattern_blocked,
+                    stop_loss_pattern_elapsed_sec=seconds_since_last_stop_loss if last_stop_loss_ts > 0 else None,
+                    stop_loss_pattern_min_cooldown_sec=strategy.stop_loss_pattern_min_cooldown_sec,
+                    stop_loss_pattern_signal_score=signal_score,
+                    stop_loss_pattern_min_signal_score=strategy.stop_loss_pattern_min_signal_score,
+                    stop_loss_pattern_volume_ratio=volume_ratio,
+                    stop_loss_pattern_required_volume_ratio=float(stop_loss_pattern_gate["required_min_volume_ratio"]),
                     can_average_down=can_average_down,
                     last_close=last_close,
                     avg_entry_price=avg_entry_price,
@@ -1612,6 +1669,8 @@ def run_bot():
                             continue
                         order_response_received_at = time.time()
                         last_trade_at[symbol] = time.time()
+                        if exit_reason in {"stop_loss", "partial_stop_loss"}:
+                            last_stop_loss_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.0001:
                             entry_count[symbol] = 0

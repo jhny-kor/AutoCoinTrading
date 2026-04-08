@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-09: 손절 후 패턴 기반 재진입 차단 단계를 퍼널에 추가해 reason 코드로 추적할 수 있게 확장
 - 알트/BTC 진입, 추가매수, 청산 퍼널 step 생성기를 공통 모듈로 분리했다.
 - reason 코드와 단계 구성을 한 곳에서 유지하도록 정리했다.
 - RSI, MACD, 신호 스코어, 볼린저 밴드 폭 같은 보조 필터 단계를 퍼널에 반영했다.
@@ -42,6 +43,13 @@ def build_alt_entry_steps(
     max_daily_loss_quote: float,
     order_value_quote: float,
     min_buy_order_value: float,
+    stop_loss_pattern_blocked: bool = False,
+    stop_loss_pattern_elapsed_sec: float | None = None,
+    stop_loss_pattern_min_cooldown_sec: int | None = None,
+    stop_loss_pattern_signal_score: float | None = None,
+    stop_loss_pattern_min_signal_score: float | None = None,
+    stop_loss_pattern_volume_ratio: float | None = None,
+    stop_loss_pattern_required_volume_ratio: float | None = None,
 ):
     return [
         FunnelStep(
@@ -102,6 +110,21 @@ def build_alt_entry_steps(
             reason="cooldown_active",
             actual={"seconds_since_last_trade": seconds_since_last_trade},
             required={"cooldown_inactive": True},
+        ),
+        FunnelStep(
+            stage="stop_loss_reentry",
+            passed=not stop_loss_pattern_blocked,
+            reason="stop_loss_pattern_reentry_blocked",
+            actual={
+                "elapsed_since_stop_loss_sec": stop_loss_pattern_elapsed_sec,
+                "signal_score": stop_loss_pattern_signal_score,
+                "volume_ratio": stop_loss_pattern_volume_ratio,
+            },
+            required={
+                "min_cooldown_sec": stop_loss_pattern_min_cooldown_sec,
+                "min_signal_score": stop_loss_pattern_min_signal_score,
+                "min_volume_ratio": stop_loss_pattern_required_volume_ratio,
+            },
         ),
         FunnelStep(
             stage="position_rule",
@@ -264,6 +287,11 @@ def build_btc_entry_steps(
     min_buy_order_value: float,
     estimated_entry_amount: float,
     min_order_amount: float,
+    stop_loss_pattern_blocked: bool = False,
+    stop_loss_pattern_elapsed_sec: float | None = None,
+    stop_loss_pattern_min_cooldown_sec: int | None = None,
+    stop_loss_pattern_signal_score: float | None = None,
+    stop_loss_pattern_min_signal_score: float | None = None,
 ):
     return [
         FunnelStep(
@@ -320,6 +348,19 @@ def build_btc_entry_steps(
                 "profit_exit_cooldown_remaining_sec": profit_exit_cooldown_remaining,
             },
             required={"cooldown_inactive": True},
+        ),
+        FunnelStep(
+            stage="stop_loss_reentry",
+            passed=not stop_loss_pattern_blocked,
+            reason="stop_loss_pattern_reentry_blocked",
+            actual={
+                "elapsed_since_stop_loss_sec": stop_loss_pattern_elapsed_sec,
+                "signal_score": stop_loss_pattern_signal_score,
+            },
+            required={
+                "min_cooldown_sec": stop_loss_pattern_min_cooldown_sec,
+                "min_signal_score": stop_loss_pattern_min_signal_score,
+            },
         ),
         FunnelStep(
             stage="market_regime",

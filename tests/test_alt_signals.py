@@ -1,8 +1,12 @@
-"""알트 신호 계산과 평균단가 추가매수 조건에 대한 개발 테스트."""
+"""알트 신호 계산, 평균단가 추가매수, 손절 후 패턴 재진입 gate 테스트."""
 
 import unittest
 
-from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
+from core.strategy.alt import (
+    compute_alt_signal_state,
+    compute_can_average_down,
+    compute_alt_stop_loss_reentry_gate,
+)
 
 
 class AltSignalTests(unittest.TestCase):
@@ -96,6 +100,41 @@ class AltSignalTests(unittest.TestCase):
                 averaging_down_gap_pct=2.0,
             )
         )
+
+    def test_stop_loss_pattern_reentry_requires_recovery_conditions(self):
+        blocked = compute_alt_stop_loss_reentry_gate(
+            enabled=True,
+            elapsed_since_stop_loss_sec=120,
+            min_cooldown_sec=180,
+            entry_signal=True,
+            bullish=False,
+            signal_score=65.0,
+            min_signal_score=70.0,
+            volume_ratio=1.0,
+            min_volume_ratio=1.0,
+            min_volume_ratio_multiplier=1.2,
+            htf_bullish=False,
+            require_htf_bullish=True,
+            require_fresh_cross=True,
+        )
+        self.assertFalse(blocked["pattern_ready"])
+
+        ready = compute_alt_stop_loss_reentry_gate(
+            enabled=True,
+            elapsed_since_stop_loss_sec=240,
+            min_cooldown_sec=180,
+            entry_signal=True,
+            bullish=True,
+            signal_score=75.0,
+            min_signal_score=70.0,
+            volume_ratio=1.4,
+            min_volume_ratio=1.0,
+            min_volume_ratio_multiplier=1.2,
+            htf_bullish=True,
+            require_htf_bullish=True,
+            require_fresh_cross=True,
+        )
+        self.assertTrue(ready["pattern_ready"])
         self.assertTrue(
             compute_can_average_down(
                 has_position=True,

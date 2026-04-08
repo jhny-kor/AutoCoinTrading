@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-09: 손절 후 재진입은 최소 시간과 signal/confirm/fresh cross 복구를 함께 보는 패턴 기반 설정을 추가
 - 2026-04-08: BTC 심볼별 진입 확인 루프 override map 을 추가해 BTC/USDT 와 BTC/KRW 를 다르게 운용할 수 있게 확장
 - 2026-04-06: Donchian Channel 돌파 진입 파라미터 추가
 - 심볼별 CHOPPY 진입 거래량 최소 기준을 설정하는 MAP 을 추가해 BTC/KRW 의 기준을 2.5 로 보수화했다.
@@ -104,6 +105,11 @@ class BtcTrendSettings:
     min_order_amount: float
     min_trade_interval_sec: int
     stop_loss_reentry_cooldown_sec: int
+    enable_stop_loss_pattern_reentry: bool
+    stop_loss_pattern_min_cooldown_sec: int
+    stop_loss_pattern_min_signal_score: float
+    stop_loss_pattern_require_confirm_bullish: bool
+    stop_loss_pattern_require_fresh_cross: bool
     profit_exit_reentry_cooldown_sec: int
     enable_partial_take_profit: bool
     partial_take_profit_ratio: float
@@ -243,6 +249,11 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         min_order_amount=config_float("btc_trend", "min_order_amount", 0.00001, env_key="BTC_TREND_MIN_ORDER_AMOUNT"),
         min_trade_interval_sec=config_int("btc_trend", "min_trade_interval_sec", 300, env_key="BTC_TREND_MIN_TRADE_INTERVAL_SEC"),
         stop_loss_reentry_cooldown_sec=config_int("btc_trend", "stop_loss_reentry_cooldown_sec", 600, env_key="BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC"),
+        enable_stop_loss_pattern_reentry=config_bool("btc_trend", "enable_stop_loss_pattern_reentry", True, env_key="BTC_TREND_ENABLE_STOP_LOSS_PATTERN_REENTRY"),
+        stop_loss_pattern_min_cooldown_sec=config_int("btc_trend", "stop_loss_pattern_min_cooldown_sec", 180, env_key="BTC_TREND_STOP_LOSS_PATTERN_MIN_COOLDOWN_SEC"),
+        stop_loss_pattern_min_signal_score=config_float("btc_trend", "stop_loss_pattern_min_signal_score", 72.0, env_key="BTC_TREND_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE"),
+        stop_loss_pattern_require_confirm_bullish=config_bool("btc_trend", "stop_loss_pattern_require_confirm_bullish", True, env_key="BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_CONFIRM_BULLISH"),
+        stop_loss_pattern_require_fresh_cross=config_bool("btc_trend", "stop_loss_pattern_require_fresh_cross", True, env_key="BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS"),
         profit_exit_reentry_cooldown_sec=config_int("btc_trend", "profit_exit_reentry_cooldown_sec", 600, env_key="BTC_TREND_PROFIT_EXIT_REENTRY_COOLDOWN_SEC"),
         enable_partial_take_profit=config_bool("btc_trend", "enable_partial_take_profit", True, env_key="BTC_TREND_ENABLE_PARTIAL_TAKE_PROFIT"),
         partial_take_profit_ratio=config_float("btc_trend", "partial_take_profit_ratio", 0.5, env_key="BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO"),

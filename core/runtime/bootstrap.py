@@ -1,3 +1,8 @@
+"""
+수정 요약
+- 2026-04-09: 알트도 손절 전용 재진입 시각을 런타임 상태에 복구해 패턴 기반 재진입에 재사용하도록 확장
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,6 +21,7 @@ class AltRuntimeState:
     partial_take_profit_last_at: dict[str, float]
     entry_count: dict[str, int]
     last_trade_at: dict[str, float]
+    last_stop_loss_at: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,11 @@ def build_alt_runtime_state(
             for symbol, state in recovered_states.items()
             if state.last_trade_at_ts > 0
         },
+        last_stop_loss_at={
+            symbol: state.last_stop_loss_at_ts
+            for symbol, state in recovered_states.items()
+            if state.last_stop_loss_at_ts > 0
+        },
     )
 
 
@@ -122,4 +133,3 @@ def build_btc_runtime_state(
             recovered_state.last_profit_exit_at_ts if recovered_state else 0.0
         ),
     )
-

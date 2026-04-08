@@ -46,6 +46,11 @@
     - `BTC_TREND_MIN_EMA_SPREAD_PCT_MAP=BTC/USDT:0.030,BTC/KRW:0.030`
     - `BTC_TREND_SIGNAL_SCORE_MIN=62`
     - `BTC_TREND_ENTRY_CONFIRMATION_LOOPS=3`
+    - `BTC_TREND_ENABLE_STOP_LOSS_PATTERN_REENTRY=true`
+    - `BTC_TREND_STOP_LOSS_PATTERN_MIN_COOLDOWN_SEC=180`
+    - `BTC_TREND_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE=72`
+    - `BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_CONFIRM_BULLISH=true`
+    - `BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS=true`
     - `BTC_TREND_MIN_VOLUME_RATIO_MAP=BTC/USDT:1.70,BTC/KRW:1.55`
     - `BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP=BTC/USDT:2.20,BTC/KRW:2.20`
     - `BTC_TREND_REGIME_POSITION_SCALE_MAP=TRENDING:1.10,BREAKOUT_ATTEMPT:0.90,CHOPPY:0.50,LOW_ENERGY:0.00,OVERHEATED:0.30,EXHAUSTION_RISK:0.00`
@@ -57,6 +62,7 @@
   - 현재 해석:
     - `BTC/USDT`, `BTC/KRW` 모두 최근 손실 거래의 `MFE` 가 매우 낮아, 진입 횟수보다 진입 질을 더 우선하도록 조정
     - `CHOPPY` 구간은 신규 진입 자체를 더 보수적으로 막고, 상태 머신 확인 횟수도 늘려 약한 추세 유지 진입을 줄임
+    - 손절 후 재진입도 이제는 `시간 경과만`이 아니라 `confirm + fresh cross + 점수 복구`가 함께 보여야 허용
     - BTC도 `regime`뿐 아니라 `ATR 퍼센트`가 너무 낮은 구간에서는 신규 진입 비중을 단계형으로 줄여 저변동 구간 과진입을 완화
 - 알트 전용 전략
   - 기본 개념: 1분봉 20기간 이동평균선 돌파 기반 추세 추종
@@ -69,6 +75,12 @@
   - 공통 필터: 쿨다운, 최소 이격도, RSI, MACD, 상위 타임프레임, 거래량, 변동성, BTC 상관관계, 체결 품질, 일일 최대 손실 제한, 목표 비중 기반 신규 매수 제한
   - 코인별 설정 분리: 이격도, 익절률, 손절률, 최소 주문 수량을 코인별로 다르게 적용
   - 현재 적용 핵심값:
+    - `STRATEGY_ENABLE_STOP_LOSS_PATTERN_REENTRY=true`
+    - `STRATEGY_STOP_LOSS_PATTERN_MIN_COOLDOWN_SEC=180`
+    - `STRATEGY_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE=70`
+    - `STRATEGY_STOP_LOSS_PATTERN_MIN_VOLUME_RATIO_MULTIPLIER=1.20`
+    - `STRATEGY_STOP_LOSS_PATTERN_REQUIRE_HTF_BULLISH=true`
+    - `STRATEGY_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS=true`
     - `ETH/USDT` 최소 거래량 배수 `0.80`
     - `ETH/KRW` 최소 거래량 배수 `1.20`
     - `ETH/KRW` 포지션 비중 `0.45`
@@ -88,6 +100,8 @@
   - 현재 해석:
     - `ETH/KRW` 는 최근 손실이 반복돼 청산보다 진입 자체를 줄이는 쪽으로 더 보수화
     - `XRP/KRW`, `XRP/USDT` 는 작은 수익 후 큰 손실 한두 건이 손익을 무너뜨려 보호 장치를 더 빨리 켜도록 조정
+    - 손절 후 재진입도 `최소 180초 + 더 높은 신호 점수 + 강화된 거래량 + HTF 상승 + fresh cross`가 같이 확인될 때만 허용
+    - 2026-04-09 오전 로그 기준으로는 대부분 `HTF 하락` 또는 `fresh cross 부재` 때문에 막혀 있어, 현재 강도는 과도하기보다 회복 전 재진입 억제용에 가까움
     - 레짐별 포지션 비중 1차 적용으로 상승장/횡보장/저에너지장에 따라 진입 크기도 다르게 조절
     - 최근 3일 업비트 실거래 기준으로는 `BTC LOW_ENERGY`, `낮은 BTC atr_pct` 구간에서 알트 손실 캠페인이 상대적으로 많아, 알트 자체 레짐 외에 `BTC 상태 기반 축소`를 추가 적용
     - `SOL`은 우선 분석 수집만 추가하고, 최근 `volume_ratio`, `avg_abs_change_pct`, `ready 빈도`, `실제 최소 주문 금액 적합성`이 충분히 쌓이면 실거래 후보로 올림

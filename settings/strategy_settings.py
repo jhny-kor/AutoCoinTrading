@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-09: 알트 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 설정을 추가
 - 2026-04-08: 심볼별 정수 override 공통 파서를 추가해 BTC 확인 루프처럼 map 기반 int 설정을 재사용할 수 있게 확장
 - 2026-04-03: 공통 전략 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 - 2026-04-06: 알트코인 Bollinger Squeeze + 거래량 폭발 돌파 진입 모드 파라미터 추가
@@ -69,6 +70,12 @@ class StrategySettings:
     sell_split_ratio: float
     max_entry_count: int
     min_trade_interval_sec: int
+    enable_stop_loss_pattern_reentry: bool
+    stop_loss_pattern_min_cooldown_sec: int
+    stop_loss_pattern_min_signal_score: float
+    stop_loss_pattern_min_volume_ratio_multiplier: float
+    stop_loss_pattern_require_htf_bullish: bool
+    stop_loss_pattern_require_fresh_cross: bool
     enable_trend_follow_entry: bool
     trend_follow_requires_prev_above_ma: bool
     trend_follow_requires_price_rising: bool
@@ -471,6 +478,12 @@ def load_strategy_settings(
         sell_split_ratio=config_float("strategy", "sell_split_ratio", 0.10, env_key="STRATEGY_SELL_SPLIT_RATIO"),
         max_entry_count=config_int("strategy", "max_entry_count", 3, env_key="STRATEGY_MAX_ENTRY_COUNT"),
         min_trade_interval_sec=config_int("strategy", "min_trade_interval_sec", 300, env_key="STRATEGY_MIN_TRADE_INTERVAL_SEC"),
+        enable_stop_loss_pattern_reentry=config_bool("strategy", "enable_stop_loss_pattern_reentry", True, env_key="STRATEGY_ENABLE_STOP_LOSS_PATTERN_REENTRY"),
+        stop_loss_pattern_min_cooldown_sec=config_int("strategy", "stop_loss_pattern_min_cooldown_sec", 180, env_key="STRATEGY_STOP_LOSS_PATTERN_MIN_COOLDOWN_SEC"),
+        stop_loss_pattern_min_signal_score=config_float("strategy", "stop_loss_pattern_min_signal_score", 70.0, env_key="STRATEGY_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE"),
+        stop_loss_pattern_min_volume_ratio_multiplier=config_float("strategy", "stop_loss_pattern_min_volume_ratio_multiplier", 1.2, env_key="STRATEGY_STOP_LOSS_PATTERN_MIN_VOLUME_RATIO_MULTIPLIER"),
+        stop_loss_pattern_require_htf_bullish=config_bool("strategy", "stop_loss_pattern_require_htf_bullish", True, env_key="STRATEGY_STOP_LOSS_PATTERN_REQUIRE_HTF_BULLISH"),
+        stop_loss_pattern_require_fresh_cross=config_bool("strategy", "stop_loss_pattern_require_fresh_cross", True, env_key="STRATEGY_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS"),
         enable_trend_follow_entry=config_bool("strategy", "enable_trend_follow_entry", False, env_key="STRATEGY_ENABLE_TREND_FOLLOW_ENTRY"),
         trend_follow_requires_prev_above_ma=config_bool("strategy", "trend_follow_require_prev_above_ma", True, env_key="STRATEGY_TREND_FOLLOW_REQUIRE_PREV_ABOVE_MA"),
         trend_follow_requires_price_rising=config_bool("strategy", "trend_follow_require_price_rising", True, env_key="STRATEGY_TREND_FOLLOW_REQUIRE_PRICE_RISING"),

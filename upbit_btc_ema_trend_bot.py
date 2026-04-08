@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-09: BTC 손절 후 재진입은 최소 시간 + confirm/fresh cross 복구 기준으로 보도록 패턴 기반 gate 를 추가
 - 2026-04-08: BTC 가 레짐을 직접 if 분기하지 않고 독립 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
 - 2026-04-08: BTC/KRW 는 확인 루프 5회를 사용하고 심볼별 override 가 레짐별 최소 루프보다 크면 그 값을 쓰도록 보강
 - 2026-04-08: BTC 8단계 보수형 레짐에 따라 진입 확인 루프, trend-follow, 피라미딩 허용 여부를 다르게 적용
@@ -90,7 +91,11 @@ from core.risk.allocation import apply_regime_position_scale
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.runtime.bootstrap import build_btc_runtime_state
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
-from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
+from core.strategy.btc import (
+    compute_btc_entry_state,
+    compute_btc_exit_flags,
+    compute_btc_stop_loss_reentry_gate,
+)
 from core.strategy.indicators import (
     calc_bollinger_band_width_pct,
     calc_donchian_channel,
@@ -588,6 +593,28 @@ def run_bot():
             fill_quality_entry_blocked = (
                 entry_signal and not has_position and fill_quality_snapshot.active
             )
+            stop_loss_pattern_gate = compute_btc_stop_loss_reentry_gate(
+                enabled=(
+                    settings.enable_stop_loss_pattern_reentry
+                    and last_stop_loss_at > 0
+                    and not has_position
+                ),
+                elapsed_since_stop_loss_sec=max(0.0, now_ts - last_stop_loss_at),
+                min_cooldown_sec=settings.stop_loss_pattern_min_cooldown_sec,
+                entry_signal=entry_signal,
+                bullish=bullish,
+                signal_score=signal_score,
+                min_signal_score=settings.stop_loss_pattern_min_signal_score,
+                volume_filter_passed=volume_filter_passed,
+                atr_filter_passed=atr_filter_passed,
+                confirm_bullish=confirm_bullish,
+                require_confirm_bullish=settings.stop_loss_pattern_require_confirm_bullish,
+                require_fresh_cross=settings.stop_loss_pattern_require_fresh_cross,
+            )
+            stop_loss_pattern_blocked = bool(
+                stop_loss_pattern_gate["enabled"]
+                and not stop_loss_pattern_gate["pattern_ready"]
+            )
             raw_entry_candidate = False
             if strategy_key == "skip":
                 raw_entry_candidate = False
@@ -598,6 +625,7 @@ def run_bot():
                     and not low_energy_guard_active
                     and not symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
+                    and not stop_loss_pattern_blocked
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
             else:
@@ -606,6 +634,7 @@ def run_bot():
                     and not low_energy_guard_active
                     and not symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
+                    and not stop_loss_pattern_blocked
                     and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
@@ -987,6 +1016,13 @@ def run_bot():
                     f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
                     f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
                 )
+            if stop_loss_pattern_blocked:
+                log(
+                    f"[{symbol}] 손절 후 패턴 재진입 대기 중입니다. "
+                    f"경과 {int(max(0.0, now_ts - last_stop_loss_at))}초 / 최소 {settings.stop_loss_pattern_min_cooldown_sec}초, "
+                    f"신호 점수 {signal_score:.1f}/{settings.stop_loss_pattern_min_signal_score:.1f}, "
+                    f"confirm={confirm_bullish}, fresh_cross={bullish}"
+                )
 
             entry_steps = build_btc_entry_steps(
                 entry_signal=entry_signal,
@@ -1010,6 +1046,11 @@ def run_bot():
                 base_cooldown_remaining=base_cooldown_remaining,
                 stop_loss_cooldown_remaining=stop_loss_cooldown_remaining,
                 profit_exit_cooldown_remaining=profit_exit_cooldown_remaining,
+                stop_loss_pattern_blocked=stop_loss_pattern_blocked,
+                stop_loss_pattern_elapsed_sec=max(0.0, now_ts - last_stop_loss_at) if last_stop_loss_at > 0 else None,
+                stop_loss_pattern_min_cooldown_sec=settings.stop_loss_pattern_min_cooldown_sec,
+                stop_loss_pattern_signal_score=signal_score,
+                stop_loss_pattern_min_signal_score=settings.stop_loss_pattern_min_signal_score,
                 low_energy_guard_active=low_energy_guard_active,
                 low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                 low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,

@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-09: 손절 후 BTC 재진입은 최소 시간과 confirm/fresh cross 복구를 함께 보는 패턴 기반 gate helper 를 추가
 - 2026-04-06: Donchian Channel + ATR 돌파 기반 병렬 진입 모드 추가
 - BTC EMA 돌파와 추세 조건을 공통 함수로 분리하고, 불필요한 중복 평가를 제거했다.
 - EMA 정렬, spread, 손절/트레일링/순익 보호 판단을 한 곳으로 모았다.
@@ -220,4 +221,46 @@ def compute_btc_exit_flags(
         "trailing_stop_triggered": trailing_stop_triggered,
         "profit_protect_triggered": profit_protect_triggered,
         "trend_exit_triggered": trend_exit_triggered,
+    }
+
+
+def compute_btc_stop_loss_reentry_gate(
+    *,
+    enabled: bool,
+    elapsed_since_stop_loss_sec: float,
+    min_cooldown_sec: int,
+    entry_signal: bool,
+    bullish: bool,
+    signal_score: float,
+    min_signal_score: float,
+    volume_filter_passed: bool,
+    atr_filter_passed: bool,
+    confirm_bullish: bool,
+    require_confirm_bullish: bool,
+    require_fresh_cross: bool,
+) -> dict[str, float | bool]:
+    """손절 후 BTC 재진입 허용 여부를 패턴 기준으로 계산한다."""
+    cooldown_passed = elapsed_since_stop_loss_sec >= max(0, min_cooldown_sec)
+    signal_score_passed = signal_score >= min_signal_score
+    confirm_passed = (not require_confirm_bullish) or confirm_bullish
+    fresh_cross_passed = (not require_fresh_cross) or bullish
+    pattern_ready = (
+        enabled
+        and cooldown_passed
+        and entry_signal
+        and signal_score_passed
+        and volume_filter_passed
+        and atr_filter_passed
+        and confirm_passed
+        and fresh_cross_passed
+    )
+    return {
+        "enabled": enabled,
+        "cooldown_passed": cooldown_passed,
+        "signal_score_passed": signal_score_passed,
+        "volume_passed": volume_filter_passed,
+        "atr_passed": atr_filter_passed,
+        "confirm_passed": confirm_passed,
+        "fresh_cross_passed": fresh_cross_passed,
+        "pattern_ready": pattern_ready,
     }

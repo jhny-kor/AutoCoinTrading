@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-09: 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 gate helper 를 추가
 - 2026-04-06: Bollinger Squeeze + 거래량 확장 돌파 기반 병렬 진입 모드 구성
 - 알트 신호 계산과 평균단가 대비 추가매수 허용 여부를 공통 함수로 분리했다.
 - 골든/데드크로스와 trend-follow 진입 계산을 한 곳으로 모았다.
@@ -158,3 +159,49 @@ def compute_can_average_down(
         or average_entry_price is None
         or last_close <= average_entry_price * (1 - averaging_down_gap_pct / 100)
     )
+
+
+def compute_alt_stop_loss_reentry_gate(
+    *,
+    enabled: bool,
+    elapsed_since_stop_loss_sec: float,
+    min_cooldown_sec: int,
+    entry_signal: bool,
+    bullish: bool,
+    signal_score: float,
+    min_signal_score: float,
+    volume_ratio: float | None,
+    min_volume_ratio: float,
+    min_volume_ratio_multiplier: float,
+    htf_bullish: bool,
+    require_htf_bullish: bool,
+    require_fresh_cross: bool,
+) -> dict[str, float | bool]:
+    """손절 후 알트 재진입 허용 여부를 패턴 기준으로 계산한다."""
+    effective_min_volume_ratio = max(0.0, min_volume_ratio * max(min_volume_ratio_multiplier, 0.0))
+    cooldown_passed = elapsed_since_stop_loss_sec >= max(0, min_cooldown_sec)
+    signal_score_passed = signal_score >= min_signal_score
+    volume_passed = (
+        volume_ratio is not None and volume_ratio >= effective_min_volume_ratio
+    )
+    htf_passed = (not require_htf_bullish) or htf_bullish
+    fresh_cross_passed = (not require_fresh_cross) or bullish
+    pattern_ready = (
+        enabled
+        and cooldown_passed
+        and entry_signal
+        and signal_score_passed
+        and volume_passed
+        and htf_passed
+        and fresh_cross_passed
+    )
+    return {
+        "enabled": enabled,
+        "cooldown_passed": cooldown_passed,
+        "signal_score_passed": signal_score_passed,
+        "volume_passed": volume_passed,
+        "htf_passed": htf_passed,
+        "fresh_cross_passed": fresh_cross_passed,
+        "pattern_ready": pattern_ready,
+        "required_min_volume_ratio": effective_min_volume_ratio,
+    }

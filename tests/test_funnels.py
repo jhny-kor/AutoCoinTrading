@@ -45,7 +45,7 @@ class FunnelBuilderTests(unittest.TestCase):
             order_value_quote=50.0,
             min_buy_order_value=1.0,
         )
-        self.assertEqual(12, len(steps))
+        self.assertEqual(13, len(steps))
         self.assertEqual("trend", steps[0].stage)
         self.assertEqual("order_value", steps[-1].stage)
 

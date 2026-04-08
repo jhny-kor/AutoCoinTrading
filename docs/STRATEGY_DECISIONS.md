@@ -610,6 +610,46 @@
 - 해석:
   - 전략 조정보다 먼저 런타임 예외를 제거해야 알트 봇 로그와 체결이 정상적으로 쌓임
 
+### 32. 손절 후 패턴 기반 재진입 게이트 도입 (2026-04-09, alt_live_v1 / btc_mid_v1)
+
+- 변경 내용:
+  - BTC
+    - `BTC_TREND_ENABLE_STOP_LOSS_PATTERN_REENTRY=true`
+    - `BTC_TREND_STOP_LOSS_PATTERN_MIN_COOLDOWN_SEC=180`
+    - `BTC_TREND_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE=72`
+    - `BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_CONFIRM_BULLISH=true`
+    - `BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS=true`
+  - 알트
+    - `STRATEGY_ENABLE_STOP_LOSS_PATTERN_REENTRY=true`
+    - `STRATEGY_STOP_LOSS_PATTERN_MIN_COOLDOWN_SEC=180`
+    - `STRATEGY_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE=70`
+    - `STRATEGY_STOP_LOSS_PATTERN_MIN_VOLUME_RATIO_MULTIPLIER=1.2`
+    - `STRATEGY_STOP_LOSS_PATTERN_REQUIRE_HTF_BULLISH=true`
+    - `STRATEGY_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS=true`
+  - 공통 구현
+    - BTC/알트 공통 helper 추가
+    - 손절 시각 복구/런타임 상태에 `last_stop_loss_at` 포함
+    - 퍼널에 `stop_loss_reentry` 단계와 reason 코드 `stop_loss_pattern_reentry_blocked` 추가
+    - live 봇 4개와 테스트에 반영
+- 근거 로그:
+  - 기존에는 손절 후 `쿨다운 시간만 지나면` 다시 진입 후보로 들어갈 수 있었음
+  - 최근 손절 반복 구간을 보면, 시간은 충분히 지났어도 실제로는
+    - BTC: `confirm_bullish=false`, `fresh_cross=false`, `signal_score<72`
+    - 알트: `HTF 상승=false`, `fresh_cross=false`, `signal_score<70`
+    가 반복됐음
+  - 즉 문제는 쿨다운 시간보다 `패턴이 아직 복구되지 않았는데 다시 진입하려는 것`에 더 가까웠음
+- 현재 관찰:
+  - 2026-04-09 오전 로그 기준으로 gate 는 의도대로 동작 중
+  - `BTC/USDT`, `BTC/KRW` 는 대부분 `confirm=false`, `fresh_cross=false`, 낮은 `signal_score` 때문에 막힘
+  - `XRP/USDT`, `XRP/KRW`, `ETH/KRW` 는 거래량이 살아나는 순간이 있어도 `HTF 상승=false` 와 `fresh_cross=false` 때문에 막힘
+  - 따라서 현재는 “좋은 재진입을 과도하게 막는다”기보다 “회복 전 재진입을 정확히 막는다”에 가까움
+- 해석:
+  - 완전한 시간 기반보다 `최소 시간 + 패턴 복구` 구조가 손절 반복 억제에 더 적합하다고 판단
+  - 다만 이후 로그에서 `좋은 재진입도 자주 막는지`를 하루 이상 더 관찰한 뒤
+    - BTC `72 -> 68`
+    - 알트 `70 -> 65`
+    같은 완화는 별도 검토 가능
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
