@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-04-08: 알트도 독립 레짐 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
+- 2026-04-06: 알트 Bollinger Squeeze + 거래량 확장 진입 지표 연산 연동
 - BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄이는 보정을 추가했다.
 - BTC LOW_ENERGY 축소 스케일에 심볼별 override 를 적용해 ETH/KRW 는 더 보수적으로, XRP/KRW 는 덜 보수적으로 진입 비중을 줄이도록 조정했다.
 - BTC 레짐 기반 알트 신규 진입 비중 스케일을 추가해 BTC 가 LOW_ENERGY 일 때는 알트 포지션을 먼저 축소하도록 보강했다.
@@ -96,8 +98,11 @@ from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_
 from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
+from core.strategy.regime_router import route_alt_strategy
 from core.strategy.indicators import (
     calc_atr,
+    calc_bollinger_bands,
+    calc_bollinger_band_width_pct,
     calc_macd_histogram,
     calc_noise_ratio,
     calc_pct_slope,
@@ -108,7 +113,6 @@ from core.strategy.timing import update_entry_timing_state
 from market_regime_guard import (
     build_regime_change_message,
     classify_symbol_regime,
-    get_alt_regime_policy,
     load_latest_symbol_record,
     load_low_energy_snapshot,
     update_regime_state,
@@ -658,7 +662,9 @@ def run_bot():
                     load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
                 )
                 symbol_regime = symbol_regime_snapshot.regime
-                regime_policy = get_alt_regime_policy(symbol_regime)
+                regime_route = route_alt_strategy(symbol_regime)
+                regime_policy = regime_route.policy
+                strategy_key = regime_route.strategy_key
                 symbol_regime_blocks_entry = (
                     not has_position and regime_policy.pause_new_entry
                 )
@@ -767,6 +773,12 @@ def run_bot():
                     0,
                     strategy.max_entry_count + regime_policy.max_entry_count_delta,
                 )
+                bb_upper, bb_mid, bb_lower = calc_bollinger_bands(
+                    closes, period=strategy.bb_period, stddev_multiplier=strategy.bb_stddev
+                )
+                bb_width_pct = calc_bollinger_band_width_pct(
+                    closes, period=strategy.bb_period, stddev_multiplier=strategy.bb_stddev
+                )
                 alt_signal_state = compute_alt_signal_state(
                     prev_close=prev_close,
                     prev_ma=prev_ma,
@@ -788,6 +800,11 @@ def run_bot():
                     ma_slope_pct=ma_slope_pct,
                     price_slope_pct=price_slope_pct,
                     signal_score_min=strategy.signal_score_min,
+                    entry_mode=strategy.entry_mode,
+                    bb_width_pct=bb_width_pct,
+                    squeeze_max_bandwidth_pct=strategy.squeeze_max_bandwidth_pct,
+                    bb_upper=bb_upper,
+                    squeeze_min_volume_ratio=strategy.squeeze_min_volume_ratio,
                 )
                 bullish = bool(alt_signal_state["bullish"])
                 bearish = bool(alt_signal_state["bearish"])
@@ -837,14 +854,28 @@ def run_bot():
                 fill_quality_entry_blocked = (
                     entry_signal and not has_position and fill_quality_snapshot.active
                 )
-                raw_entry_candidate = (
-                    entry_signal
-                    and not symbol_regime_blocks_entry
-                    and not low_energy_guard_active
-                    and not correlation_entry_blocked
-                    and not fill_quality_entry_blocked
-                    and (not symbol_regime_requires_fresh_cross or bullish)
-                )
+                raw_entry_candidate = False
+                if strategy_key == "skip":
+                    raw_entry_candidate = False
+                elif strategy_key == "breakout":
+                    raw_entry_candidate = (
+                        entry_signal
+                        and bullish
+                        and not symbol_regime_blocks_entry
+                        and not low_energy_guard_active
+                        and not correlation_entry_blocked
+                        and not fill_quality_entry_blocked
+                        and (not symbol_regime_requires_fresh_cross or bullish)
+                    )
+                else:
+                    raw_entry_candidate = (
+                        entry_signal
+                        and not symbol_regime_blocks_entry
+                        and not low_energy_guard_active
+                        and not correlation_entry_blocked
+                        and not fill_quality_entry_blocked
+                        and (not symbol_regime_requires_fresh_cross or bullish)
+                    )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
                 entry_timing_snapshot = update_entry_timing_state(
                     state_store=entry_timing_state,
@@ -866,6 +897,9 @@ def run_bot():
                     f"가격 기울기: {0.0 if price_slope_pct is None else price_slope_pct:.4f}% | "
                     f"신호 스코어: {signal_score:.1f}"
                 )
+                log(f"[{symbol}] 진입 모드: {strategy.entry_mode.upper()} "
+                    f"(BB Width: {bb_width_pct:.2f}% if bb_width_pct else N/A, 기준 {strategy.squeeze_max_bandwidth_pct}%)")
+                log(f"[{symbol}] 레짐 라우터 선택 전략: {strategy_key}")
                 log(
                     f"[{symbol}] 진입 상태 머신: {entry_timing_snapshot.phase} "
                     f"({entry_timing_snapshot.confirmation_count}/"
@@ -1239,6 +1273,7 @@ def run_bot():
                     btc_reference_atr_pct=btc_reference_atr_pct,
                     btc_atr_position_scale=btc_atr_position_scale,
                     symbol_regime=symbol_regime,
+                    regime_strategy_key=strategy_key,
                     symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                     symbol_regime_requires_strong_signal=symbol_regime_requires_strong_signal,
                     symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,

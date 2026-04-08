@@ -339,6 +339,12 @@
 
 현재 단타 프로젝트는 심볼별 최신 분석 로그 기준으로 아래 보수형 8단계 레짐을 분류합니다.
 
+BTC 와 알트는 [core/strategy/regime_router.py](/Users/plo/Documents/auto_coin_bot/core/strategy/regime_router.py) 에서 먼저
+- `skip`
+- `breakout`
+- `trend_follow`
+중 하나로 전략 경로를 선택한 뒤, 기존 전략 엔진을 실행합니다.
+
 ### `LOW_ENERGY`
 
 - 의미: 거래량과 변동성이 약해 추세추종 단타가 잘 안 먹히는 상태

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-08: BTC 가 레짐을 직접 if 분기하지 않고 독립 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
 - 2026-04-08: BTC/KRW 는 확인 루프 5회를 사용하고 심볼별 override 가 레짐별 최소 루프보다 크면 그 값을 쓰도록 보강
 - 2026-04-08: BTC 8단계 보수형 레짐에 따라 진입 확인 루프, trend-follow, 피라미딩 허용 여부를 다르게 적용
 - 2026-04-06: BTC Donchian Channel 모드 실시간 조건 모니터링 연동
@@ -108,10 +109,10 @@ from core.strategy.funnels import (
     build_btc_entry_steps,
     build_btc_exit_steps,
 )
+from core.strategy.regime_router import route_btc_strategy
 from market_regime_guard import (
     build_regime_change_message,
     classify_symbol_regime,
-    get_btc_regime_policy,
     load_latest_symbol_record,
     load_low_energy_snapshot,
     update_regime_state,
@@ -525,7 +526,9 @@ def run_bot():
                 load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
             )
             symbol_regime = symbol_regime_snapshot.regime
-            regime_policy = get_btc_regime_policy(symbol_regime)
+            regime_route = route_btc_strategy(symbol_regime)
+            regime_policy = regime_route.policy
+            strategy_key = regime_route.strategy_key
             symbol_regime_blocks_entry = (
                 not has_position and regime_policy.pause_new_entry
             )
@@ -585,14 +588,27 @@ def run_bot():
             fill_quality_entry_blocked = (
                 entry_signal and not has_position and fill_quality_snapshot.active
             )
-            raw_entry_candidate = (
-                entry_signal
-                and not low_energy_guard_active
-                and not symbol_regime_blocks_entry
-                and not fill_quality_entry_blocked
-                and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
-                and (not symbol_regime_requires_fresh_cross or bullish)
-            )
+            raw_entry_candidate = False
+            if strategy_key == "skip":
+                raw_entry_candidate = False
+            elif strategy_key == "breakout":
+                raw_entry_candidate = (
+                    entry_signal
+                    and bullish
+                    and not low_energy_guard_active
+                    and not symbol_regime_blocks_entry
+                    and not fill_quality_entry_blocked
+                    and (not symbol_regime_requires_fresh_cross or bullish)
+                )
+            else:
+                raw_entry_candidate = (
+                    entry_signal
+                    and not low_energy_guard_active
+                    and not symbol_regime_blocks_entry
+                    and not fill_quality_entry_blocked
+                    and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
+                    and (not symbol_regime_requires_fresh_cross or bullish)
+                )
             # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
             entry_timing_snapshot = update_entry_timing_state(
                 state_store=entry_timing_state,
@@ -629,6 +645,7 @@ def run_bot():
                 )
             if symbol_regime_blocks_entry:
                 log(f"[{symbol}] 심볼 레짐 {symbol_regime} 상태라 신규 진입을 보류합니다.")
+            log(f"[{symbol}] 레짐 라우터 선택 전략: {strategy_key}")
             log(
                 f"[{symbol}] 확인 타임프레임 종가: {confirm_close:.0f}, "
                 f"확인 EMA: {confirm_ema:.0f}, 상승 추세={confirm_bullish}"
@@ -947,6 +964,7 @@ def run_bot():
                 low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
                 low_energy_ready_count=low_energy_snapshot.ready_count,
                 symbol_regime=symbol_regime,
+                regime_strategy_key=strategy_key,
                 symbol_regime_blocks_entry=symbol_regime_blocks_entry,
                 symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
                 regime_position_scale=regime_position_scale,
