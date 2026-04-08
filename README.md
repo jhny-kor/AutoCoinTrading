@@ -251,6 +251,24 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 수동 갱신: `.venv/bin/python tools/update_backtest_registry.py`
 - 현재는 `reports/backtest_batches` 뿐 아니라 `reports/backtests` 아래의 단일 백테스트 결과도 함께 인덱싱합니다.
 - 따라서 웹 또는 단일 실행으로 백테스트를 돌려도 결과 디렉토리가 생성되면 레지스트리에 자동 반영됩니다.
+- 레지스트리에는 `review_required`, `review_status`, `review_reasons`, `actions.delete` 메타데이터도 함께 기록됩니다.
+- 비교 코멘트에 `확인`, `불일치`, `점검` 성격 문구가 잡히면 `review_status=확인필요` 로 표시됩니다.
+- `확인필요` 항목은 `.venv/bin/python tools/delete_backtest_entry.py --path <entry.path>` 로 디렉토리째 삭제할 수 있고, 삭제 후 레지스트리는 자동 갱신됩니다.
+
+## 현재 레짐 스냅샷
+
+- JSON 생성: `.venv/bin/python current_regime_snapshot.py --print-only`
+- 파일 갱신: `.venv/bin/python current_regime_snapshot.py`
+- 생성 파일
+  - `reports/current_regime_snapshot.json`
+  - `reports/current_regime_snapshot.md`
+  - `reports/current_regime_snapshot.html`
+
+현재 레짐 스냅샷은 심볼별로
+- 전체 6단계 중 현재 몇 단계인지
+- 현재 레짐이 어떤 상황을 의미하는지
+- 거래량/변화율/이격도/RSI/ADX 근거가 무엇인지
+를 함께 보여줍니다.
 
 ## 포트폴리오 배분
 
@@ -368,7 +386,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `/positions`: 현재 거래소 잔고와 보유 포지션 평가 금액 요약
 - `/pnl`: 오늘 누적 실현 손익 요약
 - `/analysis`: 최근 분석 로그 요약
-- `/regime`: 심볼별 현재 레짐과 핵심 근거 숫자 요약
+- `/regime`: 심볼별 현재 레짐의 단계 순서, 의미, 핵심 근거 숫자 요약
 - `/weekly`: 최근 7일 기준 주간 리포트
 - `/last`: 최근 운영 로그 끝부분 확인
 - `/help`: 명령 도움말

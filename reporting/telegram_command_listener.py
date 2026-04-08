@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-08: /regime 가 심볼별 단계 순서, 의미, 해석을 함께 보여주고 호출 시 현재 레짐 HTML/Markdown 스냅샷도 같이 갱신하도록 확장
 - /analysis 와 /weekly 에 최신 튜닝 세트 diff 요약을 붙여 보수형 대비 혼합형 개선 여부를 바로 보이도록 확장
 - /status, /positions, /analysis, 일일/주간 리포트에 복구 포지션 상태와 일일 손실 제한 상태를 함께 보여주도록 확장
 - 백테스트 대비 실거래 설명 섹션에 누락 심볼 안내와 더 구체적인 차이 설명을 함께 넣도록 보강
@@ -92,12 +93,16 @@ from reporting.listener_runtime import (
     save_report_state,
     telegram_api_request,
 )
+from reporting.current_regime_snapshot import (
+    build_regime_snapshot_payload,
+    load_latest_market_records as load_latest_market_records_from_snapshot,
+    write_snapshot_outputs,
+)
 from reporting.position_snapshot import (
     build_okx_positions_text,
     build_upbit_positions_text,
     format_exchange_error_text,
 )
-from market_regime_guard import classify_symbol_regime
 from state_recovery import (
     load_program_daily_realized_pnl_quote,
     restore_program_position_states,
@@ -1181,24 +1186,11 @@ def build_market_analysis_text(settings: ListenerSettings) -> str:
 
 def load_latest_market_records(settings: ListenerSettings) -> list[dict]:
     """심볼별 최신 분석 로그 1건씩을 반환한다."""
-    records = analyze_logs.load_records(settings.analysis_log_dir)
-    latest_by_key: dict[tuple[str, str], tuple[datetime, dict]] = {}
-
-    for record in records:
-        exchange = str(record.get("exchange", "")).strip()
-        symbol = str(record.get("symbol", "")).strip()
-        collected_at = parse_local_timestamp(str(record.get("collected_at", "")))
-        if not exchange or not symbol or collected_at is None:
-            continue
-        key = (exchange, symbol)
-        current = latest_by_key.get(key)
-        if current is None or collected_at > current[0]:
-            latest_by_key[key] = (collected_at, record)
-
     managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
-    rows = [item[1] for item in latest_by_key.values() if str(item[1].get("symbol", "")) in managed_symbols]
-    rows.sort(key=lambda row: (str(row.get("exchange", "")), str(row.get("symbol", ""))))
-    return rows
+    return load_latest_market_records_from_snapshot(
+        analysis_log_dir=settings.analysis_log_dir,
+        managed_symbols=managed_symbols,
+    )
 
 
 def build_current_market_strategy_text(settings: ListenerSettings) -> str:
@@ -1292,25 +1284,27 @@ def build_regime_text(settings: ListenerSettings) -> str:
     if not latest_rows:
         return "현재 레짐 요약\n- 최신 분석 로그가 아직 없어 레짐을 계산할 수 없습니다."
 
-    lines = ["현재 레짐 요약"]
-    for row in latest_rows:
-        exchange = str(row.get("exchange", "")).upper()
-        symbol = str(row.get("symbol", ""))
-        snapshot = classify_symbol_regime(row)
-        volume_ratio = "-" if snapshot.volume_ratio is None else f"{snapshot.volume_ratio:.3f}"
-        abs_change = (
-            "-"
-            if snapshot.avg_abs_change_pct is None
-            else f"{snapshot.avg_abs_change_pct:.4f}%"
+    payload = build_regime_snapshot_payload(latest_rows)
+    write_snapshot_outputs(payload)
+
+    lines = ["현재 레짐 요약", "- 단계 체계: LOW_ENERGY -> CHOPPY -> BREAKOUT_ATTEMPT -> TRENDING -> EXHAUSTION_RISK -> OVERHEATED"]
+    for row in payload.get("rows", []):
+        stage_text = (
+            f"{row['stage_index']}/{row['total_stages']}"
+            if row.get("stage_index") is not None
+            else f"?/{row.get('total_stages') or '-'}"
         )
-        gap_pct = "-" if snapshot.gap_pct is None else f"{snapshot.gap_pct:.4f}%"
-        rsi_text = "-" if snapshot.rsi is None else f"{snapshot.rsi:.1f}"
-        ready_text = "Y" if snapshot.public_buy_ready else "N"
+        volume_ratio = "-" if row.get("volume_ratio") is None else f"{float(row['volume_ratio']):.3f}"
+        abs_change = "-" if row.get("avg_abs_change_pct") is None else f"{float(row['avg_abs_change_pct']):.4f}%"
+        gap_pct = "-" if row.get("gap_pct") is None else f"{float(row['gap_pct']):.4f}%"
+        rsi_text = "-" if row.get("rsi") is None else f"{float(row['rsi']):.1f}"
+        adx_text = "-" if row.get("adx") is None else f"{float(row['adx']):.1f}"
         lines.append(
-            f"- {exchange} {symbol} | {snapshot.regime} | "
-            f"거래량 {volume_ratio}배 | 변화율 {abs_change} | "
-            f"이격도 {gap_pct} | RSI {rsi_text} | 준비 {ready_text}"
+            f"- {row['exchange']} {row['symbol']} | {stage_text} {row['regime']} | "
+            f"거래량 {volume_ratio}배 | 변화율 {abs_change} | 이격도 {gap_pct} | RSI {rsi_text} | ADX {adx_text}"
         )
+        lines.append(f"  의미: {row['meaning']}")
+        lines.append(f"  해석: {row['reason']}")
     return "\n".join(lines)
 
 
