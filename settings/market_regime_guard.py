@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-04-08: BTC 손절 반복을 줄이기 위해 CHOPPY 레짐에서는 신규 진입을 더 보수적으로 막도록 조정
+- 2026-04-08: 레짐 단계 순서와 레짐별 설명 카탈로그를 추가해 텔레그램/웹 스냅샷에서 같은 정의를 재사용하도록 확장
 - 2026-04-03: 레짐/저에너지 가드 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 저에너지 장 감지 공통 모듈
 
@@ -109,6 +111,61 @@ class RegimePolicy:
     trailing_drawdown_multiplier: float
     pyramid_max_add_ons_delta: int
     partial_take_profit_ratio_multiplier: float
+
+
+REGIME_STAGE_ORDER: tuple[str, ...] = (
+    "LOW_ENERGY",
+    "CHOPPY",
+    "BREAKOUT_ATTEMPT",
+    "TRENDING",
+    "EXHAUSTION_RISK",
+    "OVERHEATED",
+)
+
+REGIME_DESCRIPTIONS: dict[str, str] = {
+    "LOW_ENERGY": "거래량과 변동성이 모두 약해 추세추종 단타가 잘 안 먹히는 상태",
+    "CHOPPY": "방향성 없이 흔들리는 혼조 구간으로 강한 신호만 선별해야 하는 상태",
+    "BREAKOUT_ATTEMPT": "거래량과 이격도가 붙으면서 돌파를 시도하는 초기 확장 상태",
+    "TRENDING": "상위 추세 동의와 적당한 거래량·변동성이 함께 붙은 추세 구간",
+    "EXHAUSTION_RISK": "많이 오른 뒤 힘이 빠질 위험이 커 신규 진입보다 순익 보호가 중요한 상태",
+    "OVERHEATED": "RSI와 거래량이 과열 수준이라 추격 진입 위험이 큰 상태",
+    "UNKNOWN": "최신 분석 로그가 부족하거나 분류 근거가 부족한 상태",
+}
+
+
+def get_regime_stage_catalog() -> list[dict[str, object]]:
+    """레짐 단계 순서와 의미를 UI 용으로 반환한다."""
+    total = len(REGIME_STAGE_ORDER)
+    rows: list[dict[str, object]] = []
+    for index, regime in enumerate(REGIME_STAGE_ORDER, start=1):
+        rows.append(
+            {
+                "regime": regime,
+                "stage_index": index,
+                "total_stages": total,
+                "meaning": REGIME_DESCRIPTIONS[regime],
+            }
+        )
+    return rows
+
+
+def get_regime_stage_info(regime: str | None) -> dict[str, object]:
+    """특정 레짐의 단계 순서와 의미를 반환한다."""
+    normalized = str(regime or "UNKNOWN").strip().upper() or "UNKNOWN"
+    total = len(REGIME_STAGE_ORDER)
+    if normalized in REGIME_STAGE_ORDER:
+        return {
+            "regime": normalized,
+            "stage_index": REGIME_STAGE_ORDER.index(normalized) + 1,
+            "total_stages": total,
+            "meaning": REGIME_DESCRIPTIONS[normalized],
+        }
+    return {
+        "regime": normalized,
+        "stage_index": None,
+        "total_stages": total,
+        "meaning": REGIME_DESCRIPTIONS.get(normalized, REGIME_DESCRIPTIONS["UNKNOWN"]),
+    }
 
 
 def load_regime_thresholds() -> dict[str, float | int | bool]:
@@ -272,7 +329,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             partial_take_profit_ratio_multiplier=1.0,
         ),
         "CHOPPY": RegimePolicy(
-            pause_new_entry=False,
+            pause_new_entry=True,
             require_strong_signal=True,
             require_fresh_cross=True,
             allow_dynamic_overweight=False,

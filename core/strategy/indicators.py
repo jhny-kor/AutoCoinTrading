@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-08: 볼린저 밴드 계산에서 사용하는 `math.sqrt` 누락 import 를 추가해 알트 봇 런타임 예외를 수정했다.
 - 최근 ATR 과 ATR 퍼센트를 공통으로 계산하는 helper 를 추가해 BTC 변동성 기반 진입 비중 조절에 재사용할 수 있게 확장했다.
 - 알트/BTC/분석 수집기가 함께 쓰는 공통 보조지표 계산 함수를 추가했다.
 - RSI, MACD 히스토그램, 볼린저 밴드 폭, ADX, 기울기 계산을 한 곳에서 재사용하도록 정리했다.
@@ -8,6 +9,8 @@
 """
 
 from __future__ import annotations
+
+import math
 
 
 def calc_sma(prices: list[float], period: int) -> float:
@@ -86,6 +89,28 @@ def calc_macd_histogram(
     macd_value = macd_series[-1]
     histogram = macd_value - signal_value
     return macd_value, signal_value, histogram
+
+
+def calc_bollinger_bands(
+    closes: list[float], period: int = 20, stddev_multiplier: float = 2.0
+) -> tuple[float | None, float | None, float | None]:
+    """
+    볼린저 밴드의 상단(upper), 중단(mid), 하단(lower)을 리스트로 계산하여 반환한다.
+    반환값: (upper, mid, lower)
+    """
+    if len(closes) < period:
+        return None, None, None
+
+    recent_closes = closes[-period:]
+    mid = sum(recent_closes) / period
+
+    variance = sum((c - mid) ** 2 for c in recent_closes) / period
+    stddev = math.sqrt(variance)
+
+    upper = mid + (stddev * stddev_multiplier)
+    lower = mid - (stddev * stddev_multiplier)
+
+    return upper, mid, lower
 
 
 def calc_bollinger_band_width_pct(
@@ -251,3 +276,21 @@ def calc_noise_ratio(ohlcv: list[list[float]], lookback: int) -> float | None:
     if not noise_values:
         return None
     return sum(noise_values) / len(noise_values)
+
+
+def calc_donchian_channel(ohlcv: list[list[float]], lookback: int) -> tuple[float | None, float | None]:
+    """
+    최근 완료된 봉 기준으로 돈치안 채널의 상단(최고가)과 하단(최저가)을 계산한다.
+    현재 진행 중인 봉은 제외하며, lookback 개수가 부족하면 None을 반환한다.
+    """
+    if lookback <= 0 or len(ohlcv) < lookback + 1:
+        return None, None
+        
+    completed = ohlcv[-(lookback + 1):-1]
+    if len(completed) < lookback:
+        return None, None
+        
+    highs = [row[2] for row in completed]
+    lows = [row[3] for row in completed]
+    
+    return max(highs), min(lows)

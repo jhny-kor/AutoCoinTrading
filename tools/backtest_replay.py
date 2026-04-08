@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-08: 알트 리플레이에도 live 와 같은 fresh cross, HTF bearish 차단, Bollinger squeeze 입력을 반영해 parity 를 보강
 - 기준 시각 이전 실거래 포지션을 초기 상태로 주입할 수 있게 position-aware 리플레이 초기 상태를 추가해 실거래 비교 정확도를 높이도록 확장
 - 실거래와의 차이를 줄이기 위해 알트/BTC 리플레이도 공통 신호 계산, 레짐 정책, 노이즈 비율, 진입 상태 머신을 반영하도록 확장
 - 혼합 청산 세트를 위해 알트 리플레이도 심볼별 순익 보호 익절 기준 map 을 읽도록 확장
@@ -40,6 +41,7 @@ from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.btc_position import evaluate_btc_open_position
 from core.strategy.indicators import (
     calc_adx,
+    calc_bollinger_bands,
     calc_bollinger_band_width_pct,
     calc_macd_histogram,
     calc_noise_ratio,
@@ -676,6 +678,16 @@ def simulate_alt_strategy(
             slow_period=strategy.macd_slow_period,
             signal_period=strategy.macd_signal_period,
         )
+        bb_upper, _bb_mid, _bb_lower = calc_bollinger_bands(
+            closes,
+            period=strategy.bb_period,
+            stddev_multiplier=strategy.bb_stddev,
+        )
+        bb_width_pct = calc_bollinger_band_width_pct(
+            closes,
+            period=strategy.bb_period,
+            stddev_multiplier=strategy.bb_stddev,
+        )
         ma_slope_pct = calc_pct_slope(ma_series, strategy.trend_slope_lookback)
         price_slope_pct = calc_pct_slope(closes, strategy.trend_slope_lookback)
         adx_value = calc_adx(
@@ -730,6 +742,11 @@ def simulate_alt_strategy(
             ma_slope_pct=ma_slope_pct,
             price_slope_pct=price_slope_pct,
             signal_score_min=strategy.signal_score_min,
+            entry_mode=strategy.entry_mode,
+            bb_width_pct=bb_width_pct,
+            squeeze_max_bandwidth_pct=strategy.squeeze_max_bandwidth_pct,
+            bb_upper=bb_upper,
+            squeeze_min_volume_ratio=strategy.squeeze_min_volume_ratio,
         )
         bullish = bool(alt_signal_state["bullish"])
         bearish = bool(alt_signal_state["bearish"])
@@ -760,6 +777,11 @@ def simulate_alt_strategy(
         higher_timeframe_exit_passed = (
             True if not strategy.enable_higher_timeframe_filter else bool(htf_bearish)
         )
+        htf_bearish_entry_blocked = (
+            entry_signal
+            and strategy.blocks_entry_when_htf_bearish(symbol)
+            and htf_bearish
+        )
 
         public_buy_ready = (
             bullish
@@ -769,6 +791,7 @@ def simulate_alt_strategy(
             and volume_filter_passed
             and volatility_filter_passed
             and higher_timeframe_entry_passed
+            and not htf_bearish_entry_blocked
         )
         regime_snapshot = build_replay_symbol_regime(
             volume_ratio=volume_ratio,
@@ -826,6 +849,8 @@ def simulate_alt_strategy(
             entry_signal
             and not regime_policy.pause_new_entry
             and not correlation_entry_blocked
+            and (not regime_policy.require_fresh_cross or bullish)
+            and not htf_bearish_entry_blocked
         )
         entry_timing_snapshot = update_entry_timing_state(
             state_store=entry_timing_state,
@@ -995,6 +1020,7 @@ def simulate_alt_strategy(
             and volume_filter_passed
             and volatility_filter_passed
             and higher_timeframe_entry_passed
+            and not htf_bearish_entry_blocked
             and not correlation_entry_blocked
             and not fill_quality_entry_blocked
             and entry_timing_snapshot.ready
