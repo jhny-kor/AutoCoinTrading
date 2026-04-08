@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-06: Bollinger Squeeze + 거래량 확장 돌파 기반 병렬 진입 모드 구성
 - 알트 신호 계산과 평균단가 대비 추가매수 허용 여부를 공통 함수로 분리했다.
 - 골든/데드크로스와 trend-follow 진입 계산을 한 곳으로 모았다.
 - RSI, MACD, 기울기, 거래량을 반영한 신호 스코어 계산을 추가해 횡보장 오탐을 줄이도록 보강했다.
@@ -35,6 +36,11 @@ def compute_alt_signal_state(
     ma_slope_pct: float | None,
     price_slope_pct: float | None,
     signal_score_min: float,
+    entry_mode: str = "ma",
+    bb_width_pct: float | None = None,
+    squeeze_max_bandwidth_pct: float = 3.0,
+    bb_upper: float | None = None,
+    squeeze_min_volume_ratio: float = 2.5,
 ) -> dict[str, float | bool]:
     gap_pct = abs(last_close - last_ma) / last_ma * 100 if last_ma else 0.0
     bullish = prev_close < prev_ma and last_close > last_ma
@@ -52,13 +58,15 @@ def compute_alt_signal_state(
     )
     ma_slope_positive = ma_slope_pct is not None and ma_slope_pct > 0
     price_slope_positive = price_slope_pct is not None and price_slope_pct > 0
-    trend_follow_entry = (
-        enable_trend_follow_entry
-        and last_close > last_ma
-        and (not require_prev_above_ma or prev_close > prev_ma)
-        and (not require_price_rising or last_close > prev_close)
-        and (not require_ma_slope_positive or ma_slope_positive)
-    )
+    trend_follow_entry = False
+    if entry_mode == "ma":
+        trend_follow_entry = (
+            enable_trend_follow_entry
+            and last_close > last_ma
+            and (not require_prev_above_ma or prev_close > prev_ma)
+            and (not require_price_rising or last_close > prev_close)
+            and (not require_ma_slope_positive or ma_slope_positive)
+        )
     gap_component = 0.0
     if min_gap_pct > 0:
         gap_component = min(1.0, gap_pct / min_gap_pct) * 35.0
@@ -95,16 +103,34 @@ def compute_alt_signal_state(
     elif trend_follow_entry:
         trend_component = 10.0
 
-    signal_score = _clamp_score(
-        gap_component
-        + volume_component
-        + rsi_component
-        + macd_component
-        + slope_component
-        + trend_component
-    )
+    entry_signal = False
+    signal_score = 0.0
+
+    if entry_mode == "squeeze":
+        is_squeezed = bb_width_pct is not None and bb_width_pct <= squeeze_max_bandwidth_pct
+        volume_exploded = volume_ratio is not None and volume_ratio >= squeeze_min_volume_ratio
+        breakout = bb_upper is not None and last_close > bb_upper
+
+        entry_signal = (
+            is_squeezed
+            and volume_exploded
+            and breakout
+            and rsi_filter_passed
+            and macd_filter_passed
+        )
+        signal_score = 100.0 if entry_signal else 0.0
+    else:
+        signal_score = _clamp_score(
+            gap_component
+            + volume_component
+            + rsi_component
+            + macd_component
+            + slope_component
+            + trend_component
+        )
+        entry_signal = (bullish or trend_follow_entry) and rsi_filter_passed and macd_filter_passed
+
     signal_is_strong = signal_score >= signal_score_min
-    entry_signal = (bullish or trend_follow_entry) and rsi_filter_passed and macd_filter_passed
     return {
         "bullish": bullish,
         "bearish": bearish,

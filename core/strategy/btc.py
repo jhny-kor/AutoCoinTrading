@@ -1,6 +1,7 @@
 """
 작업 요약
-- BTC 진입 신호와 기본 청산 플래그 계산을 공통 함수로 분리했다.
+- 2026-04-06: Donchian Channel + ATR 돌파 기반 병렬 진입 모드 추가
+- BTC EMA 돌파와 추세 조건을 공통 함수로 분리하고, 불필요한 중복 평가를 제거했다.
 - EMA 정렬, spread, 손절/트레일링/순익 보호 판단을 한 곳으로 모았다.
 - RSI, 볼린저 밴드 폭, EMA 기울기를 진입 필터에 반영해 추세 확인 강도를 높였다.
 """
@@ -34,6 +35,10 @@ def compute_btc_entry_state(
     min_bb_width_pct: float,
     max_bb_width_pct: float,
     signal_score_min: float,
+    entry_mode: str = "ema",
+    donchian_entry_upper: float | None = None,
+    donchian_confirm_breakout_close: bool = True,
+    last_high: float = 0.0,
 ) -> dict[str, float | bool]:
     ema_aligned = last_fast > last_slow
     price_above_fast = last_close >= last_fast
@@ -58,13 +63,25 @@ def compute_btc_entry_state(
             and min_bb_width_pct <= bb_width_pct <= max_bb_width_pct
         )
     )
-    trend_follow_entry = (
-        enable_trend_follow_entry
-        and ema_aligned
-        and ema_spread_pct >= min_ema_spread_pct
-        and (not require_price_above_fast or price_above_fast)
-        and (not require_ema_slope_positive or ema_slope_positive)
-    )
+    donchian_breakout = False
+    if entry_mode == "donchian" and donchian_entry_upper is not None:
+        if donchian_confirm_breakout_close:
+            donchian_breakout = last_close > donchian_entry_upper
+        else:
+            donchian_breakout = last_high > donchian_entry_upper
+
+    trend_follow_entry = False
+    if entry_mode == "ema":
+        trend_follow_entry = (
+            enable_trend_follow_entry
+            and ema_aligned
+            and ema_spread_pct >= min_ema_spread_pct
+            and (not require_price_above_fast or price_above_fast)
+            and (not require_ema_slope_positive or ema_slope_positive)
+        )
+    elif entry_mode == "donchian":
+        trend_follow_entry = donchian_breakout
+
     spread_component = 0.0
     if min_ema_spread_pct > 0:
         spread_component = min(1.0, ema_spread_pct / min_ema_spread_pct) * 35.0
@@ -87,20 +104,34 @@ def compute_btc_entry_state(
     slope_component = 15.0 if ema_slope_positive else 0.0
     trend_component = 10.0 if price_above_fast else 0.0
     cross_component = 15.0 if bullish else 0.0
-    signal_score = _clamp_score(
-        spread_component
-        + rsi_component
-        + bb_component
-        + slope_component
-        + trend_component
-        + cross_component
-    )
+
+    entry_signal = False
+    signal_score = 0.0
+    
+    if entry_mode == "donchian":
+        entry_signal = (
+            donchian_breakout
+            and rsi_filter_passed
+            and bb_width_filter_passed
+        )
+        signal_score = 100.0 if entry_signal else 0.0
+    else:
+        entry_signal = (
+            (bullish or trend_follow_entry)
+            and rsi_filter_passed
+            and bb_width_filter_passed
+        )
+        signal_score = _clamp_score(
+            spread_component
+            + rsi_component
+            + bb_component
+            + slope_component
+            + trend_component
+            + cross_component
+        )
+        
     signal_is_strong = signal_score >= signal_score_min
-    entry_signal = (
-        (bullish or trend_follow_entry)
-        and rsi_filter_passed
-        and bb_width_filter_passed
-    )
+    
     return {
         "ema_aligned": ema_aligned,
         "price_above_fast": price_above_fast,
@@ -129,6 +160,9 @@ def compute_btc_exit_flags(
     pnl_pct: float | None,
     bearish: bool,
     confirm_bullish: bool,
+    entry_mode: str = "ema",
+    donchian_exit_lower: float | None = None,
+    last_low: float = 0.0,
 ) -> dict[str, float | bool | None]:
     drawdown_from_high_pct = None
     if highest_price_since_entry and highest_price_since_entry > 0:
@@ -153,14 +187,32 @@ def compute_btc_exit_flags(
         and bearish
         and not trailing_stop_triggered
     )
-    trend_exit_triggered = (
-        has_position
-        and bearish
-        and not trailing_armed
-        and not stop_triggered
-        and not profit_protect_triggered
-        and not confirm_bullish
-    )
+    
+    trend_exit_triggered = False
+    donchian_exit_triggered = False
+    
+    if entry_mode == "donchian":
+        donchian_exit_triggered = (
+            donchian_exit_lower is not None 
+            and last_low < donchian_exit_lower
+        )
+        trend_exit_triggered = (
+            has_position
+            and donchian_exit_triggered
+            and not trailing_armed
+            and not stop_triggered
+            and not profit_protect_triggered
+        )
+    else:
+        trend_exit_triggered = (
+            has_position
+            and bearish
+            and not trailing_armed
+            and not stop_triggered
+            and not profit_protect_triggered
+            and not confirm_bullish
+        )
+
     return {
         "drawdown_from_high_pct": drawdown_from_high_pct,
         "stop_triggered": stop_triggered,

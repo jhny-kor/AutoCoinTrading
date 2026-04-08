@@ -71,6 +71,11 @@ def infer_initial_cash(symbol: str) -> float:
     return 1_000_000.0 if quote == "KRW" else 1_000.0
 
 
+def infer_btc_reference_symbol(exchange_name: str) -> str:
+    """알트 전략 필터에 쓸 거래소별 BTC 기준 심볼을 반환한다."""
+    return "BTC/KRW" if exchange_name.lower() == "upbit" else "BTC/USDT"
+
+
 def sanitize_symbol(symbol: str) -> str:
     """심볼을 파일명용 문자열로 바꾼다."""
     return symbol.replace("/", "_").replace("-", "_")
@@ -290,6 +295,19 @@ def run_single_backtest(
     save_fetch_output(data_path, rows)
 
     candles = load_candles(data_path)
+    btc_reference_candles = None
+    if strategy_type == "alt":
+        btc_reference_symbol = infer_btc_reference_symbol(exchange_name)
+        btc_reference_path = data_dir / f"{exchange_name}__{sanitize_symbol(btc_reference_symbol)}__{timeframe}__btc_reference.jsonl"
+        btc_rows = fetch_symbol_ohlcv(
+            exchange_name=exchange_name,
+            symbol=btc_reference_symbol,
+            timeframe=timeframe,
+            limit=limit,
+        )
+        if btc_rows:
+            save_fetch_output(btc_reference_path, btc_rows)
+            btc_reference_candles = load_candles(btc_reference_path)
     data_start = None
     data_end = None
     covered_days = 0.0
@@ -367,6 +385,7 @@ def run_single_backtest(
     if strategy_type == "alt":
         summary, trades, equity_curve = simulate_alt_strategy(
             candles=candles,
+            btc_reference_candles=btc_reference_candles,
             source_timeframe=timeframe,
             symbol=symbol,
             exchange_name=exchange_name,
