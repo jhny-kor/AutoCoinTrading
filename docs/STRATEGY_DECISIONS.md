@@ -561,6 +561,55 @@
   - 바로 실거래보다 먼저 분석 수집을 통해 `SOL`의 최근 1분봉 전략 적합성을 확인하는 편이 안전
   - 관찰 지표가 충분히 쌓이면 업비트/OKX 모두 실거래 후보로 순차 전환
 
+### 30. 2026-04-05 ~ 2026-04-08 손절 반복 완화 조정 (2026-04-08, alt_live_v1 / btc_mid_v1)
+
+- 변경 내용:
+  - BTC 진입 품질 강화
+    - `BTC_TREND_SIGNAL_SCORE_MIN=62`
+    - `BTC_TREND_ENTRY_CONFIRMATION_LOOPS=3`
+    - `BTC_TREND_STOP_LOSS_REENTRY_COOLDOWN_SEC=1200`
+    - `BTC_TREND_MIN_VOLUME_RATIO_MAP` 에 `BTC/KRW:1.55` 추가
+    - `BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP=BTC/USDT:2.20,BTC/KRW:2.20`
+    - `get_btc_regime_policy()` 에서 `CHOPPY` 는 신규 진입 차단으로 보수화
+  - 알트 진입 보수화
+    - `STRATEGY_BLOCK_ENTRY_WHEN_HTF_BEARISH_SYMBOLS` 에 `ETH/KRW` 추가
+    - `ETH/KRW` 최소 거래량 배수 `1.05 -> 1.20`
+    - `ETH/KRW` 포지션 비중 `0.70 -> 0.45`
+    - `ETH/KRW` 최소 이격도 `0.12 -> 0.15`
+  - XRP 보호 장치 조기화
+    - `XRP/KRW` 최소 익절률 `0.45 -> 0.40`
+    - `XRP/USDT` 최소 익절률 `0.60 -> 0.55`
+    - `XRP/KRW` 순익 보호 최소 순익률 `0.16 -> 0.10`
+    - `XRP/USDT` 순익 보호 최소 순익률 `0.18 -> 0.10`
+    - `XRP/KRW`, `XRP/USDT` 브레이크이븐 가드 최소 MFE `0.18` 추가
+    - `XRP/KRW` 브레이크이븐 가드 순익 바닥 `0.04` 추가
+    - `XRP/USDT` 브레이크이븐 가드 순익 바닥 `0.05` 추가
+  - 알트 백테스트 parity 보강
+    - `tools/backtest_replay.py` 에서 live 와 같은 `entry_mode`, `Bollinger squeeze 입력`, `fresh cross`, `HTF bearish 차단`을 반영
+- 근거 로그:
+  - `2026-04-05 ~ 2026-04-08` 실거래 기준 `stop_loss` 가 `18건`으로 가장 많았음
+  - `OKX BTC/USDT` 손실 거래 평균 `MFE 0.1422%`, `MAE -0.1954%`
+  - `UPBIT BTC/KRW` 손실 거래 평균 `MFE 0.0654%`, `MAE -0.1821%`
+  - 즉 BTC는 손절폭보다 `진입 직후 후속 탄력 부족` 문제가 더 컸음
+  - `ETH/KRW` 는 손실 거래 평균 `MFE 0.1916%`, `MAE -0.5997%` 로 작은 반등 후 빠르게 밀리는 패턴이 반복
+  - `XRP/KRW`, `XRP/USDT` 는 승률이 나쁘지 않아도 `profit_protect` 수익보다 `stop_loss` 1~2건 손실이 더 크게 남는 구조였음
+  - 최근 주간 배치 비교에서 알트 다수 심볼은 `백테스트 0건 / 실거래 체결 존재` 상태라 live parity 보강이 필요했음
+- 해석:
+  - BTC는 더 자주 들어가는 것보다 `애매한 EMA 정렬 유지 구간을 덜 잡는 것`이 우선이라고 판단
+  - `ETH/KRW` 는 청산 최적화보다 진입 자체를 줄이는 편이 먼저라고 판단
+  - `XRP` 계열은 손절을 넓히는 것보다 `조금 유리해졌을 때 더 빨리 지키는 구조`가 더 적합하다고 판단
+  - 알트 백테스트는 live 와 같은 진입 퍼널을 더 많이 반영해야 이후 튜닝 신뢰도가 올라간다고 판단
+
+### 31. 볼린저 밴드 계산 런타임 예외 수정 (2026-04-08, bugfix)
+
+- 변경 내용:
+  - `core/strategy/indicators.py` 에 `import math` 추가
+- 근거 로그:
+  - `ma_crossover_bot.log`, `upbit_ma_crossover_bot.log` 에서 `NameError: name 'math' is not defined` 반복 발생
+  - 예외 위치는 `calc_bollinger_bands()` 의 `math.sqrt(variance)` 호출이었음
+- 해석:
+  - 전략 조정보다 먼저 런타임 예외를 제거해야 알트 봇 로그와 체결이 정상적으로 쌓임
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
