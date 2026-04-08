@@ -1,6 +1,20 @@
 # Auto Coin Bot runtime config example
 # structured TOML format
 # 2026-04-03: canonical runtime config 예시로 승격
+# 2026-04-09: score 기반 동적 자본 배분 예시 키 추가
+
+[portfolio]
+enable_score_based_scaling = true
+score_scale_min = 0.6
+score_scale_max = 1.1
+signal_weight = 0.4
+market_weight = 0.3
+execution_weight = 0.2
+diversification_weight = 0.1
+score_bucket_very_strong = 85
+score_bucket_strong = 75
+score_bucket_neutral = 65
+score_bucket_weak = 55
 
 [btc_trend]
 version = "btc_mid_v1"

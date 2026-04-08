@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-09: signal/market/execution/diversification 점수를 합산하는 score 기반 동적 배분 설정을 추가
 - 2026-04-03: 포트폴리오 배분 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 - 목표 자산은 기존 분할 진입 주문금액이 아니라 남아 있는 목표 예산 자체를 주문금액으로 쓰도록 조정
 - 목표 비중과 남아 있는 누적 투입 원가를 기준으로 신규 매수 허용 금액을 계산하는 포트폴리오 배분 모듈을 추가
@@ -30,6 +31,17 @@ class PortfolioAllocationSettings:
     dynamic_volume_ratio_threshold: float
     dynamic_require_trend_ok: bool
     dynamic_require_strong_signal: bool
+    enable_score_based_scaling: bool
+    score_scale_min: float
+    score_scale_max: float
+    signal_weight: float
+    market_weight: float
+    execution_weight: float
+    diversification_weight: float
+    score_bucket_very_strong: float
+    score_bucket_strong: float
+    score_bucket_neutral: float
+    score_bucket_weak: float
 
 
 @dataclass(frozen=True)
@@ -62,6 +74,17 @@ def load_portfolio_allocation_settings() -> PortfolioAllocationSettings:
         dynamic_volume_ratio_threshold=config_float("portfolio", "dynamic_volume_ratio_threshold", 2.00, env_key="PORTFOLIO_DYNAMIC_VOLUME_RATIO_THRESHOLD"),
         dynamic_require_trend_ok=config_bool("portfolio", "dynamic_require_trend_ok", True, env_key="PORTFOLIO_DYNAMIC_REQUIRE_TREND_OK"),
         dynamic_require_strong_signal=config_bool("portfolio", "dynamic_require_strong_signal", True, env_key="PORTFOLIO_DYNAMIC_REQUIRE_STRONG_SIGNAL"),
+        enable_score_based_scaling=config_bool("portfolio", "enable_score_based_scaling", True, env_key="PORTFOLIO_ENABLE_SCORE_BASED_SCALING"),
+        score_scale_min=config_float("portfolio", "score_scale_min", 0.60, env_key="PORTFOLIO_SCORE_SCALE_MIN"),
+        score_scale_max=config_float("portfolio", "score_scale_max", 1.10, env_key="PORTFOLIO_SCORE_SCALE_MAX"),
+        signal_weight=config_float("portfolio", "signal_weight", 0.40, env_key="PORTFOLIO_SIGNAL_WEIGHT"),
+        market_weight=config_float("portfolio", "market_weight", 0.30, env_key="PORTFOLIO_MARKET_WEIGHT"),
+        execution_weight=config_float("portfolio", "execution_weight", 0.20, env_key="PORTFOLIO_EXECUTION_WEIGHT"),
+        diversification_weight=config_float("portfolio", "diversification_weight", 0.10, env_key="PORTFOLIO_DIVERSIFICATION_WEIGHT"),
+        score_bucket_very_strong=config_float("portfolio", "score_bucket_very_strong", 85.0, env_key="PORTFOLIO_SCORE_BUCKET_VERY_STRONG"),
+        score_bucket_strong=config_float("portfolio", "score_bucket_strong", 75.0, env_key="PORTFOLIO_SCORE_BUCKET_STRONG"),
+        score_bucket_neutral=config_float("portfolio", "score_bucket_neutral", 65.0, env_key="PORTFOLIO_SCORE_BUCKET_NEUTRAL"),
+        score_bucket_weak=config_float("portfolio", "score_bucket_weak", 55.0, env_key="PORTFOLIO_SCORE_BUCKET_WEAK"),
     )
 
 

@@ -650,6 +650,41 @@
     - 알트 `70 -> 65`
     같은 완화는 별도 검토 가능
 
+### 33. Score 기반 동적 자본 배분 도입 (2026-04-09, portfolio)
+
+- 변경 내용:
+  - `PORTFOLIO_ENABLE_SCORE_BASED_SCALING=true`
+  - `PORTFOLIO_SCORE_SCALE_MIN=0.60`
+  - `PORTFOLIO_SCORE_SCALE_MAX=1.10`
+  - `PORTFOLIO_SIGNAL_WEIGHT=0.40`
+  - `PORTFOLIO_MARKET_WEIGHT=0.30`
+  - `PORTFOLIO_EXECUTION_WEIGHT=0.20`
+  - `PORTFOLIO_DIVERSIFICATION_WEIGHT=0.10`
+  - 점수 버킷
+    - `85+ -> 1.10`
+    - `75+ -> 1.00`
+    - `65+ -> 0.90`
+    - `55+ -> 0.75`
+    - `<55 -> 0.60`
+  - 구현 범위
+    - 알트/ BTC live 봇 4개
+    - BTC add-on 배분
+    - backtest replay
+    - example config
+    - allocation score 테스트
+- 근거 로그:
+  - 기존 구조는 `레짐/ATR/목표 비중` 축소는 잘 되지만, `좋은 심볼을 조금 더 / 나쁜 심볼을 조금 덜`을 하나의 점수로 설명하기 어려웠음
+  - 2026-04-09 오전 로그 기준
+    - `BTC/USDT` allocation score `약 42~50`
+    - `BTC/KRW` allocation score `약 41~49`
+    - `ETH/KRW`, `XRP/KRW`, `XRP/USDT` 도 `낮은 signal/market 점수`로 `score_scale=0.60`
+    상태가 반복됨
+  - 즉 최근 구간은 단순 신호보다 `시장 질`과 `실행 품질`, `분산 관점`까지 함께 축소하는 편이 더 자연스럽다고 판단
+- 해석:
+  - 이 구조는 공격적 확대보다 `나쁜 심볼 강한 축소`에 더 초점을 둠
+  - 낮은 시드 테스트 환경에서는 이 방식이 기대손익보다 변동성 억제에 더 유리
+  - 실제 로그에 `allocation_score`, `allocation_score_scale`, `allocation_reason_top` 이 남으므로 이후 튜닝 설명성도 좋아짐
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

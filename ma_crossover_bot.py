@@ -73,7 +73,7 @@ from core.logging.metrics import build_alt_common_metrics
 from core.positions.lifecycle import clear_alt_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_alt_allocation
-from core.risk.allocation import apply_regime_position_scale
+from core.risk.allocation import apply_regime_position_scale, compute_allocation_score
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
@@ -673,7 +673,7 @@ def run_bot():
                     * btc_regime_position_scale
                     * btc_atr_position_scale
                 )
-                position_ratio = apply_regime_position_scale(
+                pre_score_position_ratio = apply_regime_position_scale(
                     base_position_ratio=base_position_ratio,
                     regime_scale=combined_position_scale,
                 )
@@ -781,6 +781,23 @@ def run_bot():
                     stop_loss_pattern_gate["enabled"]
                     and not stop_loss_pattern_gate["pattern_ready"]
                 )
+                allocation_score_result = compute_allocation_score(
+                    settings=portfolio_allocator.settings,
+                    signal_score=signal_score,
+                    volume_ratio=volume_ratio,
+                    required_volume_ratio=effective_min_volume_ratio,
+                    trend_ok=htf_bullish,
+                    low_energy_guard_active=low_energy_guard_active,
+                    symbol_regime=symbol_regime,
+                    fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
+                    fill_quality_entry_blocked=fill_quality_entry_blocked,
+                    correlation_with_btc=correlation_with_btc,
+                    max_correlation_with_btc=strategy.max_correlation_with_btc,
+                )
+                position_ratio = apply_regime_position_scale(
+                    base_position_ratio=pre_score_position_ratio,
+                    regime_scale=allocation_score_result.score_scale,
+                )
                 raw_entry_candidate = False
                 if strategy_key == "skip":
                     raw_entry_candidate = False
@@ -849,7 +866,16 @@ def run_bot():
                     f"심볼 레짐 스케일 {regime_position_scale:.2f}x | "
                     f"BTC 레짐({btc_reference_regime}) 스케일 {btc_regime_position_scale:.2f}x | "
                     f"BTC ATR({0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%) 스케일 {btc_atr_position_scale:.2f}x | "
+                    f"score 스케일 {allocation_score_result.score_scale:.2f}x | "
                     f"최종 {position_ratio:.4f}"
+                )
+                log(
+                    f"[{symbol}] allocation score: 총점 {allocation_score_result.allocation_score:.1f} | "
+                    f"signal {allocation_score_result.signal_score_component:.1f}, "
+                    f"market {allocation_score_result.market_score_component:.1f}, "
+                    f"execution {allocation_score_result.execution_score_component:.1f}, "
+                    f"diversification {allocation_score_result.diversification_score_component:.1f} | "
+                    f"주요 사유 {allocation_score_result.reason_top}"
                 )
                 log(
                     f"[{symbol}] RSI: {rsi_value:.2f} | MACD 히스토그램: "
@@ -1213,6 +1239,14 @@ def run_bot():
                     regime_position_scale=regime_position_scale,
                     combined_regime_position_scale=combined_position_scale,
                     base_position_ratio=base_position_ratio,
+                    pre_score_position_ratio=pre_score_position_ratio,
+                    allocation_score=allocation_score_result.allocation_score,
+                    allocation_score_scale=allocation_score_result.score_scale,
+                    allocation_signal_score=allocation_score_result.signal_score_component,
+                    allocation_market_score=allocation_score_result.market_score_component,
+                    allocation_execution_score=allocation_score_result.execution_score_component,
+                    allocation_diversification_score=allocation_score_result.diversification_score_component,
+                    allocation_reason_top=allocation_score_result.reason_top,
                     effective_position_ratio=position_ratio,
                     regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
                     regime_stop_loss_multiplier=regime_policy.stop_loss_multiplier,

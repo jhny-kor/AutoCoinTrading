@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-09: score 기반 동적 자본 배분도 리플레이에 반영해 live 와 backtest 의 비중 규칙 차이를 줄이도록 확장
 - 2026-04-08: 알트 리플레이에도 live 와 같은 fresh cross, HTF bearish 차단, Bollinger squeeze 입력을 반영해 parity 를 보강
 - 기준 시각 이전 실거래 포지션을 초기 상태로 주입할 수 있게 position-aware 리플레이 초기 상태를 추가해 실거래 비교 정확도를 높이도록 확장
 - 실거래와의 차이를 줄이기 위해 알트/BTC 리플레이도 공통 신호 계산, 레짐 정책, 노이즈 비율, 진입 상태 머신을 반영하도록 확장
@@ -51,8 +52,10 @@ from core.strategy.indicators import (
 )
 from core.strategy.timing import update_entry_timing_state
 from market_regime_guard import classify_symbol_regime, get_alt_regime_policy, get_btc_regime_policy
+from portfolio_allocator import load_portfolio_allocation_settings
 from strategy_settings import load_strategy_settings
 from tools.update_backtest_registry import REGISTRY_PATH, build_all_registry_entries, write_registry
+from core.risk.allocation import compute_allocation_score
 
 
 DEFAULT_OKX_FEE_RATE_PCT = 0.10
@@ -596,6 +599,7 @@ def simulate_alt_strategy(
         "UPBIT_MIN_BUY_ORDER_VALUE" if exchange_name.lower() == "upbit" else "OKX_MIN_BUY_ORDER_VALUE",
         min_buy_order_value,
     )
+    portfolio_settings = load_portfolio_allocation_settings()
     higher_timeframe_candles = resample_candles(
         candles,
         source_timeframe=source_timeframe,
@@ -1004,7 +1008,21 @@ def simulate_alt_strategy(
                     )
                     realized_on_this_bar = True
 
-        position_ratio = strategy.get_position_ratio(symbol, risk_per_trade)
+        pre_score_position_ratio = strategy.get_position_ratio(symbol, risk_per_trade)
+        allocation_score_result = compute_allocation_score(
+            settings=portfolio_settings,
+            signal_score=signal_score,
+            volume_ratio=volume_ratio,
+            required_volume_ratio=effective_min_volume_ratio,
+            trend_ok=htf_bullish,
+            low_energy_guard_active=(regime_snapshot.regime == "LOW_ENERGY" and not has_position),
+            symbol_regime=regime_snapshot.regime,
+            fill_quality_avg_fill_ratio=None,
+            fill_quality_entry_blocked=False,
+            correlation_with_btc=correlation_with_btc,
+            max_correlation_with_btc=strategy.max_correlation_with_btc,
+        )
+        position_ratio = pre_score_position_ratio * allocation_score_result.score_scale
         requested_order_value = cash * position_ratio * strategy.buy_split_ratio
         can_average_down = compute_can_average_down(
             has_position=has_position,
@@ -1075,6 +1093,8 @@ def simulate_alt_strategy(
                         extra={
                             "signal_is_strong": signal_is_strong,
                             "signal_score": signal_score,
+                            "allocation_score": allocation_score_result.allocation_score,
+                            "allocation_score_scale": allocation_score_result.score_scale,
                             "gap_pct": gap_pct,
                             "noise_ratio": noise_ratio,
                             "noise_gap_multiplier": noise_gap_multiplier,
@@ -1146,6 +1166,7 @@ def simulate_btc_strategy(
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
     """BTC EMA 전략을 오프라인으로 재생한다."""
     settings = load_btc_trend_settings()
+    portfolio_settings = load_portfolio_allocation_settings()
     base_candles = resample_candles(candles, source_timeframe=source_timeframe, target_timeframe=settings.timeframe)
     confirm_candles = resample_candles(
         candles,
@@ -1486,9 +1507,23 @@ def simulate_btc_strategy(
                 )
                 last_trade_ts = current.timestamp_ms
 
-        position_ratio = settings.get_position_ratio(symbol)
+        pre_score_position_ratio = settings.get_position_ratio(symbol)
+        allocation_score_result = compute_allocation_score(
+            settings=portfolio_settings,
+            signal_score=signal_score,
+            volume_ratio=volume_ratio,
+            required_volume_ratio=effective_min_volume_ratio,
+            trend_ok=confirm_bullish,
+            low_energy_guard_active=(regime_snapshot.regime == "LOW_ENERGY" and not has_position),
+            symbol_regime=regime_snapshot.regime,
+            fill_quality_avg_fill_ratio=None,
+            fill_quality_entry_blocked=False,
+            correlation_with_btc=None,
+            max_correlation_with_btc=1.0,
+        )
+        position_ratio = pre_score_position_ratio * allocation_score_result.score_scale
         requested_order_value = cash * risk_per_trade * position_ratio
-        requested_add_on_order_value = cash * risk_per_trade * settings.pyramid_position_ratio
+        requested_add_on_order_value = cash * risk_per_trade * settings.pyramid_position_ratio * allocation_score_result.score_scale
         entry_allowed = (
             entry_signal
             and signal_score >= effective_signal_score_min
@@ -1556,6 +1591,8 @@ def simulate_btc_strategy(
                             "atr_pct": atr_pct,
                             "volume_ratio": volume_ratio,
                             "signal_score": signal_score,
+                            "allocation_score": allocation_score_result.allocation_score,
+                            "allocation_score_scale": allocation_score_result.score_scale,
                             "noise_ratio": noise_ratio,
                             "noise_spread_multiplier": noise_spread_multiplier,
                             "symbol_regime": regime_snapshot.regime,

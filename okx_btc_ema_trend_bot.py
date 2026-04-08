@@ -70,7 +70,7 @@ from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import build_btc_allocations
-from core.risk.allocation import apply_regime_position_scale
+from core.risk.allocation import apply_regime_position_scale, compute_allocation_score
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.runtime.bootstrap import build_btc_runtime_state
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
@@ -826,9 +826,26 @@ def run_bot():
             base_position_ratio = settings.get_position_ratio(symbol)
             regime_position_scale = settings.get_regime_position_scale(symbol_regime)
             atr_position_scale = settings.get_atr_position_scale(atr_pct)
-            position_ratio = apply_regime_position_scale(
+            pre_score_position_ratio = apply_regime_position_scale(
                 base_position_ratio=base_position_ratio,
                 regime_scale=(regime_position_scale * atr_position_scale),
+            )
+            allocation_score_result = compute_allocation_score(
+                settings=portfolio_allocator.settings,
+                signal_score=signal_score,
+                volume_ratio=volume_ratio,
+                required_volume_ratio=effective_min_volume_ratio,
+                trend_ok=confirm_bullish,
+                low_energy_guard_active=low_energy_guard_active,
+                symbol_regime=symbol_regime,
+                fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
+                fill_quality_entry_blocked=fill_quality_entry_blocked,
+                correlation_with_btc=None,
+                max_correlation_with_btc=1.0,
+            )
+            position_ratio = apply_regime_position_scale(
+                base_position_ratio=pre_score_position_ratio,
+                regime_scale=allocation_score_result.score_scale,
             )
             effective_partial_take_profit_ratio = min(
                 1.0,
@@ -862,12 +879,22 @@ def run_bot():
                 risk_per_trade=config["risk_per_trade"],
                 position_ratio=position_ratio,
                 pyramid_position_ratio=settings.pyramid_position_ratio,
+                score_scale=allocation_score_result.score_scale,
                 dynamic_bonus_eligible=dynamic_bonus_eligible,
             )
             log(
                 f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
                 f"레짐 스케일 {regime_position_scale:.2f}x | "
-                f"ATR 스케일 {atr_position_scale:.2f}x | 최종 {position_ratio:.4f}"
+                f"ATR 스케일 {atr_position_scale:.2f}x | "
+                f"score 스케일 {allocation_score_result.score_scale:.2f}x | 최종 {position_ratio:.4f}"
+            )
+            log(
+                f"[{symbol}] allocation score: 총점 {allocation_score_result.allocation_score:.1f} | "
+                f"signal {allocation_score_result.signal_score_component:.1f}, "
+                f"market {allocation_score_result.market_score_component:.1f}, "
+                f"execution {allocation_score_result.execution_score_component:.1f}, "
+                f"diversification {allocation_score_result.diversification_score_component:.1f} | "
+                f"주요 사유 {allocation_score_result.reason_top}"
             )
             order_value = allocation_decision.approved_order_value_quote
             add_on_order_value = add_on_allocation_decision.approved_order_value_quote
@@ -934,6 +961,13 @@ def run_bot():
                 portfolio_total_budget_quote=allocation_decision.total_portfolio_quote,
                 portfolio_current_cost_basis_quote=allocation_decision.current_cost_basis_quote,
                 portfolio_remaining_budget_quote=allocation_decision.remaining_budget_quote,
+                allocation_score=allocation_score_result.allocation_score,
+                allocation_score_scale=allocation_score_result.score_scale,
+                allocation_signal_score=allocation_score_result.signal_score_component,
+                allocation_market_score=allocation_score_result.market_score_component,
+                allocation_execution_score=allocation_score_result.execution_score_component,
+                allocation_diversification_score=allocation_score_result.diversification_score_component,
+                allocation_reason_top=allocation_score_result.reason_top,
                 pnl_pct=pnl_pct,
                 net_pnl_pct_estimate=current_net_realized_pnl_pct,
                 fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
@@ -971,6 +1005,7 @@ def run_bot():
                 regime_position_scale=regime_position_scale,
                 atr_position_scale=atr_position_scale,
                 base_position_ratio=base_position_ratio,
+                pre_score_position_ratio=pre_score_position_ratio,
                 effective_position_ratio=position_ratio,
                 regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
                 regime_min_atr_multiplier=regime_policy.min_atr_multiplier,
