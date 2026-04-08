@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-08: 레짐을 8단계 보수형으로 세분화하고 BTC 는 레짐별 진입 확인 루프, trend-follow, 피라미딩 허용 여부를 다르게 적용할 수 있게 확장
 - 2026-04-08: BTC 손절 반복을 줄이기 위해 CHOPPY 레짐에서는 신규 진입을 더 보수적으로 막도록 조정
 - 2026-04-08: 레짐 단계 순서와 레짐별 설명 카탈로그를 추가해 텔레그램/웹 스냅샷에서 같은 정의를 재사용하도록 확장
 - 2026-04-03: 레짐/저에너지 가드 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
@@ -111,22 +112,29 @@ class RegimePolicy:
     trailing_drawdown_multiplier: float
     pyramid_max_add_ons_delta: int
     partial_take_profit_ratio_multiplier: float
+    required_confirmation_loops: int
+    allow_trend_follow_entry: bool
+    allow_pyramiding: bool
 
 
 REGIME_STAGE_ORDER: tuple[str, ...] = (
     "LOW_ENERGY",
-    "CHOPPY",
+    "CHOPPY_LOW_VOL",
+    "CHOPPY_HIGH_VOL",
     "BREAKOUT_ATTEMPT",
-    "TRENDING",
+    "TRENDING_EARLY",
+    "TRENDING_MATURE",
     "EXHAUSTION_RISK",
     "OVERHEATED",
 )
 
 REGIME_DESCRIPTIONS: dict[str, str] = {
     "LOW_ENERGY": "거래량과 변동성이 모두 약해 추세추종 단타가 잘 안 먹히는 상태",
-    "CHOPPY": "방향성 없이 흔들리는 혼조 구간으로 강한 신호만 선별해야 하는 상태",
+    "CHOPPY_LOW_VOL": "방향성도 약하고 거래량도 약한 횡보 구간으로 진입 효율이 가장 낮은 상태",
+    "CHOPPY_HIGH_VOL": "방향성은 약하지만 흔들림과 거래량은 있어 휩쏘 위험이 큰 혼조 상태",
     "BREAKOUT_ATTEMPT": "거래량과 이격도가 붙으면서 돌파를 시도하는 초기 확장 상태",
-    "TRENDING": "상위 추세 동의와 적당한 거래량·변동성이 함께 붙은 추세 구간",
+    "TRENDING_EARLY": "상위 추세 동의와 함께 막 추세가 뻗기 시작하는 초반 상태",
+    "TRENDING_MATURE": "추세는 강하지만 이미 상당 부분 진행돼 추격 진입은 보수적으로 봐야 하는 상태",
     "EXHAUSTION_RISK": "많이 오른 뒤 힘이 빠질 위험이 커 신규 진입보다 순익 보호가 중요한 상태",
     "OVERHEATED": "RSI와 거래량이 과열 수준이라 추격 진입 위험이 큰 상태",
     "UNKNOWN": "최신 분석 로그가 부족하거나 분류 근거가 부족한 상태",
@@ -201,6 +209,9 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
         "OVERHEATED": RegimePolicy(
             pause_new_entry=True,
@@ -214,6 +225,9 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=0.75,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
         "EXHAUSTION_RISK": RegimePolicy(
             pause_new_entry=True,
@@ -227,8 +241,27 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
-        "CHOPPY": RegimePolicy(
+        "CHOPPY_LOW_VOL": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=True,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=0.8,
+            take_profit_bonus_pct=0.25,
+            max_entry_count_delta=-99,
+            min_atr_multiplier=1.0,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
+        ),
+        "CHOPPY_HIGH_VOL": RegimePolicy(
             pause_new_entry=False,
             require_strong_signal=True,
             require_fresh_cross=True,
@@ -240,8 +273,11 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
-        "TRENDING": RegimePolicy(
+        "TRENDING_EARLY": RegimePolicy(
             pause_new_entry=False,
             require_strong_signal=False,
             require_fresh_cross=False,
@@ -253,6 +289,25 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=1,
             partial_take_profit_ratio_multiplier=0.8,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=True,
+            allow_pyramiding=True,
+        ),
+        "TRENDING_MATURE": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=False,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.10,
+            max_entry_count_delta=0,
+            min_atr_multiplier=0.90,
+            trailing_drawdown_multiplier=0.9,
+            pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=0.8,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=True,
+            allow_pyramiding=True,
         ),
         "BREAKOUT_ATTEMPT": RegimePolicy(
             pause_new_entry=False,
@@ -266,6 +321,9 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=0.9,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
     }
     return policy_map.get(
@@ -282,6 +340,9 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=True,
+            allow_pyramiding=True,
         ),
     )
 
@@ -301,6 +362,9 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=-99,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
         "OVERHEATED": RegimePolicy(
             pause_new_entry=True,
@@ -314,6 +378,9 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=0.75,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
         "EXHAUSTION_RISK": RegimePolicy(
             pause_new_entry=True,
@@ -327,8 +394,27 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=0.9,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
-        "CHOPPY": RegimePolicy(
+        "CHOPPY_LOW_VOL": RegimePolicy(
+            pause_new_entry=True,
+            require_strong_signal=True,
+            require_fresh_cross=True,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.0,
+            max_entry_count_delta=0,
+            min_atr_multiplier=1.2,
+            trailing_drawdown_multiplier=1.0,
+            pyramid_max_add_ons_delta=-99,
+            partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
+        ),
+        "CHOPPY_HIGH_VOL": RegimePolicy(
             pause_new_entry=True,
             require_strong_signal=True,
             require_fresh_cross=True,
@@ -340,8 +426,11 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=-1,
             partial_take_profit_ratio_multiplier=1.0,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
-        "TRENDING": RegimePolicy(
+        "TRENDING_EARLY": RegimePolicy(
             pause_new_entry=False,
             require_strong_signal=False,
             require_fresh_cross=False,
@@ -353,6 +442,25 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=1,
             partial_take_profit_ratio_multiplier=0.8,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=True,
+            allow_pyramiding=True,
+        ),
+        "TRENDING_MATURE": RegimePolicy(
+            pause_new_entry=False,
+            require_strong_signal=False,
+            require_fresh_cross=False,
+            allow_dynamic_overweight=False,
+            stop_loss_multiplier=1.0,
+            take_profit_bonus_pct=0.05,
+            max_entry_count_delta=0,
+            min_atr_multiplier=0.90,
+            trailing_drawdown_multiplier=0.9,
+            pyramid_max_add_ons_delta=0,
+            partial_take_profit_ratio_multiplier=0.85,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=True,
+            allow_pyramiding=True,
         ),
         "BREAKOUT_ATTEMPT": RegimePolicy(
             pause_new_entry=False,
@@ -366,6 +474,9 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             trailing_drawdown_multiplier=1.0,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=0.9,
+            required_confirmation_loops=3,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
     }
     return policy_map.get(regime or "", get_alt_regime_policy(regime))
@@ -556,7 +667,7 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
     htf_bullish_raw = record.get("htf_bullish")
     htf_bullish = None if htf_bullish_raw is None else bool(htf_bullish_raw)
 
-    regime = "CHOPPY"
+    regime = "CHOPPY_HIGH_VOL"
     if (
         volume_ratio is not None
         and avg_abs_change_pct is not None
@@ -586,7 +697,20 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
         and adx is not None
         and adx >= float(thresholds["adx_trending_threshold"])
     ):
-        regime = "TRENDING"
+        if (
+            (rsi is not None and rsi >= float(thresholds["exhaustion_rsi_threshold"]) - 5.0)
+            or (
+                gap_pct is not None
+                and gap_pct >= float(thresholds["breakout_gap_pct_threshold"]) * 1.5
+            )
+            or (
+                volume_ratio is not None
+                and volume_ratio >= float(thresholds["breakout_volume_ratio_threshold"]) * 1.5
+            )
+        ):
+            regime = "TRENDING_MATURE"
+        else:
+            regime = "TRENDING_EARLY"
     elif (
         public_buy_ready
         or (
@@ -606,9 +730,25 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
         and volume_ratio >= float(thresholds["trending_volume_ratio_threshold"])
         and avg_abs_change_pct >= float(thresholds["trending_avg_abs_change_pct_threshold"])
     ):
-        regime = "TRENDING"
-    elif adx is not None and adx < float(thresholds["adx_choppy_threshold"]):
-        regime = "CHOPPY"
+        if (
+            (rsi is not None and rsi >= float(thresholds["exhaustion_rsi_threshold"]) - 5.0)
+            or (
+                gap_pct is not None
+                and gap_pct >= float(thresholds["breakout_gap_pct_threshold"]) * 1.5
+            )
+        ):
+            regime = "TRENDING_MATURE"
+        else:
+            regime = "TRENDING_EARLY"
+    elif (
+        adx is not None
+        and adx < float(thresholds["adx_choppy_threshold"])
+        and avg_abs_change_pct is not None
+        and avg_abs_change_pct < float(thresholds["trending_avg_abs_change_pct_threshold"])
+    ):
+        regime = "CHOPPY_LOW_VOL"
+    elif adx is not None and adx < float(thresholds["adx_trending_threshold"]):
+        regime = "CHOPPY_HIGH_VOL"
 
     return SymbolRegimeSnapshot(
         regime=regime,
