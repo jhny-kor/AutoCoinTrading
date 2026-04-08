@@ -111,19 +111,10 @@
   - `reports/backtest_batches` 아래 batch/diff 결과를 인덱싱
   - `reports/backtest_registry.json` 자동 갱신
   - label, path, symbols, before/after 경로를 한 파일에서 조회 가능
-  - `review_required`, `review_status`, `review_reasons`, `actions.delete` 도 함께 기록
 
 - [update_backtest_registry.py](/Users/plo/Documents/auto_coin_bot/update_backtest_registry.py)
   - 루트 호환 실행 진입점
   - `tools.update_backtest_registry` 를 그대로 실행
-
-- [tools/delete_backtest_entry.py](/Users/plo/Documents/auto_coin_bot/tools/delete_backtest_entry.py)
-  - `확인필요` 백테스트 결과를 디렉토리째 삭제
-  - 삭제 후 `reports/backtest_registry.json` 자동 재생성
-
-- [delete_backtest_entry.py](/Users/plo/Documents/auto_coin_bot/delete_backtest_entry.py)
-  - 루트 호환 실행 진입점
-  - `tools.delete_backtest_entry` 를 그대로 실행
 
 - [compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/compare_backtest_to_live.py)
   - 백테스트 결과와 실거래 체결 이력을 같은 기준으로 비교
@@ -147,14 +138,6 @@
 
 - [telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/telegram_command_listener.py)
   - `/status`, `/positions`, `/pnl`, `/analysis`, `/weekly`, `/last`
-  - `/regime` 에서 현재 레짐의 단계 순서, 의미, 해석을 함께 요약
-
-- [current_regime_snapshot.py](/Users/plo/Documents/auto_coin_bot/current_regime_snapshot.py)
-  - 심볼별 최신 레짐 스냅샷 생성용 루트 실행 진입점
-
-- [reporting/current_regime_snapshot.py](/Users/plo/Documents/auto_coin_bot/reporting/current_regime_snapshot.py)
-  - 최신 분석 로그를 읽어 심볼별 현재 레짐 payload 생성
-  - `reports/current_regime_snapshot.json`, `.md`, `.html` 파일 생성
   - 일일/주간 리포트 자동 전송
   - 현재 시장 해석과 전략 추천 문구 생성
 

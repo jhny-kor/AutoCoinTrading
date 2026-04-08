@@ -1,6 +1,5 @@
 """
 수정 요약
-- 2026-04-08: 비교 코멘트에서 `확인필요` 상태를 추출하고 웹이 사용할 삭제 액션 메타데이터를 함께 기록하도록 확장
 - reports/backtest_batches 아래 batch/diff 결과를 스캔해 backtest_registry.json 을 자동 갱신하는 도구를 추가
 - batch_summary, diff_summary, 비교 대상 경로, 심볼 목록을 함께 기록하도록 구성
 
@@ -22,13 +21,6 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 BACKTEST_BATCH_DIR = ROOT_DIR / "reports" / "backtest_batches"
 BACKTEST_SINGLE_DIR = ROOT_DIR / "reports" / "backtests"
 REGISTRY_PATH = ROOT_DIR / "reports" / "backtest_registry.json"
-REVIEW_HINT_KEYWORDS = (
-    "확인",
-    "불일치",
-    "차이",
-    "점검",
-    "리플레이 가정",
-)
 
 
 def safe_read_json(path: Path) -> Any:
@@ -39,54 +31,6 @@ def safe_read_json(path: Path) -> Any:
         return None
 
 
-def should_mark_review_needed(text: str) -> bool:
-    """비교 코멘트에서 수동 확인 필요 여부를 판정한다."""
-    normalized = str(text or "").strip()
-    if not normalized:
-        return False
-    return any(keyword in normalized for keyword in REVIEW_HINT_KEYWORDS)
-
-
-def build_delete_action(path: Path, review_required: bool) -> dict[str, Any] | None:
-    """웹이 사용할 삭제 액션 메타데이터를 만든다."""
-    if not review_required:
-        return None
-    return {
-        "label": "삭제",
-        "enabled": True,
-        "handler": "tools/delete_backtest_entry.py",
-        "target_path": str(path),
-        "target_type": "directory",
-    }
-
-
-def collect_review_comments_from_comparison(comparison: Any) -> list[str]:
-    """comparison payload 안의 확인 필요 코멘트를 모은다."""
-    if not isinstance(comparison, dict):
-        return []
-    comments = comparison.get("comments", [])
-    if not isinstance(comments, list):
-        return []
-    review_comments: list[str] = []
-    for item in comments:
-        text = str(item or "").strip()
-        if text and should_mark_review_needed(text):
-            review_comments.append(text)
-    return review_comments
-
-
-def collect_batch_review_comments(rows: Any) -> list[str]:
-    """배치 행 전체에서 확인 필요 코멘트를 모은다."""
-    if not isinstance(rows, list):
-        return []
-    review_comments: list[str] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        review_comments.extend(collect_review_comments_from_comparison(row.get("comparison")))
-    return review_comments
-
-
 def build_batch_entry(batch_dir: Path) -> dict[str, Any] | None:
     """batch_summary 기준 레지스트리 항목을 만든다."""
     summary_path = batch_dir / "batch_summary.json"
@@ -94,8 +38,6 @@ def build_batch_entry(batch_dir: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     rows = payload.get("rows", [])
-    review_comments = collect_batch_review_comments(rows)
-    review_required = bool(review_comments)
     symbols: list[str] = []
     if isinstance(rows, list):
         for row in rows:
@@ -104,7 +46,7 @@ def build_batch_entry(batch_dir: Path) -> dict[str, Any] | None:
             symbol = str(row.get("symbol", "")).strip()
             if symbol:
                 symbols.append(symbol)
-    entry = {
+    return {
         "type": "batch",
         "name": batch_dir.name,
         "label": payload.get("label"),
@@ -114,14 +56,7 @@ def build_batch_entry(batch_dir: Path) -> dict[str, Any] | None:
         "since": payload.get("since"),
         "until": payload.get("until"),
         "symbols": sorted(set(symbols)),
-        "review_required": review_required,
-        "review_status": "확인필요" if review_required else "정상",
-        "review_reasons": review_comments[:10],
     }
-    delete_action = build_delete_action(batch_dir, review_required)
-    if delete_action is not None:
-        entry["actions"] = {"delete": delete_action}
-    return entry
 
 
 def build_single_backtest_entry(backtest_dir: Path) -> dict[str, Any] | None:
@@ -131,11 +66,7 @@ def build_single_backtest_entry(backtest_dir: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     symbol = str(payload.get("symbol", "")).strip()
-    comparison_comments = collect_review_comments_from_comparison(
-        safe_read_json(backtest_dir / "comparison.json")
-    )
-    review_required = bool(comparison_comments)
-    entry = {
+    return {
         "type": "single",
         "name": backtest_dir.name,
         "label": payload.get("label"),
@@ -145,14 +76,7 @@ def build_single_backtest_entry(backtest_dir: Path) -> dict[str, Any] | None:
         "exchange_name": payload.get("exchange_name"),
         "strategy_type": payload.get("strategy_type"),
         "symbols": [symbol] if symbol else [],
-        "review_required": review_required,
-        "review_status": "확인필요" if review_required else "정상",
-        "review_reasons": comparison_comments[:10],
     }
-    delete_action = build_delete_action(backtest_dir, review_required)
-    if delete_action is not None:
-        entry["actions"] = {"delete": delete_action}
-    return entry
 
 
 def build_diff_entry(diff_dir: Path) -> dict[str, Any] | None:
@@ -183,7 +107,7 @@ def build_diff_entry(diff_dir: Path) -> dict[str, Any] | None:
         if symbol:
             symbols.append(symbol)
 
-    entry = {
+    return {
         "type": "diff",
         "name": diff_dir.name,
         "created_at": datetime.fromtimestamp(diff_dir.stat().st_mtime).isoformat(),
@@ -192,11 +116,7 @@ def build_diff_entry(diff_dir: Path) -> dict[str, Any] | None:
         "before_dir": before_dir,
         "after_dir": after_dir,
         "symbols": sorted(set(symbols)),
-        "review_required": False,
-        "review_status": "정상",
-        "review_reasons": [],
     }
-    return entry
 
 
 def build_registry_entries(base_dir: Path) -> list[dict[str, Any]]:

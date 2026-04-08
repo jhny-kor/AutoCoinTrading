@@ -94,8 +94,6 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
 
 실행 결과는 `reports/backtests/<timestamp>__<strategy>__<symbol>/` 아래에 저장됩니다.
 단일 백테스트 실행이 끝나면 `reports/backtest_registry.json` 도 함께 갱신되어, 웹/리포트 쪽에서 최근 실행 결과를 바로 찾을 수 있습니다.
-또한 비교 코멘트에 `확인`, `불일치`, `점검` 성격 문구가 있으면 레지스트리에 `review_status=확인필요` 와 `actions.delete` 메타데이터가 함께 기록됩니다.
-이 항목은 `.venv/bin/python tools/delete_backtest_entry.py --path <entry.path>` 로 디렉토리째 삭제할 수 있고, 삭제 후 레지스트리는 자동으로 다시 생성됩니다.
 
 - `summary.json`
   - 수익률, 거래 수, 승률, 최대 낙폭
