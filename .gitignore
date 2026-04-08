@@ -19,3 +19,6 @@ __pycache__/
 
 # macOS 잡파일
 .DS_Store
+
+# 로컬 에이전트 작업 디렉토리
+.omx/
