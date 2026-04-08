@@ -155,7 +155,7 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 체결 구조화 로그: `structured_logs/live/YYYY-MM-DD/*/trade.jsonl`
 - 업비트 웹소켓 런타임: `logs/runtime/upbit_ws/*`
 
-오래된 로그는 최근 7일 원본 유지 후 `tar.gz` 로 압축합니다.
+오래된 로그는 최근 7일 미만 원본 유지 기준으로 관리하고, 7일째부터 `tar.gz` 로 압축합니다.
 
 - 상태 확인: `.venv/bin/python log_archive_manager.py status`
 - 수동 압축: `.venv/bin/python log_archive_manager.py compress`

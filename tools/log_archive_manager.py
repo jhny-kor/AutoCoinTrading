@@ -132,9 +132,9 @@ def try_parse_date(raw: str) -> date | None:
 
 
 def should_archive_day(target_day: date, today: date, keep_days: int) -> bool:
-    """최근 keep_days 는 유지하고, 그 이전 날짜만 압축 대상으로 본다."""
+    """최근 keep_days 일 이내는 유지하고, 그 날짜에 도달하면 압축 대상으로 본다."""
     age_days = (today - target_day).days
-    return age_days > keep_days
+    return age_days >= keep_days
 
 
 def group_candidates(candidates: list[ArchiveCandidate]) -> list[ArchiveGroup]:
