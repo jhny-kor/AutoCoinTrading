@@ -1,5 +1,8 @@
 """
 수정 요약
+- 2026-04-08: BTC/USDT 는 확인 루프 3회를 유지하고 심볼별 override 가 레짐별 최소 루프보다 크면 그 값을 쓰도록 보강
+- 2026-04-08: BTC 8단계 보수형 레짐에 따라 진입 확인 루프, trend-follow, 피라미딩 허용 여부를 다르게 적용
+- 2026-04-06: BTC Donchian Channel 모드 실시간 조건 모니터링 연동
 - BTC ATR 퍼센트가 낮을 때 신규 진입 비중을 단계형으로 줄이는 보정을 추가했다.
 - BTC 포지션 평가 helper 호출을 한 번만 수행하도록 정리해 중복 분기를 줄였다.
 - 노이즈 비율 기반 동적 EMA 스프레드/신호 스코어 보정을 추가해 BTC 진입 기준을 장 상태에 맞춰 자동 조정하도록 보강했다.
@@ -72,6 +75,7 @@ from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligi
 from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.indicators import (
     calc_bollinger_band_width_pct,
+    calc_donchian_channel,
     calc_ema_series as calc_ema_series_core,
     calc_noise_ratio,
     calc_pct_slope,
@@ -335,6 +339,10 @@ def run_bot():
             closes = [row[4] for row in ohlcv]
             confirm_closes = [row[4] for row in confirm_ohlcv]
             last_close = closes[-1]
+            last_high = ohlcv[-1][2]
+            last_low = ohlcv[-1][3]
+            donchian_entry_upper, _ = calc_donchian_channel(ohlcv, settings.donchian_entry_lookback)
+            _, donchian_exit_lower = calc_donchian_channel(ohlcv, settings.donchian_exit_lookback)
             fast_ema_series = calc_ema_series(closes, settings.fast_ema_period)
             slow_ema_series = calc_ema_series(closes, settings.slow_ema_period)
 
@@ -411,6 +419,10 @@ def run_bot():
                 min_bb_width_pct=settings.min_bb_width_pct,
                 max_bb_width_pct=settings.max_bb_width_pct,
                 signal_score_min=effective_signal_score_min,
+                entry_mode=settings.entry_mode,
+                donchian_entry_upper=donchian_entry_upper,
+                donchian_confirm_breakout_close=settings.donchian_confirm_breakout_close,
+                last_high=last_high,
             )
             ema_aligned = bool(btc_entry_state["ema_aligned"])
             price_above_fast = bool(btc_entry_state["price_above_fast"])
@@ -477,6 +489,11 @@ def run_bot():
                 not has_position and regime_policy.pause_new_entry
             )
             symbol_regime_requires_fresh_cross = regime_policy.require_fresh_cross
+            trend_follow_entry_allowed = regime_policy.allow_trend_follow_entry
+            regime_confirmation_loops = max(
+                regime_policy.required_confirmation_loops,
+                settings.get_entry_confirmation_loops(symbol),
+            )
             effective_min_volume_ratio = settings.get_effective_min_volume_ratio(
                 symbol,
                 symbol_regime,
@@ -532,6 +549,7 @@ def run_bot():
                 and not low_energy_guard_active
                 and not symbol_regime_blocks_entry
                 and not fill_quality_entry_blocked
+                and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
                 and (not symbol_regime_requires_fresh_cross or bullish)
             )
             # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
@@ -540,11 +558,16 @@ def run_bot():
                 symbol=symbol,
                 has_position=has_position,
                 candidate_active=raw_entry_candidate,
-                required_confirmations=settings.entry_confirmation_loops,
+                required_confirmations=regime_confirmation_loops,
             )
 
             log("-" * 60)
             log(f"[{symbol}] 현재 종가: {last_close:.2f}")
+            log(
+                f"[{symbol}] 진입 모드: {settings.entry_mode.upper()} "
+                f"(Donchian 상단: {0.0 if donchian_entry_upper is None else donchian_entry_upper:.2f}, "
+                f"하단: {0.0 if donchian_exit_lower is None else donchian_exit_lower:.2f})"
+            )
             log(
                 f"[{symbol}] EMA 상태 - 이전 {prev_fast:.2f}/{prev_slow:.2f}, 현재 {last_fast:.2f}/{last_slow:.2f}"
             )
@@ -620,6 +643,8 @@ def run_bot():
                     f"[{symbol}] 진입 후보 신호를 누적 확인 중입니다. "
                     f"{entry_timing_snapshot.confirmation_count}/{entry_timing_snapshot.required_confirmations}"
                 )
+            if trend_follow_entry and not bullish and not trend_follow_entry_allowed:
+                log(f"[{symbol}] 현재 레짐 {symbol_regime} 에서는 trend-follow 진입을 허용하지 않습니다.")
 
             # 포지션 평가 helper 는 한 번만 호출하고, 이후 보유 여부에 따라 후처리만 나눈다.
             position_state = evaluate_btc_open_position(
@@ -743,6 +768,9 @@ def run_bot():
                 pnl_pct=current_net_realized_pnl_pct,
                 bearish=(bearish or (not ema_aligned) or (not price_above_fast)),
                 confirm_bullish=confirm_bullish and not bull_pullback_hold_active,
+                entry_mode=settings.entry_mode,
+                donchian_exit_lower=donchian_exit_lower,
+                last_low=last_low,
             )
             drawdown_from_high_pct = btc_exit_flags["drawdown_from_high_pct"]
             stop_triggered = bool(btc_exit_flags["stop_triggered"])
@@ -1001,10 +1029,12 @@ def run_bot():
                 and pnl_pct is not None
                 and pnl_pct >= settings.pyramid_trigger_profit_pct
             )
-            effective_pyramid_max_add_ons = max(
-                0,
-                settings.pyramid_max_add_ons + regime_policy.pyramid_max_add_ons_delta,
-            )
+            effective_pyramid_max_add_ons = 0
+            if regime_policy.allow_pyramiding:
+                effective_pyramid_max_add_ons = max(
+                    0,
+                    settings.pyramid_max_add_ons + regime_policy.pyramid_max_add_ons_delta,
+                )
             add_on_limit_available = add_on_count < effective_pyramid_max_add_ons
             add_on_ready = False
             if settings.enable_pyramid_add_on:

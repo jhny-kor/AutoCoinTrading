@@ -368,7 +368,7 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - `/positions`: 현재 거래소 잔고와 보유 포지션 평가 금액 요약
 - `/pnl`: 오늘 누적 실현 손익 요약
 - `/analysis`: 최근 분석 로그 요약
-- `/regime`: 심볼별 현재 레짐과 핵심 근거 숫자 요약
+- `/regime`: 심볼별 현재 레짐과 단계 순서, 핵심 근거 숫자 요약
 - `/weekly`: 최근 7일 기준 주간 리포트
 - `/last`: 최근 운영 로그 끝부분 확인
 - `/help`: 명령 도움말
@@ -430,6 +430,22 @@ OKX 는 캔들/잔고 조회의 `RequestTimeout` 완화를 위해 조회 전용 
 - 최근 1주 거래량 기준 신규 후보 코인
 
 지표 용어와 레짐 기준은 [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)에 정리합니다.
+
+현재 BTC 레짐은 보수형 8단계로 운용합니다.
+- `LOW_ENERGY`
+- `CHOPPY_LOW_VOL`
+- `CHOPPY_HIGH_VOL`
+- `BREAKOUT_ATTEMPT`
+- `TRENDING_EARLY`
+- `TRENDING_MATURE`
+- `EXHAUSTION_RISK`
+- `OVERHEATED`
+
+BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 적용합니다.
+- `BTC/USDT`: `3회`
+- `BTC/KRW`: `5회`
+- `BTC/USDT` 는 첫 진입 후보 감지 뒤 실제 READY 까지 보통 `약 20초` 더 필요합니다.
+- `BTC/KRW` 는 첫 진입 후보 감지 뒤 실제 READY 까지 보통 `약 40초` 더 필요합니다.
 
 ## 현재 운영 방향
 

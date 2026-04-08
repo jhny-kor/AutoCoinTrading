@@ -1,6 +1,8 @@
 """
 수정 요약
-- BTC ATR 퍼센트가 낮을 때 신규 진입 비중을 단계형으로 줄일 수 있게 설정을 추가했다.
+- 2026-04-08: BTC 심볼별 진입 확인 루프 override map 을 추가해 BTC/USDT 와 BTC/KRW 를 다르게 운용할 수 있게 확장
+- 2026-04-06: Donchian Channel 돌파 진입 파라미터 추가
+- 심볼별 CHOPPY 진입 거래량 최소 기준을 설정하는 MAP 을 추가해 BTC/KRW 의 기준을 2.5 로 보수화했다.
 - 2026-04-03: BTC 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 BTC 전용 EMA 추세추종 설정 로더
 
@@ -34,7 +36,7 @@ from dataclasses import dataclass
 
 from settings.config_access import config_bool, config_float, config_int, config_str, config_value
 from settings.env import load_project_env
-from strategy_settings import parse_float_float_map, parse_symbol_float_map
+from strategy_settings import parse_float_float_map, parse_symbol_float_map, parse_symbol_int_map
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,10 @@ class BtcTrendSettings:
     """BTC 전용 EMA 추세추종 설정."""
 
     version: str
+    entry_mode: str
+    donchian_entry_lookback: int
+    donchian_exit_lookback: int
+    donchian_confirm_breakout_close: bool
     timeframe: str
     confirm_timeframe: str
     enable_confirm_timeframe_filter: bool
@@ -69,6 +75,7 @@ class BtcTrendSettings:
     noise_ratio_max_multiplier: float
     noise_ratio_signal_score_weight: float
     entry_confirmation_loops: int
+    entry_confirmation_loops_map: dict[str, int]
     enable_fill_quality_guard: bool
     fill_quality_lookback_sec: int
     fill_quality_min_fill_ratio: float
@@ -165,6 +172,10 @@ class BtcTrendSettings:
             )
         return base_ratio
 
+    def get_entry_confirmation_loops(self, symbol: str) -> int:
+        """심볼별 진입 확인 루프 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return max(1, self.entry_confirmation_loops_map.get(symbol, self.entry_confirmation_loops))
+
 
 def load_btc_trend_settings() -> BtcTrendSettings:
     """BTC 전용 EMA 추세추종 설정을 불러온다."""
@@ -172,6 +183,10 @@ def load_btc_trend_settings() -> BtcTrendSettings:
 
     return BtcTrendSettings(
         version=config_str("btc_trend", "version", "btc_mid_v1", env_key="BTC_TREND_VERSION").strip(),
+        entry_mode=config_str("btc_trend", "entry_mode", "ema", env_key="BTC_TREND_ENTRY_MODE").strip().lower(),
+        donchian_entry_lookback=config_int("btc_trend", "donchian_entry_lookback", 20, env_key="BTC_TREND_DONCHIAN_ENTRY_LOOKBACK"),
+        donchian_exit_lookback=config_int("btc_trend", "donchian_exit_lookback", 10, env_key="BTC_TREND_DONCHIAN_EXIT_LOOKBACK"),
+        donchian_confirm_breakout_close=config_bool("btc_trend", "donchian_confirm_breakout_close", True, env_key="BTC_TREND_DONCHIAN_CONFIRM_BREAKOUT_CLOSE"),
         timeframe=config_str("btc_trend", "timeframe", "5m", env_key="BTC_TREND_TIMEFRAME"),
         confirm_timeframe=config_str("btc_trend", "confirm_timeframe", "15m", env_key="BTC_TREND_CONFIRM_TIMEFRAME"),
         enable_confirm_timeframe_filter=config_bool("btc_trend", "enable_confirm_filter", True, env_key="BTC_TREND_ENABLE_CONFIRM_FILTER"),
@@ -199,6 +214,7 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         noise_ratio_max_multiplier=config_float("btc_trend", "noise_ratio_max_multiplier", 1.30, env_key="BTC_TREND_NOISE_RATIO_MAX_MULTIPLIER"),
         noise_ratio_signal_score_weight=config_float("btc_trend", "noise_ratio_signal_score_weight", 12.0, env_key="BTC_TREND_NOISE_RATIO_SIGNAL_SCORE_WEIGHT"),
         entry_confirmation_loops=config_int("btc_trend", "entry_confirmation_loops", 2, env_key="BTC_TREND_ENTRY_CONFIRMATION_LOOPS"),
+        entry_confirmation_loops_map=parse_symbol_int_map(config_value("btc_trend", "entry_confirmation_loops_map", {}, env_key="BTC_TREND_ENTRY_CONFIRMATION_LOOPS_MAP")),
         enable_fill_quality_guard=config_bool("btc_trend", "enable_fill_quality_guard", True, env_key="BTC_TREND_ENABLE_FILL_QUALITY_GUARD"),
         fill_quality_lookback_sec=config_int("btc_trend", "fill_quality_lookback_sec", 3600, env_key="BTC_TREND_FILL_QUALITY_LOOKBACK_SEC"),
         fill_quality_min_fill_ratio=config_float("btc_trend", "fill_quality_min_fill_ratio", 0.95, env_key="BTC_TREND_FILL_QUALITY_MIN_FILL_RATIO"),

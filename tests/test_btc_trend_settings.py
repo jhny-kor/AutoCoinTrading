@@ -6,6 +6,21 @@ from btc_trend_settings import load_btc_trend_settings
 
 
 class BtcTrendSettingsTests(unittest.TestCase):
+    def test_loads_symbol_specific_entry_confirmation_loops(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BTC_TREND_ENTRY_CONFIRMATION_LOOPS": "3",
+                "BTC_TREND_ENTRY_CONFIRMATION_LOOPS_MAP": "BTC/USDT:3,BTC/KRW:5",
+            },
+            clear=False,
+        ):
+            settings = load_btc_trend_settings()
+
+        self.assertEqual(3, settings.get_entry_confirmation_loops("BTC/USDT"))
+        self.assertEqual(5, settings.get_entry_confirmation_loops("BTC/KRW"))
+        self.assertEqual(3, settings.get_entry_confirmation_loops("BTC/UNKNOWN"))
+
     def test_loads_atr_position_scale_thresholds(self):
         with patch.dict(
             os.environ,

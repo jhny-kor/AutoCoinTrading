@@ -1,6 +1,8 @@
 """
 수정 요약
+- 2026-04-08: 심볼별 정수 override 공통 파서를 추가해 BTC 확인 루프처럼 map 기반 int 설정을 재사용할 수 있게 확장
 - 2026-04-03: 공통 전략 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
+- 2026-04-06: 알트코인 Bollinger Squeeze + 거래량 폭발 돌파 진입 모드 파라미터 추가
 - BTC ATR 퍼센트가 낮을 때 알트 신규 진입 비중을 단계형으로 줄일 수 있게 공통 설정을 추가했다.
 - BTC 레짐 기반 알트 신규 진입 비중을 심볼별 override map 으로 세분화해 ETH 는 더 보수적으로, XRP 는 완만하게 축소할 수 있게 확장
 - 알트 신규 진입 비중에 BTC 레짐 기반 추가 스케일을 곱할 수 있게 확장해 BTC 가 LOW_ENERGY 일 때 먼저 포지션을 축소할 수 있게 보강
@@ -58,6 +60,11 @@ class StrategySettings:
     """두 봇이 공통으로 사용하는 전략 설정 묶음."""
 
     version: str
+    entry_mode: str
+    bb_period: int
+    bb_stddev: float
+    squeeze_max_bandwidth_pct: float
+    squeeze_min_volume_ratio: float
     buy_split_ratio: float
     sell_split_ratio: float
     max_entry_count: int
@@ -283,6 +290,36 @@ def parse_symbol_float_map(raw: str | dict[str, object]) -> dict[str, float]:
     return result
 
 
+def parse_symbol_int_map(raw: str | dict[str, object]) -> dict[str, int]:
+    """문자열 또는 dict 형태의 심볼별 정수 사전을 만든다."""
+    result: dict[str, int] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                result[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    if not raw:
+        return result
+
+    for item in str(raw).split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        symbol, value = item.split(":", 1)
+        symbol = symbol.strip()
+        value = value.strip()
+        if not symbol or not value:
+            continue
+        try:
+            result[symbol] = int(value)
+        except ValueError:
+            continue
+    return result
+
+
 def parse_symbol_regime_float_map(raw: str | dict[str, object]) -> dict[str, dict[str, float]]:
     """문자열 또는 dict 형태의 심볼별 레짐 스케일 사전을 만든다."""
     if isinstance(raw, dict):
@@ -425,6 +462,11 @@ def load_strategy_settings(
 
     return StrategySettings(
         version=config_str("strategy", "version", "alt_v1", env_key="STRATEGY_VERSION").strip(),
+        entry_mode=config_str("strategy", "entry_mode", "ma", env_key="STRATEGY_ENTRY_MODE").strip().lower(),
+        bb_period=config_int("strategy", "bb_period", 20, env_key="STRATEGY_BB_PERIOD"),
+        bb_stddev=config_float("strategy", "bb_stddev", 2.0, env_key="STRATEGY_BB_STDDEV"),
+        squeeze_max_bandwidth_pct=config_float("strategy", "squeeze_max_bandwidth_pct", 3.0, env_key="STRATEGY_SQUEEZE_MAX_BANDWIDTH_PCT"),
+        squeeze_min_volume_ratio=config_float("strategy", "squeeze_min_volume_ratio", 2.5, env_key="STRATEGY_SQUEEZE_MIN_VOLUME_RATIO"),
         buy_split_ratio=config_float("strategy", "buy_split_ratio", 0.10, env_key="STRATEGY_BUY_SPLIT_RATIO"),
         sell_split_ratio=config_float("strategy", "sell_split_ratio", 0.10, env_key="STRATEGY_SELL_SPLIT_RATIO"),
         max_entry_count=config_int("strategy", "max_entry_count", 3, env_key="STRATEGY_MAX_ENTRY_COUNT"),
