@@ -55,6 +55,7 @@ class AllocationScoreTests(unittest.TestCase):
         )
         self.assertEqual(result.score_scale, 0.60)
         self.assertLess(result.allocation_score, 55.0)
+        self.assertEqual(result.reason_top, "market")
 
 
 if __name__ == "__main__":

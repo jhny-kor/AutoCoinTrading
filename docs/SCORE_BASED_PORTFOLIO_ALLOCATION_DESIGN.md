@@ -5,6 +5,7 @@
 - 2026-04-09 기준 1차 구현 완료
 - live 4봇, BTC add-on, backtest replay, example config 반영 완료
 - 이후에는 가중치/버킷 튜닝이 중심 과제
+- 2026-04-10 기준 `allocation_reason_top` 은 최고 점수 항목이 아니라 최저 점수 항목 기준으로 수정 완료
 
 ## 목적
 

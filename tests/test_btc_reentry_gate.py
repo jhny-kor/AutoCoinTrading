@@ -20,6 +20,8 @@ class BtcReentryGateTests(unittest.TestCase):
             confirm_bullish=False,
             require_confirm_bullish=True,
             require_fresh_cross=True,
+            relaxed_no_fresh_cross_after_sec=300,
+            relaxed_no_fresh_cross_min_signal_score=85.0,
         )
         self.assertFalse(blocked["pattern_ready"])
 
@@ -36,7 +38,30 @@ class BtcReentryGateTests(unittest.TestCase):
             confirm_bullish=True,
             require_confirm_bullish=True,
             require_fresh_cross=True,
+            relaxed_no_fresh_cross_after_sec=300,
+            relaxed_no_fresh_cross_min_signal_score=85.0,
         )
+        self.assertTrue(ready["pattern_ready"])
+
+    def test_relaxed_fresh_cross_path_allows_reentry_without_new_cross(self):
+        ready = compute_btc_stop_loss_reentry_gate(
+            enabled=True,
+            elapsed_since_stop_loss_sec=360,
+            min_cooldown_sec=180,
+            entry_signal=True,
+            bullish=False,
+            signal_score=88.0,
+            min_signal_score=72.0,
+            volume_filter_passed=True,
+            atr_filter_passed=True,
+            confirm_bullish=True,
+            require_confirm_bullish=True,
+            require_fresh_cross=True,
+            relaxed_no_fresh_cross_after_sec=300,
+            relaxed_no_fresh_cross_min_signal_score=85.0,
+        )
+        self.assertTrue(ready["fresh_cross_passed"])
+        self.assertTrue(ready["relaxed_fresh_cross_used"])
         self.assertTrue(ready["pattern_ready"])
 
 

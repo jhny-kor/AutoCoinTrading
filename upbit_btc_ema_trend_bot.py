@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: BTC 손절 후 일정 시간과 높은 점수면 fresh cross 없이 재진입 가능한 예외 경로를 추가
 - 2026-04-09: BTC 손절 후 재진입은 최소 시간 + confirm/fresh cross 복구 기준으로 보도록 패턴 기반 gate 를 추가
 - 2026-04-08: BTC 가 레짐을 직접 if 분기하지 않고 독립 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
 - 2026-04-08: BTC/KRW 는 확인 루프 5회를 사용하고 심볼별 override 가 레짐별 최소 루프보다 크면 그 값을 쓰도록 보강
@@ -610,6 +611,8 @@ def run_bot():
                 confirm_bullish=confirm_bullish,
                 require_confirm_bullish=settings.stop_loss_pattern_require_confirm_bullish,
                 require_fresh_cross=settings.stop_loss_pattern_require_fresh_cross,
+                relaxed_no_fresh_cross_after_sec=settings.get_relaxed_fresh_cross_after_sec(symbol),
+                relaxed_no_fresh_cross_min_signal_score=settings.get_relaxed_fresh_cross_min_signal_score(symbol),
             )
             stop_loss_pattern_blocked = bool(
                 stop_loss_pattern_gate["enabled"]
@@ -1056,7 +1059,8 @@ def run_bot():
                     f"[{symbol}] 손절 후 패턴 재진입 대기 중입니다. "
                     f"경과 {int(max(0.0, now_ts - last_stop_loss_at))}초 / 최소 {settings.stop_loss_pattern_min_cooldown_sec}초, "
                     f"신호 점수 {signal_score:.1f}/{settings.stop_loss_pattern_min_signal_score:.1f}, "
-                    f"confirm={confirm_bullish}, fresh_cross={bullish}"
+                    f"confirm={confirm_bullish}, fresh_cross={bullish}, "
+                    f"relaxed_fresh_cross={stop_loss_pattern_gate['relaxed_fresh_cross_used']}"
                 )
 
             entry_steps = build_btc_entry_steps(

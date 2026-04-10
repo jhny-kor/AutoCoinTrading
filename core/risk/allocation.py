@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: allocation reason_top 을 최고 점수 축이 아니라 최저 점수 축 기준으로 바꿔 실제 약점 설명에 가깝게 조정
 - 2026-04-09: signal/market/execution/diversification 기반 score_scale 계산 helper 를 추가
 - 레짐별 포지션 스케일을 적용하되 최소 0, 최대 1.2 범위로 제한하는 공통 helper 를 추가했다.
 - 알트/BTC 신규 진입과 추가매수의 포트폴리오 배분 호출을 공통 래퍼로 분리했다.
@@ -113,7 +114,7 @@ def compute_allocation_score(
         "execution": execution_component,
         "diversification": diversification_component,
     }
-    reason_top = max(component_map.items(), key=lambda item: item[1])[0]
+    reason_top = min(component_map.items(), key=lambda item: item[1])[0]
 
     return AllocationScoreResult(
         allocation_score=allocation_score,

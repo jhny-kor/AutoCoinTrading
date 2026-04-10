@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: BTC 손절 후 일정 시간 경과와 높은 점수 조건이면 fresh cross 없이 재진입 가능한 완화 설정을 추가
 - 2026-04-09: 손절 후 재진입은 최소 시간과 signal/confirm/fresh cross 복구를 함께 보는 패턴 기반 설정을 추가
 - 2026-04-08: BTC 심볼별 진입 확인 루프 override map 을 추가해 BTC/USDT 와 BTC/KRW 를 다르게 운용할 수 있게 확장
 - 2026-04-06: Donchian Channel 돌파 진입 파라미터 추가
@@ -110,6 +111,8 @@ class BtcTrendSettings:
     stop_loss_pattern_min_signal_score: float
     stop_loss_pattern_require_confirm_bullish: bool
     stop_loss_pattern_require_fresh_cross: bool
+    stop_loss_pattern_relaxed_fresh_cross_after_sec_map: dict[str, int]
+    stop_loss_pattern_relaxed_fresh_cross_min_signal_score_map: dict[str, float]
     profit_exit_reentry_cooldown_sec: int
     enable_partial_take_profit: bool
     partial_take_profit_ratio: float
@@ -181,6 +184,14 @@ class BtcTrendSettings:
     def get_entry_confirmation_loops(self, symbol: str) -> int:
         """심볼별 진입 확인 루프 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return max(1, self.entry_confirmation_loops_map.get(symbol, self.entry_confirmation_loops))
+
+    def get_relaxed_fresh_cross_after_sec(self, symbol: str) -> int:
+        """심볼별 fresh cross 완화 대기 시간을 반환한다."""
+        return max(0, self.stop_loss_pattern_relaxed_fresh_cross_after_sec_map.get(symbol, 0))
+
+    def get_relaxed_fresh_cross_min_signal_score(self, symbol: str) -> float:
+        """심볼별 fresh cross 완화 최소 점수를 반환한다."""
+        return self.stop_loss_pattern_relaxed_fresh_cross_min_signal_score_map.get(symbol, 999.0)
 
 
 def load_btc_trend_settings() -> BtcTrendSettings:
@@ -254,6 +265,8 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         stop_loss_pattern_min_signal_score=config_float("btc_trend", "stop_loss_pattern_min_signal_score", 72.0, env_key="BTC_TREND_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE"),
         stop_loss_pattern_require_confirm_bullish=config_bool("btc_trend", "stop_loss_pattern_require_confirm_bullish", True, env_key="BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_CONFIRM_BULLISH"),
         stop_loss_pattern_require_fresh_cross=config_bool("btc_trend", "stop_loss_pattern_require_fresh_cross", True, env_key="BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS"),
+        stop_loss_pattern_relaxed_fresh_cross_after_sec_map=parse_symbol_int_map(config_value("btc_trend", "stop_loss_pattern_relaxed_fresh_cross_after_sec_map", {}, env_key="BTC_TREND_STOP_LOSS_PATTERN_RELAXED_FRESH_CROSS_AFTER_SEC_MAP")),
+        stop_loss_pattern_relaxed_fresh_cross_min_signal_score_map=parse_symbol_float_map(config_value("btc_trend", "stop_loss_pattern_relaxed_fresh_cross_min_signal_score_map", {}, env_key="BTC_TREND_STOP_LOSS_PATTERN_RELAXED_FRESH_CROSS_MIN_SIGNAL_SCORE_MAP")),
         profit_exit_reentry_cooldown_sec=config_int("btc_trend", "profit_exit_reentry_cooldown_sec", 600, env_key="BTC_TREND_PROFIT_EXIT_REENTRY_COOLDOWN_SEC"),
         enable_partial_take_profit=config_bool("btc_trend", "enable_partial_take_profit", True, env_key="BTC_TREND_ENABLE_PARTIAL_TAKE_PROFIT"),
         partial_take_profit_ratio=config_float("btc_trend", "partial_take_profit_ratio", 0.5, env_key="BTC_TREND_PARTIAL_TAKE_PROFIT_RATIO"),

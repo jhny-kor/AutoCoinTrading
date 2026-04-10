@@ -685,6 +685,43 @@
   - 낮은 시드 테스트 환경에서는 이 방식이 기대손익보다 변동성 억제에 더 유리
   - 실제 로그에 `allocation_score`, `allocation_score_scale`, `allocation_reason_top` 이 남으므로 이후 튜닝 설명성도 좋아짐
 
+### 34. XRP 보호 청산 상향 + BTC fresh cross 완화 예외 + score reason_top 수정 (2026-04-10)
+
+- 변경 내용:
+  - XRP 보호 청산 강화
+    - `XRP/KRW` `break_even_guard_min_mfe_pct: 0.18 -> 0.15`
+    - `XRP/USDT` `break_even_guard_min_mfe_pct: 0.18 -> 0.15`
+    - `XRP/KRW` `break_even_guard_floor_net_pnl_pct: 0.04 -> 0.12`
+    - `XRP/USDT` `break_even_guard_floor_net_pnl_pct: 0.05 -> 0.12`
+  - BTC fresh cross 완화 예외
+    - `BTC/USDT`
+      - `300초 이상`
+      - `confirm_bullish=true`
+      - `signal_score >= 85`
+      - 이면 `fresh_cross` 없이도 재진입 허용
+    - `BTC/KRW`
+      - `600초 이상`
+      - `confirm_bullish=true`
+      - `signal_score >= 90`
+      - 이면 `fresh_cross` 없이도 재진입 허용
+  - score 배분 로그 해석 수정
+    - `allocation_reason_top` 을 최고 점수 항목이 아니라 최저 점수 항목 기준으로 변경
+- 근거 로그:
+  - `XRP/KRW`
+    - `2026-04-09 04:18` `break_even_guard_take_profit`, `MFE 0.2973%`, `net -0.7934%`
+    - `2026-04-10 18:30` `break_even_guard_take_profit`, `MFE 0.8724%`, `net -0.5232%`
+  - 즉 XRP는 수익 구간이 있었는데도 보호 청산이 늦어 음수까지 반납한 뒤 정리되는 패턴이 확인됨
+  - BTC 손절 후 구간에서는 `confirm=true`, 높은 `signal_score`가 자주 보였지만 `fresh_cross=false` 때문에 계속 막힘
+  - `allocation_reason_top` 은 실제 병목보다 `execution`, `diversification` 같은 높은 점수 항목이 먼저 찍혀 설명성이 떨어졌음
+- 현재 관찰:
+  - `OKX BTC/USDT` 로그에는 `relaxed_fresh_cross=True` 가 실제로 찍히는 구간이 생김
+  - 다만 동시에 `LOW_ENERGY` / `skip` 레짐이면 여전히 진입은 막히므로, 완화가 들어가도 무조건 재진입하진 않음
+  - score 로그는 이제 “가장 약한 축” 기준으로 읽히게 되어 해석이 더 자연스러워짐
+- 해석:
+  - XRP는 손절폭보다 보호 청산 타이밍이 더 중요한 문제였고, 그래서 양수 바닥을 더 강하게 요구하는 쪽이 맞다고 판단
+  - BTC는 fresh cross를 완전히 제거하는 것이 아니라, 충분히 강한 추세 재개 신호에만 예외를 주는 방식이 안전하다고 판단
+  - score 기반 배분은 계산 자체보다 설명성이 중요하므로, 현재처럼 약점 축을 reason으로 남기는 방식이 더 실전적이라고 판단
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

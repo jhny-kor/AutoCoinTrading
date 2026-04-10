@@ -1833,7 +1833,7 @@ def run_bot():
                         invalidate_upbit_balance_cache(exchange)
                         invalidate_upbit_orderbook_cache(exchange, symbol)
                         last_trade_at[symbol] = time.time()
-                        if exit_reason in {"stop_loss", "partial_stop_loss"}:
+                        if exit_reason_key in {"stop_loss", "partial_stop_loss"}:
                             last_stop_loss_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.00000001:

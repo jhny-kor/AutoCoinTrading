@@ -51,6 +51,8 @@
     - `BTC_TREND_STOP_LOSS_PATTERN_MIN_SIGNAL_SCORE=72`
     - `BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_CONFIRM_BULLISH=true`
     - `BTC_TREND_STOP_LOSS_PATTERN_REQUIRE_FRESH_CROSS=true`
+    - `BTC_TREND_STOP_LOSS_PATTERN_RELAXED_FRESH_CROSS_AFTER_SEC_MAP=BTC/USDT:300,BTC/KRW:600`
+    - `BTC_TREND_STOP_LOSS_PATTERN_RELAXED_FRESH_CROSS_MIN_SIGNAL_SCORE_MAP=BTC/USDT:85,BTC/KRW:90`
     - `BTC_TREND_MIN_VOLUME_RATIO_MAP=BTC/USDT:1.70,BTC/KRW:1.55`
     - `BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP=BTC/USDT:2.20,BTC/KRW:2.20`
     - `BTC_TREND_REGIME_POSITION_SCALE_MAP=TRENDING:1.10,BREAKOUT_ATTEMPT:0.90,CHOPPY:0.50,LOW_ENERGY:0.00,OVERHEATED:0.30,EXHAUSTION_RISK:0.00`
@@ -63,6 +65,7 @@
     - `BTC/USDT`, `BTC/KRW` 모두 최근 손실 거래의 `MFE` 가 매우 낮아, 진입 횟수보다 진입 질을 더 우선하도록 조정
     - `CHOPPY` 구간은 신규 진입 자체를 더 보수적으로 막고, 상태 머신 확인 횟수도 늘려 약한 추세 유지 진입을 줄임
     - 손절 후 재진입도 이제는 `시간 경과만`이 아니라 `confirm + fresh cross + 점수 복구`가 함께 보여야 허용
+    - 다만 BTC는 `confirm=true`와 높은 점수가 충분히 유지되면 일정 시간 뒤 `fresh_cross` 없이도 예외 재진입이 가능하도록 완화
     - BTC도 `regime`뿐 아니라 `ATR 퍼센트`가 너무 낮은 구간에서는 신규 진입 비중을 단계형으로 줄여 저변동 구간 과진입을 완화
 - 알트 전용 전략
   - 기본 개념: 1분봉 20기간 이동평균선 돌파 기반 추세 추종
@@ -89,7 +92,8 @@
     - `XRP/USDT` 최소 익절률 `0.55`
     - `XRP/KRW` 순익 보호 최소 순익률 `0.10`
     - `XRP/USDT` 순익 보호 최소 순익률 `0.10`
-    - `XRP/KRW`, `XRP/USDT` 브레이크이븐 가드 최소 MFE `0.18`
+    - `XRP/KRW`, `XRP/USDT` 브레이크이븐 가드 최소 MFE `0.15`
+    - `XRP/KRW`, `XRP/USDT` 브레이크이븐 가드 순익 바닥 `0.12`
     - `STRATEGY_REGIME_POSITION_SCALE_MAP=TRENDING:1.00,BREAKOUT_ATTEMPT:0.80,CHOPPY:0.40,LOW_ENERGY:0.00,OVERHEATED:0.20,EXHAUSTION_RISK:0.00`
     - `STRATEGY_BTC_REGIME_POSITION_SCALE_MAP=LOW_ENERGY:0.50`
     - `STRATEGY_BTC_REGIME_POSITION_SCALE_OVERRIDE_MAP=ETH/KRW|LOW_ENERGY:0.35,XRP/KRW|LOW_ENERGY:0.60,ETH/USDT|LOW_ENERGY:0.35,XRP/USDT|LOW_ENERGY:0.60`
@@ -100,6 +104,7 @@
   - 현재 해석:
     - `ETH/KRW` 는 최근 손실이 반복돼 청산보다 진입 자체를 줄이는 쪽으로 더 보수화
     - `XRP/KRW`, `XRP/USDT` 는 작은 수익 후 큰 손실 한두 건이 손익을 무너뜨려 보호 장치를 더 빨리 켜도록 조정
+    - XRP 계열은 `break_even_guard_take_profit` 이 실제로 음수로 끝난 사례가 있어, 이제는 더 이른 MFE 와 더 높은 순익 바닥을 요구하도록 보강
     - 손절 후 재진입도 `최소 180초 + 더 높은 신호 점수 + 강화된 거래량 + HTF 상승 + fresh cross`가 같이 확인될 때만 허용
     - 2026-04-09 오전 로그 기준으로는 대부분 `HTF 하락` 또는 `fresh cross 부재` 때문에 막혀 있어, 현재 강도는 과도하기보다 회복 전 재진입 억제용에 가까움
     - 레짐별 포지션 비중 1차 적용으로 상승장/횡보장/저에너지장에 따라 진입 크기도 다르게 조절
@@ -152,6 +157,7 @@
   - 현재 해석
     - 최근 로그에서는 확대보다 축소가 더 자주 작동하고 있음
     - 즉 현재 구조는 “좋은 심볼 적극 확대”보다 “질 낮은 심볼 자동 축소”에 더 초점을 둔 보수형 배분으로 이해하는 편이 맞음
+    - `allocation_reason_top` 도 이제 최고 점수 축이 아니라 최저 점수 축 기준이라 실제 약점 설명에 더 가깝게 읽힘
 
 ## 현재 적용 운영 복구 흐름
 

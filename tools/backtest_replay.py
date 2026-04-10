@@ -1,5 +1,6 @@
 """
 수정 요약
+- 알트 리플레이에서 점수 기반 비중 계산에 필요한 최소 거래량 기준값을 일관되게 재사용하도록 회귀 버그를 수정
 - 2026-04-09: score 기반 동적 자본 배분도 리플레이에 반영해 live 와 backtest 의 비중 규칙 차이를 줄이도록 확장
 - 2026-04-08: 알트 리플레이에도 live 와 같은 fresh cross, HTF bearish 차단, Bollinger squeeze 입력을 반영해 parity 를 보강
 - 기준 시각 이전 실거래 포지션을 초기 상태로 주입할 수 있게 position-aware 리플레이 초기 상태를 추가해 실거래 비교 정확도를 높이도록 확장
@@ -725,6 +726,8 @@ def simulate_alt_strategy(
         ) if strategy.enable_noise_ratio_adaptation else 1.0
         min_gap_pct = base_min_gap_pct * noise_gap_multiplier
 
+        effective_min_volume_ratio = strategy.get_min_volume_ratio(symbol)
+
         alt_signal_state = compute_alt_signal_state(
             prev_close=prev_close,
             prev_ma=prev_ma,
@@ -736,7 +739,7 @@ def simulate_alt_strategy(
             require_price_rising=strategy.trend_follow_requires_price_rising,
             require_ma_slope_positive=strategy.trend_follow_requires_ma_slope_positive,
             volume_ratio=volume_ratio,
-            min_volume_ratio=strategy.get_min_volume_ratio(symbol),
+            min_volume_ratio=effective_min_volume_ratio,
             rsi_value=rsi_value,
             enable_rsi_filter=strategy.enable_rsi_filter,
             rsi_entry_min=strategy.rsi_entry_min,
@@ -765,7 +768,7 @@ def simulate_alt_strategy(
         volume_filter_passed = (
             True
             if not strategy.enable_volume_filter
-            else volume_ratio is not None and volume_ratio >= strategy.get_min_volume_ratio(symbol)
+            else volume_ratio is not None and volume_ratio >= effective_min_volume_ratio
         )
         volatility_filter_passed = (
             True
