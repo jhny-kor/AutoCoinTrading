@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 알트 보수형 튜닝을 위해 최대 진입 이격도와 최대 거래량 배수 상한 설정을 추가했다.
 - 2026-04-09: 알트 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 설정을 추가
 - 2026-04-08: 심볼별 정수 override 공통 파서를 추가해 BTC 확인 루프처럼 map 기반 int 설정을 재사용할 수 있게 확장
 - 2026-04-03: 공통 전략 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
@@ -102,6 +103,8 @@ class StrategySettings:
     volume_lookback: int
     min_volume_ratio: float
     min_volume_ratio_map: dict[str, float]
+    max_volume_ratio: float
+    max_volume_ratio_map: dict[str, float]
     position_ratio_map: dict[str, float]
     enable_regime_position_scaling: bool
     regime_position_scale_map: dict[str, float]
@@ -116,6 +119,7 @@ class StrategySettings:
     min_volatility_pct: float
     max_volatility_pct: float
     min_crossover_gap_pct: float
+    max_entry_gap_pct: float
     averaging_down_gap_pct: float
     min_take_profit_pct: float
     stop_loss_pct: float
@@ -141,6 +145,7 @@ class StrategySettings:
     min_buy_order_value: float
     loop_interval_sec: int
     min_crossover_gap_pct_map: dict[str, float]
+    max_entry_gap_pct_map: dict[str, float]
     min_take_profit_pct_map: dict[str, float]
     stop_loss_pct_map: dict[str, float]
     min_order_amount_map: dict[str, float]
@@ -166,9 +171,17 @@ class StrategySettings:
         """심볼별 거래량 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.min_volume_ratio_map.get(symbol, self.min_volume_ratio)
 
+    def get_max_volume_ratio(self, symbol: str) -> float:
+        """심볼별 최대 거래량 상한 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.max_volume_ratio_map.get(symbol, self.max_volume_ratio)
+
     def get_min_order_amount(self, symbol: str) -> float:
         """심볼별 최소 주문 수량 오버라이드가 있으면 그 값을, 없으면 0을 반환한다."""
         return self.min_order_amount_map.get(symbol, 0.0)
+
+    def get_max_entry_gap_pct(self, symbol: str) -> float:
+        """심볼별 최대 진입 이격도 상한 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.max_entry_gap_pct_map.get(symbol, self.max_entry_gap_pct)
 
     def get_regime_position_scale(self, regime: str | None) -> float:
         """레짐별 포지션 비중 스케일을 반환한다."""
@@ -514,6 +527,8 @@ def load_strategy_settings(
         volume_lookback=config_int("strategy", "volume_lookback", 20, env_key="STRATEGY_VOLUME_LOOKBACK"),
         min_volume_ratio=config_float("strategy", "min_volume_ratio", 1.2, env_key="STRATEGY_MIN_VOLUME_RATIO"),
         min_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "min_volume_ratio_map", {}, env_key="STRATEGY_MIN_VOLUME_RATIO_MAP")),
+        max_volume_ratio=config_float("strategy", "max_volume_ratio", 2.5, env_key="STRATEGY_MAX_VOLUME_RATIO"),
+        max_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "max_volume_ratio_map", {}, env_key="STRATEGY_MAX_VOLUME_RATIO_MAP")),
         position_ratio_map=parse_symbol_float_map(config_value("strategy", "position_ratio_map", {}, env_key="STRATEGY_POSITION_RATIO_MAP")),
         enable_regime_position_scaling=config_bool("strategy", "enable_regime_position_scaling", True, env_key="STRATEGY_ENABLE_REGIME_POSITION_SCALING"),
         regime_position_scale_map=parse_symbol_float_map(config_value("strategy", "regime_position_scale_map", {}, env_key="STRATEGY_REGIME_POSITION_SCALE_MAP")),
@@ -528,6 +543,7 @@ def load_strategy_settings(
         min_volatility_pct=config_float("strategy", "min_volatility_pct", 0.05, env_key="STRATEGY_MIN_VOLATILITY_PCT"),
         max_volatility_pct=config_float("strategy", "max_volatility_pct", 5.0, env_key="STRATEGY_MAX_VOLATILITY_PCT"),
         min_crossover_gap_pct=config_float("strategy", "min_crossover_gap_pct", 1.2, env_key="STRATEGY_MIN_CROSSOVER_GAP_PCT"),
+        max_entry_gap_pct=config_float("strategy", "max_entry_gap_pct", 0.25, env_key="STRATEGY_MAX_ENTRY_GAP_PCT"),
         averaging_down_gap_pct=config_float("strategy", "averaging_down_gap_pct", 2.0, env_key="STRATEGY_AVERAGING_DOWN_GAP_PCT"),
         min_take_profit_pct=config_float("strategy", "min_take_profit_pct", 1.0, env_key="STRATEGY_MIN_TAKE_PROFIT_PCT"),
         stop_loss_pct=config_float("strategy", "stop_loss_pct", 1.5, env_key="STRATEGY_STOP_LOSS_PCT"),
@@ -560,6 +576,7 @@ def load_strategy_settings(
         ),
         loop_interval_sec=config_int("strategy", "loop_interval_sec", 10, env_key="STRATEGY_LOOP_INTERVAL_SEC"),
         min_crossover_gap_pct_map=parse_symbol_float_map(config_value("strategy", "min_crossover_gap_pct_map", {}, env_key="STRATEGY_MIN_CROSSOVER_GAP_PCT_MAP")),
+        max_entry_gap_pct_map=parse_symbol_float_map(config_value("strategy", "max_entry_gap_pct_map", {}, env_key="STRATEGY_MAX_ENTRY_GAP_PCT_MAP")),
         min_take_profit_pct_map=parse_symbol_float_map(config_value("strategy", "min_take_profit_pct_map", {}, env_key="STRATEGY_MIN_TAKE_PROFIT_PCT_MAP")),
         stop_loss_pct_map=parse_symbol_float_map(config_value("strategy", "stop_loss_pct_map", {}, env_key="STRATEGY_STOP_LOSS_PCT_MAP")),
         min_order_amount_map=parse_symbol_float_map(config_value("strategy", "min_order_amount_map", {}, env_key="STRATEGY_MIN_ORDER_AMOUNT_MAP")),

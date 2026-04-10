@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 배치 백테스트에 override 실험 세트/추가 TOML 을 임시 적용하고 결과 요약에 세트 메타데이터를 함께 남기도록 확장했다.
 - 업비트 1분봉 배치 백테스트는 가능하면 웹소켓 수집기의 로컬 1분봉 파일을 우선 사용하도록 보강해 공개 API 의존을 줄였다.
 - since 시점 이전 실거래 포지션을 백테스트 초기 상태로 주입하는 position-aware 비교를 추가해 carry-over 포지션이 있는 구간도 더 공정하게 비교하도록 확장
 - 배치 실행 전 오래된 로그 압축/잔재 폴더 정리를 먼저 수행해 7일 초과 structured 로그 폴더가 자동으로 정리되도록 연결
@@ -44,11 +45,13 @@ from backtest_replay import (
 )
 from compare_backtest_to_live import build_comparison_payload, save_comparison_payload
 from log_archive_manager import run_archive_maintenance
+from settings.env import temporary_runtime_overrides
 from state_recovery import (
     load_program_daily_realized_pnl_quote_as_of,
     restore_program_position_states_as_of,
 )
 from strategy_settings import load_managed_symbols
+from tools.apply_strategy_set import resolve_set_paths
 from tools.update_backtest_registry import build_registry_entries, write_registry
 
 
@@ -469,6 +472,8 @@ def build_batch_markdown(
     limit: int,
     since: str | None,
     until: str | None,
+    override_set_names: list[str],
+    override_paths: list[str],
     rows: list[dict[str, Any]],
 ) -> str:
     """배치 실행 결과 Markdown 요약을 만든다."""
@@ -480,6 +485,8 @@ def build_batch_markdown(
         f"- fetch limit: `{limit}`",
         f"- 실거래 비교 시작: `{since or '-'}`",
         f"- 실거래 비교 종료: `{until or '-'}`",
+        f"- override 세트: `{', '.join(override_set_names) if override_set_names else '-'}`",
+        f"- override 경로: `{', '.join(override_paths) if override_paths else '-'}`",
         "",
     ]
     for row in rows:
@@ -527,10 +534,15 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
             f"잔재 파일 {maintenance.removed_files}개, "
             f"빈 폴더 {maintenance.removed_dirs}개 정리"
         )
-    targets = resolve_targets(args)
-    if not targets:
-        raise ValueError("실행 대상 심볼이 없습니다.")
-    batch_root = build_batch_root(Path(args.output_dir), label)
+    override_set_names = list(args.override_set or [])
+    override_paths = resolve_set_paths(override_set_names)
+    override_paths.extend(Path(path) for path in (args.override_toml or []))
+
+    with temporary_runtime_overrides(override_paths):
+        targets = resolve_targets(args)
+        if not targets:
+            raise ValueError("실행 대상 심볼이 없습니다.")
+        batch_root = build_batch_root(Path(args.output_dir), label)
     effective_limit = args.limit
     if getattr(args, "auto_limit", False):
         if since and until:
@@ -547,9 +559,9 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
             days=days_for_limit,
         )
     rows: list[dict[str, Any]] = []
-    for exchange_name, symbol in targets:
-        rows.append(
-            run_single_backtest(
+    with temporary_runtime_overrides(override_paths):
+        for exchange_name, symbol in targets:
+            row = run_single_backtest(
                 batch_root=batch_root,
                 exchange_name=exchange_name,
                 symbol=symbol,
@@ -559,7 +571,9 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
                 until=until,
                 risk_per_trade=args.risk_per_trade,
             )
-        )
+            row["override_set_names"] = override_set_names
+            row["override_paths"] = [str(path) for path in override_paths]
+            rows.append(row)
 
     batch_summary = {
         "label": label,
@@ -568,6 +582,8 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
         "limit": effective_limit,
         "since": since,
         "until": until,
+        "override_set_names": override_set_names,
+        "override_paths": [str(path) for path in override_paths],
         "rows": rows,
     }
     write_json(batch_root / "batch_summary.json", batch_summary)
@@ -578,6 +594,8 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
             limit=effective_limit,
             since=since,
             until=until,
+            override_set_names=override_set_names,
+            override_paths=[str(path) for path in override_paths],
             rows=rows,
         ),
         encoding="utf-8",
@@ -645,6 +663,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--symbols", help="쉼표 구분 심볼 목록, 비우면 관리 심볼 전체")
     common.add_argument("--exchanges", default="okx,upbit", help="쉼표 구분 거래소 목록")
     common.add_argument("--output-dir", default="reports/backtest_batches")
+    common.add_argument("--override-set", action="append", default=[], help="config/sets 아래 실험 세트 이름 또는 경로")
+    common.add_argument("--override-toml", action="append", default=[], help="추가 TOML override 경로")
 
     weekly_parser = subparsers.add_parser("weekly", parents=[common], help="최근 7일 비교 기준 주간 배치 실행")
     weekly_parser.add_argument("--days", type=int, default=DEFAULT_WEEKLY_DAYS)

@@ -22,12 +22,16 @@ class FunnelBuilderTests(unittest.TestCase):
             min_signal_score=55.0,
             gap_pct=0.5,
             min_gap_pct=0.2,
+            max_gap_pct=0.8,
+            gap_within_upper_bound=True,
             rsi_filter_passed=True,
             macd_filter_passed=True,
             htf_bullish=True,
             volume_filter_passed=True,
             volume_ratio=1.4,
             effective_min_volume_ratio=1.0,
+            max_volume_ratio=2.5,
+            volume_within_upper_bound=True,
             volatility_filter_passed=True,
             avg_abs_change_pct=0.8,
             min_volatility_pct=0.1,
@@ -45,7 +49,7 @@ class FunnelBuilderTests(unittest.TestCase):
             order_value_quote=50.0,
             min_buy_order_value=1.0,
         )
-        self.assertEqual(13, len(steps))
+        self.assertEqual(15, len(steps))
         self.assertEqual("trend", steps[0].stage)
         self.assertEqual("order_value", steps[-1].stage)
 

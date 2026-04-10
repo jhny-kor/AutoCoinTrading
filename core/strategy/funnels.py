@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-10: 알트 보수형 튜닝용 최대 이격도와 최대 거래량 상한 단계를 퍼널에 추가했다.
 - 2026-04-09: 손절 후 패턴 기반 재진입 차단 단계를 퍼널에 추가해 reason 코드로 추적할 수 있게 확장
 - 알트/BTC 진입, 추가매수, 청산 퍼널 step 생성기를 공통 모듈로 분리했다.
 - reason 코드와 단계 구성을 한 곳에서 유지하도록 정리했다.
@@ -21,12 +22,16 @@ def build_alt_entry_steps(
     min_signal_score: float,
     gap_pct: float,
     min_gap_pct: float,
+    max_gap_pct: float,
+    gap_within_upper_bound: bool,
     rsi_filter_passed: bool,
     macd_filter_passed: bool,
     htf_bullish: bool,
     volume_filter_passed: bool,
     volume_ratio: float | None,
     effective_min_volume_ratio: float,
+    max_volume_ratio: float,
+    volume_within_upper_bound: bool,
     volatility_filter_passed: bool,
     avg_abs_change_pct: float | None,
     min_volatility_pct: float,
@@ -67,6 +72,13 @@ def build_alt_entry_steps(
             required={"min_gap_pct": min_gap_pct, "min_signal_score": min_signal_score},
         ),
         FunnelStep(
+            stage="distance_cap",
+            passed=gap_within_upper_bound,
+            reason="gap_too_large",
+            actual={"gap_pct": gap_pct},
+            required={"max_gap_pct": max_gap_pct},
+        ),
+        FunnelStep(
             stage="rsi",
             passed=rsi_filter_passed,
             reason="rsi_filter_blocked",
@@ -93,6 +105,13 @@ def build_alt_entry_steps(
             reason="volume_low",
             actual={"volume_ratio": volume_ratio},
             required={"min_volume_ratio": effective_min_volume_ratio},
+        ),
+        FunnelStep(
+            stage="volume_cap",
+            passed=volume_within_upper_bound,
+            reason="volume_spike_too_high",
+            actual={"volume_ratio": volume_ratio},
+            required={"max_volume_ratio": max_volume_ratio},
         ),
         FunnelStep(
             stage="volatility",

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 보수형 조정으로 BTC `TRENDING_EARLY` 진입을 더 엄격하게 하고 `TRENDING_MATURE` 를 상대적으로 우대하도록 정책을 조정
 - 2026-04-08: 레짐을 8단계 보수형으로 세분화하고 BTC 는 레짐별 진입 확인 루프, trend-follow, 피라미딩 허용 여부를 다르게 적용할 수 있게 확장
 - 2026-04-08: BTC 손절 반복을 줄이기 위해 CHOPPY 레짐에서는 신규 진입을 더 보수적으로 막도록 조정
 - 2026-04-08: 레짐 단계 순서와 레짐별 설명 카탈로그를 추가해 텔레그램/웹 스냅샷에서 같은 정의를 재사용하도록 확장
@@ -432,19 +433,19 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
         ),
         "TRENDING_EARLY": RegimePolicy(
             pause_new_entry=False,
-            require_strong_signal=False,
-            require_fresh_cross=False,
-            allow_dynamic_overweight=True,
+            require_strong_signal=True,
+            require_fresh_cross=True,
+            allow_dynamic_overweight=False,
             stop_loss_multiplier=1.0,
             take_profit_bonus_pct=0.0,
             max_entry_count_delta=0,
-            min_atr_multiplier=0.85,
+            min_atr_multiplier=1.10,
             trailing_drawdown_multiplier=1.0,
-            pyramid_max_add_ons_delta=1,
+            pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=0.8,
-            required_confirmation_loops=3,
-            allow_trend_follow_entry=True,
-            allow_pyramiding=True,
+            required_confirmation_loops=4,
+            allow_trend_follow_entry=False,
+            allow_pyramiding=False,
         ),
         "TRENDING_MATURE": RegimePolicy(
             pause_new_entry=False,
@@ -454,7 +455,7 @@ def get_btc_regime_policy(regime: str | None) -> RegimePolicy:
             stop_loss_multiplier=1.0,
             take_profit_bonus_pct=0.05,
             max_entry_count_delta=0,
-            min_atr_multiplier=0.90,
+            min_atr_multiplier=0.95,
             trailing_drawdown_multiplier=0.9,
             pyramid_max_add_ons_delta=0,
             partial_take_profit_ratio_multiplier=0.85,

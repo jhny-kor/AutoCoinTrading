@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 백테스트 실험용으로 다중 세트/경로를 한 번에 해석하는 helper 를 추가했다.
 - 2026-04-03: structured TOML nested table 세트를 runtime.local.toml 로 그대로 반영하도록 저장 로직을 확장
 - 전략 세트 canonical 경로를 env_overrides 에서 config/sets TOML 로 승격하고, 현재 적용은 config/runtime.local.toml 에 반영하도록 리팩터링
 - conservative, medium, mixed 세트 별칭과 직접 TOML 파일 지정 방식을 모두 지원
@@ -45,6 +46,13 @@ def resolve_set_path(name_or_path: str) -> Path:
     if direct.exists():
         return direct
     raise FileNotFoundError(f"세트 파일을 찾지 못했습니다: {name_or_path}")
+
+
+def resolve_set_paths(items: list[str] | None) -> list[Path]:
+    """세트 이름 목록을 실제 경로 목록으로 변환한다."""
+    if not items:
+        return []
+    return [resolve_set_path(item) for item in items if str(item).strip()]
 
 
 def parse_set_file(path: Path) -> dict[str, dict[str, object]]:

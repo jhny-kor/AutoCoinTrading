@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 알트 보수형 조정으로 최대 진입 이격도와 최대 거래량 배수 상한을 추가하고 과열 추격 진입을 더 줄이도록 보강
 - 2026-04-09: 알트 손절 후 재진입을 최소 시간 + 패턴 복구 기준으로 보도록 패턴 기반 재진입 gate 를 추가
 - 2026-04-08: 알트도 독립 레짐 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
 - 2026-04-06: 알트 Bollinger Squeeze + 거래량 확장 진입 지표 연산 연동
@@ -472,14 +473,19 @@ def run_bot():
                 volume_ratio = calc_volume_ratio(ohlcv, strategy.volume_lookback)
                 base_min_volume_ratio = strategy.get_min_volume_ratio(symbol)
                 effective_min_volume_ratio = base_min_volume_ratio
+                effective_max_volume_ratio = strategy.get_max_volume_ratio(symbol)
                 volume_filter_passed = True
+                volume_within_upper_bound = True
                 if strategy.enable_volume_filter and volume_ratio is not None:
                     volume_filter_passed = (
                         volume_ratio >= effective_min_volume_ratio
                     )
+                    volume_within_upper_bound = (
+                        volume_ratio <= effective_max_volume_ratio
+                    )
                     log(
                         f"[{symbol}] 거래량 배수: {volume_ratio:.4f}배 "
-                        f"(기준 {effective_min_volume_ratio:.4f}배)"
+                        f"(허용 {effective_min_volume_ratio:.4f}배 ~ {effective_max_volume_ratio:.4f}배)"
                     )
 
                 avg_abs_change_pct = calc_avg_abs_change_pct(
@@ -650,6 +656,7 @@ def run_bot():
                     )
                 # 노이즈가 큰 장은 진입 문턱을 높이고, 깔끔한 장은 문턱을 낮춰 진입 속도를 높인다.
                 min_gap_pct = base_min_gap_pct * noise_gap_multiplier
+                max_entry_gap_pct = strategy.get_max_entry_gap_pct(symbol)
                 effective_max_entry_count = max(
                     0,
                     strategy.max_entry_count + regime_policy.max_entry_count_delta,
@@ -713,6 +720,7 @@ def run_bot():
                 bullish = bool(alt_signal_state["bullish"])
                 bearish = bool(alt_signal_state["bearish"])
                 gap_pct = float(alt_signal_state["gap_pct"])
+                gap_within_upper_bound = gap_pct <= max_entry_gap_pct
                 signal_is_strong = bool(alt_signal_state["signal_is_strong"])
                 signal_score = float(alt_signal_state["signal_score"])
                 rsi_filter_passed = bool(alt_signal_state["rsi_filter_passed"])
@@ -810,6 +818,8 @@ def run_bot():
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
                         and not stop_loss_pattern_blocked
+                        and gap_within_upper_bound
+                        and volume_within_upper_bound
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 else:
@@ -820,6 +830,8 @@ def run_bot():
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
                         and not stop_loss_pattern_blocked
+                        and gap_within_upper_bound
+                        and volume_within_upper_bound
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
@@ -856,6 +868,7 @@ def run_bot():
                 usdt_to_use = allocation_decision.approved_order_value_quote
                 estimated_buy_amount = usdt_to_use / last_close if last_close else 0.0
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
+                log(f"[{symbol}] 적용 최대 이격도 상한: {max_entry_gap_pct:.4f}%")
                 if noise_ratio is not None:
                     log(
                         f"[{symbol}] 노이즈 비율: {noise_ratio:.4f} "
@@ -976,6 +989,14 @@ def run_bot():
                 if entry_signal and strategy.enable_volume_filter and not volume_filter_passed:
                     log(
                         f"[{symbol}] 거래량이 부족하여 신규 매수를 보류합니다."
+                    )
+                if entry_signal and strategy.enable_volume_filter and not volume_within_upper_bound:
+                    log(
+                        f"[{symbol}] 거래량이 과도하게 급증해 추격 위험이 커 신규 매수를 보류합니다."
+                    )
+                if entry_signal and not gap_within_upper_bound:
+                    log(
+                        f"[{symbol}] 이격도가 너무 커 과열 돌파로 판단해 신규 매수를 보류합니다."
                     )
                 htf_bearish_entry_blocked = (
                     entry_signal
@@ -1273,12 +1294,16 @@ def run_bot():
                     min_signal_score=strategy.signal_score_min,
                     gap_pct=gap_pct,
                     min_gap_pct=min_gap_pct,
+                    max_gap_pct=max_entry_gap_pct,
+                    gap_within_upper_bound=gap_within_upper_bound,
                     rsi_filter_passed=rsi_filter_passed,
                     macd_filter_passed=macd_filter_passed,
                     htf_bullish=(not strategy.enable_higher_timeframe_filter or htf_bullish),
                     volume_filter_passed=(not strategy.enable_volume_filter or volume_filter_passed),
                     volume_ratio=volume_ratio,
                     effective_min_volume_ratio=effective_min_volume_ratio,
+                    max_volume_ratio=effective_max_volume_ratio,
+                    volume_within_upper_bound=volume_within_upper_bound,
                     volatility_filter_passed=(not strategy.enable_volatility_filter or volatility_filter_passed),
                     avg_abs_change_pct=avg_abs_change_pct,
                     min_volatility_pct=strategy.min_volatility_pct,

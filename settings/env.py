@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 백테스트 실험 세트용 추가 TOML override 레이어와 임시 적용 context manager 를 추가했다.
 - 2026-04-03: `config/runtime.toml` 을 canonical 기준으로 읽고 `config/runtime.local.toml` 을 최종 override 로 적용하도록 정리
 - 2026-04-03: 프로세스에 이미 주입된 env 값은 파일 로더가 덮어쓰지 않도록 보존 순서를 보강
 - `.env.settings`, `.env.secrets`, `.env.local` 이 있으면 우선 사용하고, 없을 때만 legacy `.env` 를 읽는 중앙 환경 로더로 확장
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 import tomllib
@@ -45,6 +47,7 @@ DEFAULT_ENV_PATHS = [
     ROOT_DIR / ".env.local",
 ]
 LEGACY_ENV_PATH = ROOT_DIR / ".env"
+EXTRA_TOML_ENV_KEY = "AUTOCOIN_EXTRA_TOML"
 
 
 def get_env_paths() -> list[Path]:
@@ -65,6 +68,23 @@ def get_env_paths() -> list[Path]:
             path = ROOT_DIR / raw
         paths.append(path)
     return paths or [LEGACY_ENV_PATH]
+
+
+def get_extra_toml_paths() -> list[Path]:
+    """추가 TOML override 경로 목록을 반환한다."""
+    raw = os.getenv(EXTRA_TOML_ENV_KEY, "").strip()
+    if not raw:
+        return []
+    paths: list[Path] = []
+    for item in raw.split(","):
+        token = item.strip()
+        if not token:
+            continue
+        path = Path(token)
+        if not path.is_absolute():
+            path = ROOT_DIR / token
+        paths.append(path)
+    return paths
 
 
 def _stringify_config_value(value: object) -> str:
@@ -127,5 +147,31 @@ def load_project_env() -> tuple[str, ...]:
         load_dotenv(path, override=True)
         loaded.append(str(path))
     loaded.extend(load_structured_config([RUNTIME_LOCAL_TOML_PATH]))
+    loaded.extend(load_structured_config(get_extra_toml_paths()))
     os.environ.update(preserved_env)
     return tuple(loaded)
+
+
+def reset_env_loader_cache() -> None:
+    """환경 로더 캐시를 비운다."""
+    load_project_env.cache_clear()
+
+
+@contextmanager
+def temporary_runtime_overrides(paths: list[str | Path] | None):
+    """백테스트 등에서 추가 TOML override 를 임시 적용한다."""
+    previous = os.getenv(EXTRA_TOML_ENV_KEY)
+    try:
+        serialized = ",".join(str(Path(path)) for path in (paths or []) if str(path).strip())
+        if serialized:
+            os.environ[EXTRA_TOML_ENV_KEY] = serialized
+        else:
+            os.environ.pop(EXTRA_TOML_ENV_KEY, None)
+        reset_env_loader_cache()
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(EXTRA_TOML_ENV_KEY, None)
+        else:
+            os.environ[EXTRA_TOML_ENV_KEY] = previous
+        reset_env_loader_cache()

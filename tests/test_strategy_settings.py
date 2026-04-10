@@ -6,6 +6,26 @@ from strategy_settings import load_strategy_settings
 
 
 class StrategySettingsTests(unittest.TestCase):
+    def test_loads_alt_gap_and_volume_caps(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_MAX_VOLUME_RATIO": "2.5",
+                "STRATEGY_MAX_VOLUME_RATIO_MAP": "ETH/USDT:2.5,XRP/KRW:2.0",
+                "STRATEGY_MAX_ENTRY_GAP_PCT": "0.25",
+                "STRATEGY_MAX_ENTRY_GAP_PCT_MAP": "ETH/USDT:0.15,XRP/KRW:0.15",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertEqual(2.5, settings.get_max_volume_ratio("ETH/USDT"))
+        self.assertEqual(2.0, settings.get_max_volume_ratio("XRP/KRW"))
+        self.assertEqual(2.5, settings.get_max_volume_ratio("UNKNOWN"))
+        self.assertEqual(0.15, settings.get_max_entry_gap_pct("ETH/USDT"))
+        self.assertEqual(0.15, settings.get_max_entry_gap_pct("XRP/KRW"))
+        self.assertEqual(0.25, settings.get_max_entry_gap_pct("UNKNOWN"))
+
     def test_loads_btc_regime_position_scale_map(self):
         with patch.dict(
             os.environ,

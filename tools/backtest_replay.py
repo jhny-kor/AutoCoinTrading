@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 백테스트 실행 시 추가 override 세트를 임시 적용하고 summary 에 적용 세트 메타데이터를 남기도록 확장했다.
 - 알트 리플레이에서 점수 기반 비중 계산에 필요한 최소 거래량 기준값을 일관되게 재사용하도록 회귀 버그를 수정
 - 2026-04-09: score 기반 동적 자본 배분도 리플레이에 반영해 live 와 backtest 의 비중 규칙 차이를 줄이도록 확장
 - 2026-04-08: 알트 리플레이에도 live 와 같은 fresh cross, HTF bearish 차단, Bollinger squeeze 입력을 반영해 parity 를 보강
@@ -55,6 +56,8 @@ from core.strategy.timing import update_entry_timing_state
 from market_regime_guard import classify_symbol_regime, get_alt_regime_policy, get_btc_regime_policy
 from portfolio_allocator import load_portfolio_allocation_settings
 from strategy_settings import load_strategy_settings
+from settings.env import temporary_runtime_overrides
+from tools.apply_strategy_set import resolve_set_paths
 from tools.update_backtest_registry import REGISTRY_PATH, build_all_registry_entries, write_registry
 from core.risk.allocation import compute_allocation_score
 
@@ -1705,31 +1708,39 @@ def run_backtest_command(args: argparse.Namespace) -> int:
     if max_daily_loss_quote is None:
         max_daily_loss_quote = resolve_default_max_daily_loss(args.exchange)
 
-    if args.strategy == "alt":
-        summary, trades, equity_curve = simulate_alt_strategy(
-            candles=candles,
-            btc_reference_candles=btc_reference_candles,
-            source_timeframe=args.timeframe,
-            symbol=args.symbol,
-            exchange_name=args.exchange,
-            initial_cash=args.initial_cash,
-            fee_rate_pct=fee_rate_pct,
-            risk_per_trade=args.risk_per_trade,
-            min_buy_order_value=min_buy_order_value,
-            max_daily_loss_quote=max_daily_loss_quote,
-        )
-    else:
-        summary, trades, equity_curve = simulate_btc_strategy(
-            candles=candles,
-            source_timeframe=args.timeframe,
-            symbol=args.symbol,
-            exchange_name=args.exchange,
-            initial_cash=args.initial_cash,
-            fee_rate_pct=fee_rate_pct,
-            risk_per_trade=args.risk_per_trade,
-            min_buy_order_value=min_buy_order_value,
-            max_daily_loss_quote=max_daily_loss_quote,
-        )
+    override_set_names = list(args.override_set or [])
+    override_paths = resolve_set_paths(override_set_names)
+    override_paths.extend(Path(path) for path in (args.override_toml or []))
+
+    with temporary_runtime_overrides(override_paths):
+        if args.strategy == "alt":
+            summary, trades, equity_curve = simulate_alt_strategy(
+                candles=candles,
+                btc_reference_candles=btc_reference_candles,
+                source_timeframe=args.timeframe,
+                symbol=args.symbol,
+                exchange_name=args.exchange,
+                initial_cash=args.initial_cash,
+                fee_rate_pct=fee_rate_pct,
+                risk_per_trade=args.risk_per_trade,
+                min_buy_order_value=min_buy_order_value,
+                max_daily_loss_quote=max_daily_loss_quote,
+            )
+        else:
+            summary, trades, equity_curve = simulate_btc_strategy(
+                candles=candles,
+                source_timeframe=args.timeframe,
+                symbol=args.symbol,
+                exchange_name=args.exchange,
+                initial_cash=args.initial_cash,
+                fee_rate_pct=fee_rate_pct,
+                risk_per_trade=args.risk_per_trade,
+                min_buy_order_value=min_buy_order_value,
+                max_daily_loss_quote=max_daily_loss_quote,
+            )
+
+    summary["override_set_names"] = override_set_names
+    summary["override_paths"] = [str(path) for path in override_paths]
 
     output_dir = build_output_dir(Path(args.output_dir), args.strategy, args.symbol)
     write_json(output_dir / "summary.json", summary)
@@ -1774,6 +1785,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--risk-per-trade", type=float, default=DEFAULT_RISK_PER_TRADE)
     run_parser.add_argument("--min-buy-order-value", type=float, default=None)
     run_parser.add_argument("--max-daily-loss-quote", type=float, default=None)
+    run_parser.add_argument("--override-set", action="append", default=[], help="config/sets 아래 실험 세트 이름 또는 경로")
+    run_parser.add_argument("--override-toml", action="append", default=[], help="추가 TOML override 경로")
     run_parser.add_argument("--output-dir", default="reports/backtests")
     return parser
 

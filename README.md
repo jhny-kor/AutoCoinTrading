@@ -202,6 +202,22 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 배치 리포트: `.venv/bin/python backtest_report_runner.py weekly`
 - 레지스트리 갱신: `.venv/bin/python tools/update_backtest_registry.py`
 
+### override 실험 세트
+
+live 설정을 건드리지 않고 백테스트에만 추가 override TOML 을 덮어써서 비교할 수 있습니다.
+
+- 세트 경로
+  - [config/sets](/Users/plo/Documents/auto_coin_bot/config/sets)
+  - 예시 실험 세트
+    - [btc_atr_strict.toml](/Users/plo/Documents/auto_coin_bot/config/sets/experiments/btc_atr_strict.toml)
+    - [alt_gap_volume_conservative.toml](/Users/plo/Documents/auto_coin_bot/config/sets/experiments/alt_gap_volume_conservative.toml)
+- 단일 실행
+  - `.venv/bin/python backtest_replay.py run ... --override-set experiments/btc_atr_strict.toml`
+- 배치 실행
+  - `.venv/bin/python backtest_report_runner.py weekly --override-set experiments/alt_gap_volume_conservative.toml`
+- 결과 연결
+  - `summary.json`, `batch_summary.json`, `reports/backtest_registry.json` 에 `override_set_names`, `override_paths` 가 함께 저장됩니다.
+
 결과:
 - 단일: `reports/backtests/...`
 - 배치: `reports/backtest_batches/...`

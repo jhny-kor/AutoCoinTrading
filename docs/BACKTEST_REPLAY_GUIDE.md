@@ -95,6 +95,25 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
 실행 결과는 `reports/backtests/<timestamp>__<strategy>__<symbol>/` 아래에 저장됩니다.
 단일 백테스트 실행이 끝나면 `reports/backtest_registry.json` 도 함께 갱신되어, 웹/리포트 쪽에서 최근 실행 결과를 바로 찾을 수 있습니다.
 
+override 실험 세트를 같이 쓰려면 다음 옵션을 사용합니다.
+
+- `--override-set <set-path-or-alias>`
+- `--override-toml <path>`
+
+예시
+
+```bash
+.venv/bin/python backtest_replay.py run \
+  --strategy btc \
+  --exchange okx \
+  --symbol BTC/USDT \
+  --input data/btc_usdt_1m.jsonl \
+  --timeframe 1m \
+  --override-set experiments/btc_atr_strict.toml
+```
+
+이렇게 실행하면 `summary.json` 과 `reports/backtest_registry.json` 에 적용된 세트 경로가 같이 남습니다.
+
 - `summary.json`
   - 수익률, 거래 수, 승률, 최대 낙폭
 - `trades.jsonl`

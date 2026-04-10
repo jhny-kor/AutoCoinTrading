@@ -16,10 +16,10 @@ class RegimeRouterTests(unittest.TestCase):
         self.assertEqual("breakout", route.strategy_key)
         self.assertTrue(route.policy.require_fresh_cross)
 
-    def test_btc_router_returns_trend_follow_for_trending(self):
+    def test_btc_router_returns_breakout_for_trending_early(self):
         route = route_btc_strategy("TRENDING_EARLY")
-        self.assertEqual("trend_follow", route.strategy_key)
-        self.assertTrue(route.policy.allow_trend_follow_entry)
+        self.assertEqual("breakout", route.strategy_key)
+        self.assertFalse(route.policy.allow_trend_follow_entry)
 
     def test_alt_router_shares_same_route_keys(self):
         self.assertEqual("skip", route_alt_strategy("CHOPPY_LOW_VOL").strategy_key)

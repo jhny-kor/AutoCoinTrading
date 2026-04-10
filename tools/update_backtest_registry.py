@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-10: 백테스트 결과에 적용된 override 세트와 override 경로 메타데이터를 레지스트리에 함께 기록하도록 확장
 - reports/backtest_batches 아래 batch/diff 결과를 스캔해 backtest_registry.json 을 자동 갱신하는 도구를 추가
 - batch_summary, diff_summary, 비교 대상 경로, 심볼 목록을 함께 기록하도록 구성
 
@@ -55,6 +56,8 @@ def build_batch_entry(batch_dir: Path) -> dict[str, Any] | None:
         "summary_path": str(summary_path),
         "since": payload.get("since"),
         "until": payload.get("until"),
+        "override_set_names": payload.get("override_set_names", []),
+        "override_paths": payload.get("override_paths", []),
         "symbols": sorted(set(symbols)),
     }
 
@@ -75,6 +78,8 @@ def build_single_backtest_entry(backtest_dir: Path) -> dict[str, Any] | None:
         "summary_path": str(summary_path),
         "exchange_name": payload.get("exchange_name"),
         "strategy_type": payload.get("strategy_type"),
+        "override_set_names": payload.get("override_set_names", []),
+        "override_paths": payload.get("override_paths", []),
         "symbols": [symbol] if symbol else [],
     }
 

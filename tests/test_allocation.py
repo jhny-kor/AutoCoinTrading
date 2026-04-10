@@ -54,6 +54,7 @@ class AllocationTests(unittest.TestCase):
             risk_per_trade=1.0,
             position_ratio=0.25,
             pyramid_position_ratio=0.1,
+            score_scale=1.0,
             dynamic_bonus_eligible=False,
         )
         self.assertEqual(50.0, requested)
