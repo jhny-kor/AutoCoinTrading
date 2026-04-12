@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 공개 OHLCV/호가 조회도 RequestTimeout 재시도와 20초 타임아웃을 사용하도록 보강
 - 2026-04-12: htf slope, volume percentile/z-score, ATR percentile, 호가 압력 점수를 함께 저장해 이후 지표 분석 정확도를 높이도록 확장
 - 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - 업비트 분석 수집기에서도 웹소켓 latest/best bid/1분봉 스냅샷을 우선 사용하고 stale 시 REST fallback 하도록 바꿔 phase 4 전환을 시작했다.
@@ -37,6 +38,7 @@ from typing import Iterable
 
 import ccxt
 
+from core.execution.upbit import call_upbit_with_retry
 from core.execution.upbit import create_upbit_market_data_provider
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.strategy.indicators import (
@@ -188,8 +190,11 @@ def create_upbit_public_client() -> ccxt.upbit:
     return ccxt.upbit(
         {
             "enableRateLimit": True,
+            "timeout": 20000,
             "options": {
                 "adjustForTimeDifference": True,
+                "upbit_request_retry_count": 3,
+                "upbit_request_retry_delay_sec": 1.2,
             },
         }
     )
@@ -242,7 +247,13 @@ def fetch_upbit_ohlcv(
     exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
 ) -> list[list[float]]:
     """업비트에서 OHLCV를 가져온다."""
-    return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    return call_upbit_with_retry(
+        exchange,
+        exchange.fetch_ohlcv,
+        symbol,
+        timeframe=timeframe,
+        limit=limit,
+    )
 
 
 def fetch_upbit_ohlcv_with_provider(
@@ -292,7 +303,7 @@ def fetch_okx_order_book(exchange: ccxt.okx, symbol: str) -> dict[str, float | N
 def fetch_upbit_order_book(exchange: ccxt.upbit, symbol: str) -> dict[str, float | None]:
     """업비트 공개 호가창에서 상위 호가 정보를 가져온다."""
     try:
-        order_book = exchange.fetch_order_book(symbol, limit=5)
+        order_book = call_upbit_with_retry(exchange, exchange.fetch_order_book, symbol, limit=5)
         bids = order_book.get("bids", [])
         asks = order_book.get("asks", [])
         normalized_bids = [[bid["price"], bid["amount"]] for bid in bids[:5]]

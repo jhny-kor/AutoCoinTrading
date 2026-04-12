@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 RequestTimeout, 네트워크 단절, 거래소 일시 장애를 공통 재시도 대상으로 포함해 반복 loop_error 를 줄이도록 보강
+- 업비트 기본 요청 타임아웃을 10초에서 20초로 늘려 느린 캔들 응답에도 즉시 실패하지 않도록 조정
 - `config/runtime.toml` + env override 레이어를 중앙 환경 로더로 읽도록 정리
 - typed config access helper 를 사용해 업비트 설정 로딩의 문자열 파싱을 일관되게 정리
 - 업비트 myAsset latest 를 잔고 조회 우선 경로로 읽고 myOrder 최근 이벤트를 주문 응답 보강에 쓸 helper 를 추가했다.
@@ -43,7 +45,7 @@ def load_upbit_config() -> dict:
     request_retry_delay_sec = env_float("UPBIT_REQUEST_RETRY_DELAY_SEC", 1.2)
     krw_order_buffer_pct = env_float("UPBIT_KRW_ORDER_BUFFER_PCT", 0.002)
     krw_order_buffer_krw = env_float("UPBIT_KRW_ORDER_BUFFER_KRW", 1000)
-    request_timeout_ms = env_int("UPBIT_REQUEST_TIMEOUT_MS", 10000)
+    request_timeout_ms = env_int("UPBIT_REQUEST_TIMEOUT_MS", 20000)
     balance_cache_ttl_sec = env_float("UPBIT_BALANCE_CACHE_TTL_SEC", 1.0)
     orderbook_cache_ttl_sec = env_float("UPBIT_ORDERBOOK_CACHE_TTL_SEC", 0.8)
     best_bid_refresh_buffer_pct = env_float("UPBIT_BEST_BID_REFRESH_BUFFER_PCT", 0.30)
@@ -147,9 +149,25 @@ def should_refresh_best_bid_upbit(
     return approx_position_value <= refresh_threshold
 
 
-def is_upbit_rate_limit_error(exc: Exception) -> bool:
+def is_upbit_retryable_error(exc: Exception) -> bool:
     lowered = str(exc).lower()
-    return isinstance(exc, ccxt.RateLimitExceeded) or "too_many_requests" in lowered or "429" in lowered
+    return (
+        isinstance(
+            exc,
+            (
+                ccxt.RateLimitExceeded,
+                ccxt.RequestTimeout,
+                ccxt.NetworkError,
+                ccxt.ExchangeNotAvailable,
+                ccxt.DDoSProtection,
+            ),
+        )
+        or "too_many_requests" in lowered
+        or "429" in lowered
+        or "timeout" in lowered
+        or "timed out" in lowered
+        or "temporarily unavailable" in lowered
+    )
 
 
 def call_upbit_with_retry(exchange: ccxt.upbit, func, *args, **kwargs):
@@ -161,7 +179,7 @@ def call_upbit_with_retry(exchange: ccxt.upbit, func, *args, **kwargs):
             return func(*args, **kwargs)
         except Exception as exc:
             last_error = exc
-            if not is_upbit_rate_limit_error(exc) or attempt >= retry_count:
+            if not is_upbit_retryable_error(exc) or attempt >= retry_count:
                 raise
             time.sleep(retry_delay_sec * (attempt + 1))
     if last_error is not None:
