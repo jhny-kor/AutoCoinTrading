@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-12: htf slope, volume percentile/z-score, ATR percentile, 호가 압력 점수를 함께 저장해 이후 지표 분석 정확도를 높이도록 확장
 - 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - 업비트 분석 수집기에서도 웹소켓 latest/best bid/1분봉 스냅샷을 우선 사용하고 stale 시 REST fallback 하도록 바꿔 phase 4 전환을 시작했다.
 - 분석용 JSONL 에 노이즈 비율을 함께 저장해 동적 진입 문턱값 보정 근거를 바로 확인할 수 있게 확장
@@ -39,12 +40,18 @@ import ccxt
 from core.execution.upbit import create_upbit_market_data_provider
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.strategy.indicators import (
+    calc_atr,
     calc_adx,
     calc_macd_histogram,
     calc_noise_ratio,
+    calc_orderbook_pressure_score,
+    calc_percentile_rank,
     calc_pct_slope,
+    calc_recent_atr_series,
+    calc_recent_volume_ratio_series,
     calc_rsi as calc_rsi_core,
     calc_sma as calc_sma_core,
+    calc_zscore,
 )
 from log_path_utils import dated_path
 from settings.env import load_project_env
@@ -578,6 +585,13 @@ def build_snapshot(
     candle_range_pct = ((last_candle[2] - last_candle[3]) / last_close * 100) if last_close else 0.0
     candle_body_pct = (abs(last_candle[4] - last_candle[1]) / last_candle[1] * 100) if last_candle[1] else 0.0
     volume_ratio = calc_volume_ratio(ohlcv, int(settings["volume_lookback"]))
+    volume_ratio_series = calc_recent_volume_ratio_series(
+        ohlcv,
+        int(settings["volume_lookback"]),
+        sample_count=20,
+    )
+    volume_ratio_percentile = calc_percentile_rank(volume_ratio_series, volume_ratio)
+    volume_ratio_zscore = calc_zscore(volume_ratio_series, volume_ratio)
     avg_abs_change_pct = calc_avg_abs_change_pct(
         closes, int(settings["volatility_lookback"])
     )
@@ -585,6 +599,14 @@ def build_snapshot(
     noise_ratio = calc_noise_ratio(ohlcv, int(settings["noise_ratio_lookback"]))
     rsi = calc_rsi(closes, int(settings["rsi_period"]))
     adx = calc_adx(ohlcv, int(settings["adx_period"]))
+    atr_value = calc_atr(ohlcv, int(settings["atr_period"]))
+    atr_pct = (atr_value / last_close * 100) if atr_value is not None and last_close else None
+    atr_series = calc_recent_atr_series(
+        ohlcv,
+        int(settings["atr_period"]),
+        sample_count=20,
+    )
+    atr_percentile = calc_percentile_rank(atr_series, atr_value)
     _macd_value, _macd_signal, macd_histogram = calc_macd_histogram(
         closes,
         fast_period=int(settings["macd_fast_period"]),
@@ -612,13 +634,30 @@ def build_snapshot(
     htf_gap_pct = None
     htf_bullish = None
     htf_bearish = None
+    htf_ma_slope_pct = None
+    htf_close_slope_pct = None
     if higher_timeframe_ohlcv:
         htf_closes = [row[4] for row in higher_timeframe_ohlcv]
         htf_last_close = htf_closes[-1]
         htf_last_ma = calc_sma(htf_closes, int(settings["higher_timeframe_ma_period"]))
+        htf_ma_series = [
+            calc_sma(
+                htf_closes[: idx + 1],
+                int(settings["higher_timeframe_ma_period"]),
+            )
+            for idx in range(int(settings["higher_timeframe_ma_period"]) - 1, len(htf_closes))
+        ]
         htf_gap_pct = abs(htf_last_close - htf_last_ma) / htf_last_ma * 100 if htf_last_ma else None
         htf_bullish = htf_last_close > htf_last_ma
         htf_bearish = htf_last_close < htf_last_ma
+        htf_ma_slope_pct = calc_pct_slope(
+            htf_ma_series,
+            int(settings["trend_slope_lookback"]),
+        )
+        htf_close_slope_pct = calc_pct_slope(
+            htf_closes,
+            int(settings["trend_slope_lookback"]),
+        )
 
     volume_filter_passed = None
     if parse_bool(str(settings["enable_volume_filter"]), default=True) and volume_ratio is not None:
@@ -644,6 +683,7 @@ def build_snapshot(
         volume_filter_passed=volume_filter_passed,
         volatility_filter_passed=volatility_filter_passed,
     )
+    orderbook_pressure_score = calc_orderbook_pressure_score(order_book)
 
     return compact_record({
         "collected_at": datetime.now(timezone.utc).isoformat(),
@@ -673,10 +713,15 @@ def build_snapshot(
         "candle_range_pct": candle_range_pct,
         "candle_body_pct": candle_body_pct,
         "volume_ratio": volume_ratio,
+        "volume_ratio_percentile": volume_ratio_percentile,
+        "volume_ratio_zscore": volume_ratio_zscore,
         "avg_abs_change_pct": avg_abs_change_pct,
         "noise_ratio": noise_ratio,
         "rsi": rsi,
         "adx": adx,
+        "atr_value": atr_value,
+        "atr_pct": atr_pct,
+        "atr_percentile": atr_percentile,
         "macd_histogram": macd_histogram,
         "ma_slope_pct": ma_slope_pct,
         "previous_candle_ts": prev_candle[0],
@@ -692,6 +737,8 @@ def build_snapshot(
         "htf_gap_pct": htf_gap_pct,
         "htf_bullish": htf_bullish,
         "htf_bearish": htf_bearish,
+        "htf_ma_slope_pct": htf_ma_slope_pct,
+        "htf_close_slope_pct": htf_close_slope_pct,
         "volume_filter_passed": volume_filter_passed,
         "volatility_filter_passed": volatility_filter_passed,
         "recent_high": range_stats["recent_high"],
@@ -717,6 +764,7 @@ def build_snapshot(
         "ask_depth_notional_5": order_book.get("ask_depth_notional_5"),
         "depth_size_imbalance_3": order_book.get("depth_size_imbalance_3"),
         "depth_size_imbalance_5": order_book.get("depth_size_imbalance_5"),
+        "orderbook_pressure_score": orderbook_pressure_score,
         "buy_sweep_avg_price_quote_100": order_book.get("buy_sweep_avg_price_quote_100"),
         "sell_sweep_avg_price_quote_100": order_book.get("sell_sweep_avg_price_quote_100"),
         "buy_sweep_slippage_bps_quote_100": order_book.get("buy_sweep_slippage_bps_quote_100"),
@@ -777,6 +825,7 @@ def main():
         "recent_range_lookback": recent_range_lookback,
         "rsi_period": rsi_period,
         "adx_period": adx_period,
+        "atr_period": 14,
         "noise_ratio_lookback": strategy.noise_ratio_lookback,
         "macd_fast_period": strategy.macd_fast_period,
         "macd_slow_period": strategy.macd_slow_period,

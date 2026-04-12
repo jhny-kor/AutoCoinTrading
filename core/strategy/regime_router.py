@@ -24,9 +24,9 @@ def _choose_strategy_key(regime: str) -> str:
     """레짐 이름을 기존 전략 경로 키로 변환한다."""
     if regime in {"LOW_ENERGY", "EXHAUSTION_RISK", "OVERHEATED", "CHOPPY_LOW_VOL"}:
         return "skip"
-    if regime in {"BREAKOUT_ATTEMPT", "CHOPPY_HIGH_VOL"}:
+    if regime in {"BREAKOUT_ATTEMPT", "CHOPPY_HIGH_VOL", "TRENDING_EARLY"}:
         return "breakout"
-    if regime in {"TRENDING_EARLY", "TRENDING_MATURE"}:
+    if regime in {"TRENDING_MATURE"}:
         return "trend_follow"
     return "trend_follow"
 

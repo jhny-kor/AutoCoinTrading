@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-04-12: ATR/거래량 분포 기반 percentile, z-score, 호가 압력 점수를 추가해 약한 지표를 결합 판단에 쓸 수 있게 확장
 - 2026-04-08: 볼린저 밴드 계산에서 사용하는 `math.sqrt` 누락 import 를 추가해 알트 봇 런타임 예외를 수정했다.
 - 최근 ATR 과 ATR 퍼센트를 공통으로 계산하는 helper 를 추가해 BTC 변동성 기반 진입 비중 조절에 재사용할 수 있게 확장했다.
 - 알트/BTC/분석 수집기가 함께 쓰는 공통 보조지표 계산 함수를 추가했다.
@@ -276,6 +277,90 @@ def calc_noise_ratio(ohlcv: list[list[float]], lookback: int) -> float | None:
     if not noise_values:
         return None
     return sum(noise_values) / len(noise_values)
+
+
+def calc_percentile_rank(values: list[float], target: float | None) -> float | None:
+    """목표값이 최근 분포에서 어느 분위인지 0~100 범위로 반환한다."""
+    if target is None:
+        return None
+    cleaned = sorted(float(value) for value in values if value is not None)
+    if not cleaned:
+        return None
+    below_or_equal = sum(1 for value in cleaned if value <= float(target))
+    return below_or_equal / len(cleaned) * 100
+
+
+def calc_zscore(values: list[float], target: float | None) -> float | None:
+    """목표값의 z-score 를 계산한다."""
+    if target is None:
+        return None
+    cleaned = [float(value) for value in values if value is not None]
+    if len(cleaned) < 2:
+        return None
+    mean = sum(cleaned) / len(cleaned)
+    variance = sum((value - mean) ** 2 for value in cleaned) / len(cleaned)
+    stddev = math.sqrt(max(variance, 0.0))
+    if stddev <= 0:
+        return None
+    return (float(target) - mean) / stddev
+
+
+def calc_recent_volume_ratio_series(
+    ohlcv: list[list[float]], lookback: int, sample_count: int = 20
+) -> list[float]:
+    """최근 완료 봉 기준 volume_ratio 시리즈를 만든다."""
+    if lookback <= 0 or len(ohlcv) < lookback + 3:
+        return []
+    completed = ohlcv[:-1]
+    ratios: list[float] = []
+    for idx in range(lookback, len(completed)):
+        recent = completed[idx - lookback : idx]
+        avg_volume = sum(row[5] for row in recent) / len(recent) if recent else 0.0
+        current_volume = completed[idx][5]
+        if avg_volume > 0:
+            ratios.append(current_volume / avg_volume)
+    return ratios[-sample_count:]
+
+
+def calc_recent_atr_series(
+    ohlcv: list[list[float]], period: int, sample_count: int = 20
+) -> list[float]:
+    """최근 ATR 시리즈를 만든다."""
+    if period <= 0 or len(ohlcv) < period + 3:
+        return []
+    series: list[float] = []
+    for end in range(period + 2, len(ohlcv) + 1):
+        value = calc_atr(ohlcv[:end], period)
+        if value is not None:
+            series.append(value)
+    return series[-sample_count:]
+
+
+def calc_orderbook_pressure_score(order_book: dict[str, float | None]) -> float | None:
+    """호가 불균형과 스프레드를 가볍게 합성한 압력 점수(0~100)를 계산한다."""
+    if not isinstance(order_book, dict):
+        return None
+    score = 50.0
+    spread_pct = order_book.get("spread_pct")
+    imbalance = order_book.get("bid_ask_size_imbalance")
+    depth_imbalance = order_book.get("depth_size_imbalance_3")
+
+    if spread_pct is not None:
+        spread_pct = float(spread_pct)
+        if spread_pct <= 0.03:
+            score += 5.0
+        elif spread_pct >= 0.12:
+            score -= 5.0
+
+    if imbalance is not None:
+        imbalance = float(imbalance)
+        score += max(-10.0, min(10.0, (imbalance - 1.0) * 15.0))
+
+    if depth_imbalance is not None:
+        depth_imbalance = float(depth_imbalance)
+        score += max(-10.0, min(10.0, (depth_imbalance - 1.0) * 12.0))
+
+    return max(0.0, min(100.0, score))
 
 
 def calc_donchian_channel(ohlcv: list[list[float]], lookback: int) -> tuple[float | None, float | None]:

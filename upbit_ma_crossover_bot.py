@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-12: 텔레그램 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: 알트 보수형 조정으로 최대 진입 이격도와 최대 거래량 배수 상한을 추가하고 과열 추격 진입을 더 줄이도록 보강
 - 2026-04-09: 알트 손절 후 재진입을 최소 시간 + 패턴 복구 기준으로 보도록 패턴 기반 재진입 gate 를 추가
 - 2026-04-08: 알트도 독립 레짐 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
@@ -111,7 +112,10 @@ from core.strategy.indicators import (
     calc_bollinger_band_width_pct,
     calc_macd_histogram,
     calc_noise_ratio,
+    calc_percentile_rank,
     calc_pct_slope,
+    calc_recent_atr_series,
+    calc_recent_volume_ratio_series,
     calc_return_correlation,
     calc_rsi,
 )
@@ -584,6 +588,15 @@ def run_bot():
                 )
 
                 volume_ratio = calc_volume_ratio(ohlcv, strategy.volume_lookback)
+                volume_ratio_series = calc_recent_volume_ratio_series(
+                    ohlcv,
+                    strategy.volume_lookback,
+                    sample_count=20,
+                )
+                volume_ratio_percentile = calc_percentile_rank(
+                    volume_ratio_series,
+                    volume_ratio,
+                )
                 base_min_volume_ratio = strategy.get_min_volume_ratio(symbol)
                 effective_min_volume_ratio = base_min_volume_ratio
                 effective_max_volume_ratio = strategy.get_max_volume_ratio(symbol)
@@ -604,6 +617,10 @@ def run_bot():
                 avg_abs_change_pct = calc_avg_abs_change_pct(
                     closes, strategy.volatility_lookback
                 )
+                atr_value = calc_atr(ohlcv, 14)
+                atr_pct = (atr_value / last_close * 100) if atr_value is not None and last_close else None
+                atr_series = calc_recent_atr_series(ohlcv, 14, sample_count=20)
+                atr_percentile = calc_percentile_rank(atr_series, atr_value)
                 volatility_filter_passed = True
                 if strategy.enable_volatility_filter and avg_abs_change_pct is not None:
                     volatility_filter_passed = (
@@ -618,6 +635,7 @@ def run_bot():
                     )
                 htf_bullish = True
                 htf_bearish = True
+                htf_ma_slope_pct = None
                 if strategy.enable_higher_timeframe_filter:
                     log(
                         f"[{symbol}] 상위 타임프레임({strategy.higher_timeframe}) 추세 확인 중..."
@@ -634,8 +652,19 @@ def run_bot():
                     htf_last_ma = calc_sma(
                         htf_closes, strategy.higher_timeframe_ma_period
                     )
+                    htf_ma_series = [
+                        calc_sma(
+                            htf_closes[: idx + 1],
+                            strategy.higher_timeframe_ma_period,
+                        )
+                        for idx in range(strategy.higher_timeframe_ma_period - 1, len(htf_closes))
+                    ]
                     htf_bullish = htf_last_close > htf_last_ma
                     htf_bearish = htf_last_close < htf_last_ma
+                    htf_ma_slope_pct = calc_pct_slope(
+                        htf_ma_series,
+                        strategy.trend_slope_lookback,
+                    )
                     log(
                         f"[{symbol}] 상위 타임프레임 종가: {htf_last_close:.0f}, "
                         f"상위 MA: {htf_last_ma:.0f}, "
@@ -1226,9 +1255,14 @@ def run_bot():
                     signal_score=signal_score,
                     volume_ratio=volume_ratio,
                     required_volume_ratio=effective_min_volume_ratio,
+                    volume_ratio_percentile=volume_ratio_percentile,
                     trend_ok=htf_bullish,
+                    htf_slope_pct=htf_ma_slope_pct,
                     low_energy_guard_active=low_energy_guard_active,
                     symbol_regime=symbol_regime,
+                    atr_pct=atr_pct,
+                    atr_percentile=atr_percentile,
+                    orderbook_pressure_score=None,
                     fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
                     fill_quality_entry_blocked=fill_quality_entry_blocked,
                     correlation_with_btc=correlation_with_btc,
@@ -1712,13 +1746,21 @@ def run_bot():
                             fallback_order_value_quote=cost_to_spend,
                             fallback_price=entry_price[symbol],
                         )
+                        executed_ratio_pct = 0.0
+                        if quote_free > 0 and buy_summary["executed_order_value_quote"] not in (None, 0):
+                            executed_ratio_pct = (
+                                float(buy_summary["executed_order_value_quote"]) / float(quote_free) * 100
+                            )
                         notifier.notify_buy_fill(
                             "UPBIT",
                             symbol,
                             f"현재 레짐: {symbol_regime}\n"
                             f"매수 금액: {buy_summary['executed_order_value_quote']:.0f} {quote}\n"
                             f"매수 단가: {buy_summary['executed_price']:.0f}\n"
-                            f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
+                            f"체결 수량: {buy_summary['executed_amount']:.8f} {base}\n"
+                            f"기본 비중: {base_position_ratio * 100:.2f}%\n"
+                            f"최종 비중: {position_ratio * 100:.2f}%\n"
+                            f"실행 비중: {executed_ratio_pct:.2f}%",
                         )
                         trade_history.log_fill(
                             exchange_name="UPBIT",

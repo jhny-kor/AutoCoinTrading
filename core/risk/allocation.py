@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-12: volume percentile, ATR percentile, HTF slope, 호가 압력 점수를 결합해 약한 단일 지표 의존도를 줄이도록 allocation score 를 확장
 - 2026-04-10: allocation reason_top 을 최고 점수 축이 아니라 최저 점수 축 기준으로 바꿔 실제 약점 설명에 가깝게 조정
 - 2026-04-09: signal/market/execution/diversification 기반 score_scale 계산 helper 를 추가
 - 레짐별 포지션 스케일을 적용하되 최소 0, 최대 1.2 범위로 제한하는 공통 helper 를 추가했다.
@@ -45,9 +46,14 @@ def compute_allocation_score(
     signal_score: float,
     volume_ratio: float | None,
     required_volume_ratio: float | None,
+    volume_ratio_percentile: float | None = None,
     trend_ok: bool,
+    htf_slope_pct: float | None = None,
     low_energy_guard_active: bool,
     symbol_regime: str | None,
+    atr_pct: float | None = None,
+    atr_percentile: float | None = None,
+    orderbook_pressure_score: float | None = None,
     fill_quality_avg_fill_ratio: float | None,
     fill_quality_entry_blocked: bool,
     correlation_with_btc: float | None,
@@ -72,9 +78,9 @@ def compute_allocation_score(
         market_component = 0.0
     elif not trend_ok:
         market_component = 25.0
-    elif symbol_regime in {"TRENDING", "BREAKOUT_ATTEMPT"}:
+    elif symbol_regime in {"TRENDING", "TRENDING_EARLY", "TRENDING_MATURE", "BREAKOUT_ATTEMPT"}:
         market_component = 85.0
-    elif symbol_regime in {"CHOPPY", "CHOPPY_HIGH_VOL"}:
+    elif symbol_regime in {"CHOPPY", "CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL"}:
         market_component = 45.0
     elif symbol_regime in {"OVERHEATED", "EXHAUSTION_RISK"}:
         market_component = 30.0
@@ -83,12 +89,39 @@ def compute_allocation_score(
         market_component = _clamp_score(
             market_component + min(20.0, (volume_ratio / required_volume_ratio) * 10.0)
         )
+    if volume_ratio_percentile is not None:
+        if volume_ratio_percentile < 35:
+            market_component = _clamp_score(market_component - 10.0)
+        elif 55 <= volume_ratio_percentile <= 85:
+            market_component = _clamp_score(market_component + 6.0)
+        elif volume_ratio_percentile > 95:
+            market_component = _clamp_score(market_component - 6.0)
+
+    if atr_percentile is not None:
+        if atr_percentile < 30:
+            market_component = _clamp_score(market_component - 8.0)
+        elif 50 <= atr_percentile <= 85:
+            market_component = _clamp_score(market_component + 5.0)
+        elif atr_percentile > 95:
+            market_component = _clamp_score(market_component - 4.0)
+
+    if htf_slope_pct is not None:
+        market_component = _clamp_score(
+            market_component + max(-8.0, min(8.0, float(htf_slope_pct) * 200.0))
+        )
+
+    if atr_pct is not None and atr_pct < 0.08:
+        market_component = _clamp_score(market_component - 10.0)
 
     execution_component = 65.0
     if fill_quality_entry_blocked:
         execution_component = 20.0
     elif fill_quality_avg_fill_ratio is not None:
         execution_component = _clamp_score(fill_quality_avg_fill_ratio * 100.0)
+    if orderbook_pressure_score is not None:
+        execution_component = _clamp_score(
+            execution_component * 0.7 + float(orderbook_pressure_score) * 0.3
+        )
 
     diversification_component = 65.0
     if correlation_with_btc is not None and max_correlation_with_btc > 0:

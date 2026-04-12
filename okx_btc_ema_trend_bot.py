@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-12: 텔레그램 BTC 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: BTC 손절 후 일정 시간과 높은 점수면 fresh cross 없이 재진입 가능한 예외 경로를 추가
 - 2026-04-09: BTC 손절 후 재진입은 최소 시간 + confirm/fresh cross 복구 기준으로 보도록 패턴 기반 gate 를 추가
 - 2026-04-08: BTC 가 레짐을 직접 if 분기하지 않고 독립 라우터에서 `skip / breakout / trend_follow` 전략 경로를 선택하도록 정리
@@ -85,7 +86,10 @@ from core.strategy.indicators import (
     calc_donchian_channel,
     calc_ema_series as calc_ema_series_core,
     calc_noise_ratio,
+    calc_percentile_rank,
     calc_pct_slope,
+    calc_recent_atr_series,
+    calc_recent_volume_ratio_series,
     calc_rsi,
 )
 from core.strategy.timing import update_entry_timing_state
@@ -359,11 +363,27 @@ def run_bot():
                 settings.slow_ema_period,
             )
             volume_ratio = calc_volume_ratio(ohlcv, settings.volume_lookback)
+            volume_ratio_series = calc_recent_volume_ratio_series(
+                ohlcv,
+                settings.volume_lookback,
+                sample_count=20,
+            )
+            volume_ratio_percentile = calc_percentile_rank(
+                volume_ratio_series,
+                volume_ratio,
+            )
             atr_value = calc_atr(ohlcv, settings.atr_period)
             atr_pct = (atr_value / last_close * 100) if last_close else 0.0
+            atr_series = calc_recent_atr_series(ohlcv, settings.atr_period, sample_count=20)
+            atr_percentile = calc_percentile_rank(atr_series, atr_value)
             effective_min_atr_pct = settings.get_min_atr_pct(symbol)
-            confirm_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
+            confirm_ema_series = calc_ema_series(confirm_closes, settings.confirm_ema_period)
+            confirm_ema = confirm_ema_series[-1]
             confirm_close = confirm_closes[-1]
+            confirm_ema_slope_pct = calc_pct_slope(
+                confirm_ema_series,
+                settings.ema_slope_lookback,
+            )
             base_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
             confirm_bullish = confirm_close > confirm_ema
             rsi_value = calc_rsi(closes, settings.rsi_period)
@@ -838,9 +858,14 @@ def run_bot():
                 signal_score=signal_score,
                 volume_ratio=volume_ratio,
                 required_volume_ratio=effective_min_volume_ratio,
+                volume_ratio_percentile=volume_ratio_percentile,
                 trend_ok=confirm_bullish,
+                htf_slope_pct=confirm_ema_slope_pct,
                 low_energy_guard_active=low_energy_guard_active,
                 symbol_regime=symbol_regime,
+                atr_pct=atr_pct,
+                atr_percentile=atr_percentile,
+                orderbook_pressure_score=None,
                 fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
                 fill_quality_entry_blocked=fill_quality_entry_blocked,
                 correlation_with_btc=None,
@@ -1298,13 +1323,21 @@ def run_bot():
                         fallback_order_value_quote=order_value,
                         fallback_price=entry_price,
                     )
+                    executed_ratio_pct = 0.0
+                    if quote_free > 0 and buy_summary["executed_order_value_quote"] not in (None, 0):
+                        executed_ratio_pct = (
+                            float(buy_summary["executed_order_value_quote"]) / float(quote_free) * 100
+                        )
                     notifier.notify_buy_fill(
                         "OKX-BTC",
                         symbol,
                         f"현재 레짐: {symbol_regime}\n"
                         f"매수 금액: {buy_summary['executed_order_value_quote']:.8f} {quote}\n"
                         f"매수 단가: {buy_summary['executed_price']:.2f}\n"
-                        f"체결 수량: {buy_summary['executed_amount']:.8f} {base}",
+                        f"체결 수량: {buy_summary['executed_amount']:.8f} {base}\n"
+                        f"기본 비중: {base_position_ratio * 100:.2f}%\n"
+                        f"최종 비중: {position_ratio * 100:.2f}%\n"
+                        f"실행 비중: {executed_ratio_pct:.2f}%",
                     )
                     trade_history.log_fill(
                         exchange_name="OKX",
@@ -1439,6 +1472,12 @@ def run_bot():
                     fallback_order_value_quote=add_on_order_value,
                     fallback_price=entry_price,
                 )
+                executed_ratio_pct = 0.0
+                if quote_free > 0 and add_on_summary["executed_order_value_quote"] not in (None, 0):
+                    executed_ratio_pct = (
+                        float(add_on_summary["executed_order_value_quote"]) / float(quote_free) * 100
+                    )
+                add_on_ratio_pct = settings.pyramid_position_ratio * allocation_score_result.score_scale * 100
                 notifier.notify_buy_fill(
                     "OKX-BTC",
                     symbol,
@@ -1447,7 +1486,10 @@ def run_bot():
                     f"매수 금액: {add_on_summary['executed_order_value_quote']:.8f} {quote}\n"
                     f"매수 단가: {add_on_summary['executed_price']:.2f}\n"
                     f"체결 수량: {add_on_summary['executed_amount']:.8f} {base}\n"
-                    f"갱신 평균 진입가: {entry_price:.2f}",
+                    f"갱신 평균 진입가: {entry_price:.2f}\n"
+                    f"기본 추가매수 비중: {settings.pyramid_position_ratio * 100:.2f}%\n"
+                    f"최종 추가매수 비중: {add_on_ratio_pct:.2f}%\n"
+                    f"실행 비중: {executed_ratio_pct:.2f}%",
                 )
                 trade_history.log_fill(
                     exchange_name="OKX",
