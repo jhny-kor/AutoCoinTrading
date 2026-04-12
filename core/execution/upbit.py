@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 심볼용 최소 market metadata 를 로컬에서 채워 `market/all` 네트워크 조회 없이 OHLCV/호가/수량 정밀도 경로가 동작하도록 보강
 - 업비트 RequestTimeout, 네트워크 단절, 거래소 일시 장애를 공통 재시도 대상으로 포함해 반복 loop_error 를 줄이도록 보강
 - 업비트 기본 요청 타임아웃을 10초에서 20초로 늘려 느린 캔들 응답에도 즉시 실패하지 않도록 조정
 - `config/runtime.toml` + env override 레이어를 중앙 환경 로더로 읽도록 정리
@@ -112,6 +113,57 @@ def create_upbit_market_data_provider(config: dict) -> UpbitMarketDataProvider |
     )
 
 
+def ensure_upbit_market_cached(exchange: ccxt.upbit, symbol: str) -> None:
+    """업비트 심볼용 최소 market metadata 를 로컬에 채워 market/all 호출을 줄인다."""
+    if not symbol or "/" not in symbol:
+        return
+
+    markets = exchange.markets if isinstance(exchange.markets, dict) else {}
+    if symbol in markets:
+        return
+
+    base, quote = symbol.split("/", 1)
+    market_id = f"{quote}-{base}"
+    market = {
+        "id": market_id,
+        "symbol": symbol,
+        "base": base,
+        "quote": quote,
+        "baseId": base,
+        "quoteId": quote,
+        "active": True,
+        "type": "spot",
+        "spot": True,
+        "margin": False,
+        "swap": False,
+        "future": False,
+        "option": False,
+        "precision": {
+            "amount": 0.00000001,
+            "price": 0.00000001,
+        },
+        "limits": {
+            "amount": {"min": 0.00000001, "max": None},
+            "price": {"min": None, "max": None},
+            "cost": {"min": None, "max": None},
+        },
+        "info": {"market": market_id},
+    }
+
+    markets[symbol] = market
+    exchange.markets = markets
+
+    markets_by_id = exchange.markets_by_id if isinstance(exchange.markets_by_id, dict) else {}
+    markets_by_id.setdefault(market_id, []).append(market)
+    exchange.markets_by_id = markets_by_id
+
+    symbols = list(exchange.symbols) if isinstance(exchange.symbols, list) else []
+    if symbol not in symbols:
+        symbols.append(symbol)
+        symbols.sort()
+    exchange.symbols = symbols
+
+
 def _get_runtime_cache(exchange: ccxt.upbit) -> dict:
     """클라이언트별 업비트 런타임 캐시 저장소를 반환한다."""
     return exchange.options.setdefault("upbit_runtime_cache", {})
@@ -209,6 +261,7 @@ def create_market_buy_order_upbit(
     symbol: str,
     cost_to_spend: float,
 ):
+    ensure_upbit_market_cached(exchange, symbol)
     return call_upbit_with_retry(
         exchange,
         exchange.create_market_buy_order,
@@ -224,6 +277,7 @@ def create_market_sell_order_upbit(
     amount: float,
 ):
     """업비트 시장가 매도를 공통 재시도 경로로 감싼다."""
+    ensure_upbit_market_cached(exchange, symbol)
     return call_upbit_with_retry(
         exchange,
         exchange.create_market_sell_order,
@@ -235,6 +289,7 @@ def create_market_sell_order_upbit(
 def fetch_ohlcv_upbit(
     exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
 ):
+    ensure_upbit_market_cached(exchange, symbol)
     return call_upbit_with_retry(
         exchange,
         exchange.fetch_ohlcv,
@@ -326,12 +381,14 @@ def enrich_upbit_order_with_private_event(
 
 def safe_amount_to_precision_upbit(exchange: ccxt.upbit, symbol: str, amount: float) -> float:
     try:
+        ensure_upbit_market_cached(exchange, symbol)
         return float(exchange.amount_to_precision(symbol, amount))
     except Exception:
         return float(f"{amount:.8f}")
 
 
 def fetch_best_bid_upbit(exchange: ccxt.upbit, symbol: str) -> float | None:
+    ensure_upbit_market_cached(exchange, symbol)
     cache = _get_runtime_cache(exchange).setdefault("orderbook", {})
     ttl_sec = float(exchange.options.get("upbit_orderbook_cache_ttl_sec", 0.0) or 0.0)
     now_ts = time.time()

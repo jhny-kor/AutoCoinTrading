@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 공개 조회 전에 심볼별 최소 market metadata 를 채워 `market/all` 호출 없이 REST fallback 이 동작하도록 보강
 - 업비트 공개 OHLCV/호가 조회도 RequestTimeout 재시도와 20초 타임아웃을 사용하도록 보강
 - 2026-04-12: htf slope, volume percentile/z-score, ATR percentile, 호가 압력 점수를 함께 저장해 이후 지표 분석 정확도를 높이도록 확장
 - 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
@@ -38,7 +39,7 @@ from typing import Iterable
 
 import ccxt
 
-from core.execution.upbit import call_upbit_with_retry
+from core.execution.upbit import call_upbit_with_retry, ensure_upbit_market_cached
 from core.execution.upbit import create_upbit_market_data_provider
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.strategy.indicators import (
@@ -247,6 +248,7 @@ def fetch_upbit_ohlcv(
     exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
 ) -> list[list[float]]:
     """업비트에서 OHLCV를 가져온다."""
+    ensure_upbit_market_cached(exchange, symbol)
     return call_upbit_with_retry(
         exchange,
         exchange.fetch_ohlcv,
@@ -303,6 +305,7 @@ def fetch_okx_order_book(exchange: ccxt.okx, symbol: str) -> dict[str, float | N
 def fetch_upbit_order_book(exchange: ccxt.upbit, symbol: str) -> dict[str, float | None]:
     """업비트 공개 호가창에서 상위 호가 정보를 가져온다."""
     try:
+        ensure_upbit_market_cached(exchange, symbol)
         order_book = call_upbit_with_retry(exchange, exchange.fetch_order_book, symbol, limit=5)
         bids = order_book.get("bids", [])
         asks = order_book.get("asks", [])

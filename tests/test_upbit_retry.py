@@ -4,7 +4,7 @@ import unittest
 
 import ccxt
 
-from core.execution.upbit import is_upbit_retryable_error
+from core.execution.upbit import ensure_upbit_market_cached, is_upbit_retryable_error
 
 
 class UpbitRetryTests(unittest.TestCase):
@@ -16,6 +16,13 @@ class UpbitRetryTests(unittest.TestCase):
 
     def test_non_retryable_value_error_is_false(self):
         self.assertFalse(is_upbit_retryable_error(ValueError("bad input")))
+
+    def test_ensure_upbit_market_cached_populates_symbol_without_network(self):
+        exchange = ccxt.upbit({})
+        ensure_upbit_market_cached(exchange, "BTC/KRW")
+        self.assertIn("BTC/KRW", exchange.markets)
+        self.assertIn("KRW-BTC", exchange.markets_by_id)
+        self.assertIn("BTC/KRW", exchange.symbols)
 
 
 if __name__ == "__main__":
