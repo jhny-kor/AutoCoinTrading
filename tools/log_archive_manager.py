@@ -1,5 +1,7 @@
 """
 수정 요약
+- structured_logs 는 최근 5일만 live 원본으로 유지하고, 나머지 로그 루트는 기존 7일 유지 정책을 계속 사용하도록 루트별 보관 일수를 분리
+- status 와 compress 가 동일한 루트별 보관 정책을 사용하도록 공용 계산 함수를 추가
 - 압축본이 이미 있는 오래된 날짜 폴더에 `.DS_Store` 같은 잔재만 남아 있어도 자동으로 삭제되도록 정리 로직을 보강
 - 배치나 수동 실행에서 같은 보관 정책을 재사용할 수 있도록 공용 유지보수 함수와 결과 요약을 추가
 - 최근 7일 로그는 원본 그대로 유지하고, 그 이전 로그는 날짜별 tar.gz 로 묶어 보관하도록 개선
@@ -34,6 +36,9 @@ LOG_ROOTS = [
     Path("trade_logs"),
     Path("structured_logs"),
 ]
+ROOT_KEEP_DAYS = {
+    "structured_logs": 5,
+}
 
 TARGET_SUFFIXES = {".log", ".jsonl", ".json"}
 IGNORABLE_STALE_FILENAMES = {".DS_Store"}
@@ -100,7 +105,8 @@ def iter_candidates(keep_days: int) -> list[ArchiveCandidate]:
             archive_day = resolve_archive_day(path, root, stat.st_mtime)
             if archive_day is None:
                 continue
-            if not should_archive_day(archive_day, today, keep_days):
+            effective_keep_days = get_keep_days_for_root(root, keep_days)
+            if not should_archive_day(archive_day, today, effective_keep_days):
                 continue
             candidates.append(
                 ArchiveCandidate(
@@ -135,6 +141,11 @@ def should_archive_day(target_day: date, today: date, keep_days: int) -> bool:
     """최근 keep_days 일 이내는 유지하고, 그 날짜에 도달하면 압축 대상으로 본다."""
     age_days = (today - target_day).days
     return age_days >= keep_days
+
+
+def get_keep_days_for_root(root: Path, default_keep_days: int) -> int:
+    """루트별 원본 유지 일수를 반환한다."""
+    return ROOT_KEEP_DAYS.get(root.name, default_keep_days)
 
 
 def group_candidates(candidates: list[ArchiveCandidate]) -> list[ArchiveGroup]:
@@ -186,6 +197,11 @@ def show_group_status(groups: list[ArchiveGroup], keep_days: int) -> None:
     total_size = sum(group.total_size_bytes for group in groups)
     print("=== 날짜별 로그 압축 후보 ===")
     print(f"원본 유지 기간: 최근 {keep_days}일")
+    if ROOT_KEEP_DAYS:
+        override_summary = ", ".join(
+            f"{root_name}={days}일" for root_name, days in sorted(ROOT_KEEP_DAYS.items())
+        )
+        print(f"루트별 예외 유지 기간: {override_summary}")
     print(f"후보 날짜 묶음 수: {len(groups)}")
     print(f"후보 파일 수: {total_files}")
     print(f"총 원본 크기: {format_bytes(total_size)}")
@@ -274,6 +290,7 @@ def iter_stale_date_dirs(root: Path, keep_days: int) -> list[tuple[date, Path]]:
     """유지 기간을 지난 날짜 폴더 목록을 찾는다."""
     today = datetime.now().date()
     date_dirs: list[tuple[date, Path]] = []
+    effective_keep_days = get_keep_days_for_root(root, keep_days)
     for path in sorted(root.rglob("*")):
         if not path.is_dir():
             continue
@@ -282,7 +299,7 @@ def iter_stale_date_dirs(root: Path, keep_days: int) -> list[tuple[date, Path]]:
         parsed = try_parse_date(path.name)
         if parsed is None:
             continue
-        if not should_archive_day(parsed, today, keep_days):
+        if not should_archive_day(parsed, today, effective_keep_days):
             continue
         date_dirs.append((parsed, path))
     return date_dirs

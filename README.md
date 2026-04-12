@@ -159,6 +159,7 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 
 - 상태 확인: `.venv/bin/python log_archive_manager.py status`
 - 수동 압축: `.venv/bin/python log_archive_manager.py compress`
+- 보관 기준: `structured_logs` 최근 5일 유지, 나머지 로그 루트는 최근 7일 유지
 
 ## 텔레그램
 
