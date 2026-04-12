@@ -1,29 +1,25 @@
 """
 수정 요약
+- 압축본을 만들지 않고 유지 기간을 지난 날짜 로그를 바로 삭제하는 삭제형 보관 배치로 전환
 - structured_logs 는 최근 5일만 live 원본으로 유지하고, 나머지 로그 루트는 기존 7일 유지 정책을 계속 사용하도록 루트별 보관 일수를 분리
-- status 와 compress 가 동일한 루트별 보관 정책을 사용하도록 공용 계산 함수를 추가
-- 압축본이 이미 있는 오래된 날짜 폴더에 `.DS_Store` 같은 잔재만 남아 있어도 자동으로 삭제되도록 정리 로직을 보강
-- 배치나 수동 실행에서 같은 보관 정책을 재사용할 수 있도록 공용 유지보수 함수와 결과 요약을 추가
-- 최근 7일 로그는 원본 그대로 유지하고, 그 이전 로그는 날짜별 tar.gz 로 묶어 보관하도록 개선
-- 루트별 _archive 폴더를 사용해 logs / analysis_logs / trade_logs / structured_logs 를 분리 보관
-- status 로 압축 대상 날짜 묶음을 미리 보고, compress 로 실제 압축 실행을 수행하도록 정리
+- status 와 prune 가 동일한 루트별 보관 정책을 사용하도록 공용 계산 함수를 유지
+- 오래된 날짜 폴더에 `.DS_Store` 같은 잔재만 남아 있어도 자동으로 삭제되도록 정리 로직을 유지
 
-로그 압축/보관 관리자
+로그 삭제형 보관 관리자
 
-- logs, analysis_logs, trade_logs, structured_logs 아래의 오래된 로그를 찾아 날짜별 tar.gz 로 압축한다.
-- 최근 7일 로그는 활성 분석용 원본으로 유지하고, 7일을 초과한 로그만 압축 대상으로 본다.
-- status 로 후보를 미리 보고, compress 로 실제 압축을 수행할 수 있다.
+- logs, analysis_logs, trade_logs, structured_logs 아래의 오래된 로그를 찾아 날짜별로 삭제한다.
+- structured_logs 는 최근 5일, 나머지 로그 루트는 최근 7일 로그를 활성 분석용 원본으로 유지한다.
+- status 로 후보를 미리 보고, prune 로 실제 삭제를 수행할 수 있다.
 
 사용 예시
 - .venv/bin/python log_archive_manager.py status
-- .venv/bin/python log_archive_manager.py compress
+- .venv/bin/python log_archive_manager.py prune
 - .venv/bin/python log_archive_manager.py status --keep-days 14
 """
 
 from __future__ import annotations
 
 import argparse
-import tarfile
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -54,7 +50,7 @@ class ArchiveCandidate:
 
     @property
     def archive_day(self) -> str:
-        """압축 묶음 기준 날짜 키를 반환한다."""
+        """삭제 묶음 기준 날짜 키를 반환한다."""
         return self.archive_day_text
 
 
@@ -68,10 +64,6 @@ class ArchiveGroup:
     def total_size_bytes(self) -> int:
         return sum(item.size_bytes for item in self.files)
 
-    @property
-    def archive_path(self) -> Path:
-        return self.root / "_archive" / f"{self.archive_day}.tar.gz"
-
 
 @dataclass(frozen=True)
 class ArchiveMaintenanceResult:
@@ -81,7 +73,7 @@ class ArchiveMaintenanceResult:
 
 
 def iter_candidates(keep_days: int) -> list[ArchiveCandidate]:
-    """압축 가능한 로그 후보를 수집한다."""
+    """삭제 가능한 로그 후보를 수집한다."""
     today = datetime.now().date()
     candidates: list[ArchiveCandidate] = []
 
@@ -138,7 +130,7 @@ def try_parse_date(raw: str) -> date | None:
 
 
 def should_archive_day(target_day: date, today: date, keep_days: int) -> bool:
-    """최근 keep_days 일 이내는 유지하고, 그 날짜에 도달하면 압축 대상으로 본다."""
+    """최근 keep_days 일 이내는 유지하고, 그 날짜에 도달하면 삭제 대상으로 본다."""
     age_days = (today - target_day).days
     return age_days >= keep_days
 
@@ -149,7 +141,7 @@ def get_keep_days_for_root(root: Path, default_keep_days: int) -> int:
 
 
 def group_candidates(candidates: list[ArchiveCandidate]) -> list[ArchiveGroup]:
-    """압축 후보를 루트/날짜별로 묶는다."""
+    """삭제 후보를 루트/날짜별로 묶는다."""
     grouped: dict[tuple[Path, str], list[ArchiveCandidate]] = {}
     for item in candidates:
         key = (item.root, item.archive_day)
@@ -179,9 +171,9 @@ def format_bytes(size: int) -> str:
 
 
 def show_status(candidates: list[ArchiveCandidate]) -> None:
-    """압축 후보를 요약해서 보여준다."""
+    """삭제 후보를 요약해서 보여준다."""
     total_size = sum(item.size_bytes for item in candidates)
-    print("=== 로그 압축 후보 ===")
+    print("=== 로그 삭제 후보 ===")
     print(f"후보 파일 수: {len(candidates)}")
     print(f"총 원본 크기: {format_bytes(total_size)}")
     for item in candidates[:50]:
@@ -192,10 +184,10 @@ def show_status(candidates: list[ArchiveCandidate]) -> None:
 
 
 def show_group_status(groups: list[ArchiveGroup], keep_days: int) -> None:
-    """날짜별 압축 후보 묶음을 보여준다."""
+    """날짜별 삭제 후보 묶음을 보여준다."""
     total_files = sum(len(group.files) for group in groups)
     total_size = sum(group.total_size_bytes for group in groups)
-    print("=== 날짜별 로그 압축 후보 ===")
+    print("=== 날짜별 로그 삭제 후보 ===")
     print(f"원본 유지 기간: 최근 {keep_days}일")
     if ROOT_KEEP_DAYS:
         override_summary = ", ".join(
@@ -207,58 +199,44 @@ def show_group_status(groups: list[ArchiveGroup], keep_days: int) -> None:
     print(f"총 원본 크기: {format_bytes(total_size)}")
     for group in groups[:50]:
         print(
-            f"- {group.root}/{group.archive_day}.tar.gz 예정 | "
+            f"- {group.root}/{group.archive_day} 삭제 예정 | "
             f"{len(group.files)}개 파일 | {format_bytes(group.total_size_bytes)}"
         )
     if len(groups) > 50:
         print(f"... 외 {len(groups) - 50}개 날짜 묶음")
 
 
-def compress_groups(groups: list[ArchiveGroup]) -> None:
-    """후보 파일을 날짜별 tar.gz 로 압축하고 원본을 제거한다."""
-    compressed_group_count = 0
-    compressed_file_count = 0
-    original_total = 0
-    compressed_total = 0
+def prune_groups(groups: list[ArchiveGroup]) -> tuple[int, int]:
+    """후보 파일을 날짜별로 삭제하고 빈 폴더를 정리한다."""
+    removed_group_count = 0
+    removed_file_count = 0
+    removed_total = 0
     cleaned_dir_count = 0
 
     for group in groups:
-        archive_path = group.archive_path
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with tarfile.open(archive_path, "w:gz") as tar:
-            for item in group.files:
-                arcname = item.path.relative_to(group.root)
-                tar.add(item.path, arcname=str(arcname))
-
         for item in group.files:
-            item.path.unlink()
+            item.path.unlink(missing_ok=True)
             cleaned_dir_count += remove_empty_parent_dirs(item.path.parent, stop_at=group.root)
 
-        compressed_size = archive_path.stat().st_size
-        compressed_group_count += 1
-        compressed_file_count += len(group.files)
-        original_total += group.total_size_bytes
-        compressed_total += compressed_size
+        removed_group_count += 1
+        removed_file_count += len(group.files)
+        removed_total += group.total_size_bytes
         print(
-            f"[압축 완료] {archive_path} | "
+            f"[삭제 완료] {group.root}/{group.archive_day} | "
             f"{len(group.files)}개 파일 | "
-            f"{format_bytes(group.total_size_bytes)} -> {format_bytes(compressed_size)}"
+            f"{format_bytes(group.total_size_bytes)}"
         )
 
-    print("=== 로그 압축 결과 ===")
-    print(f"압축 묶음 수: {compressed_group_count}")
-    print(f"압축 파일 수: {compressed_file_count}")
-    print(f"원본 총 크기: {format_bytes(original_total)}")
-    print(f"압축 총 크기: {format_bytes(compressed_total)}")
+    print("=== 로그 삭제 결과 ===")
+    print(f"삭제 날짜 묶음 수: {removed_group_count}")
+    print(f"삭제 파일 수: {removed_file_count}")
+    print(f"삭제 총 크기: {format_bytes(removed_total)}")
     print(f"정리한 빈 폴더 수: {cleaned_dir_count}")
-    if original_total > 0:
-        saved = original_total - compressed_total
-        print(f"절감 크기: {format_bytes(saved)}")
+    return cleaned_dir_count, removed_file_count
 
 
 def remove_empty_parent_dirs(start_dir: Path, stop_at: Path) -> int:
-    """압축 후 비게 된 날짜 폴더를 루트 전까지만 정리한다."""
+    """삭제 후 비게 된 날짜 폴더를 루트 전까지만 정리한다."""
     removed = 0
     current = start_dir
     stop_at = stop_at.resolve()
@@ -306,18 +284,14 @@ def iter_stale_date_dirs(root: Path, keep_days: int) -> list[tuple[date, Path]]:
 
 
 def prune_stale_date_dirs(keep_days: int) -> tuple[int, int]:
-    """압축본이 있는 오래된 날짜 폴더에서 잔재 파일과 빈 폴더를 정리한다."""
+    """오래된 날짜 폴더에서 잔재 파일과 빈 폴더를 정리한다."""
     removed_dir_count = 0
     removed_file_count = 0
 
     for root in LOG_ROOTS:
         if not root.exists():
             continue
-        for archive_day, date_dir in iter_stale_date_dirs(root, keep_days):
-            archive_path = root / "_archive" / f"{archive_day.isoformat()}.tar.gz"
-            if not archive_path.exists():
-                continue
-
+        for _archive_day, date_dir in iter_stale_date_dirs(root, keep_days):
             for file_path in sorted(date_dir.rglob("*")):
                 if not file_path.is_file():
                     continue
@@ -343,7 +317,7 @@ def prune_stale_date_dirs(keep_days: int) -> tuple[int, int]:
 
 
 def run_archive_maintenance(keep_days: int, *, show_status_only: bool = False) -> ArchiveMaintenanceResult:
-    """로그 압축과 오래된 잔재 폴더 정리를 한 번에 수행한다."""
+    """로그 삭제와 오래된 잔재 폴더 정리를 한 번에 수행한다."""
     candidates = iter_candidates(keep_days)
     groups = group_candidates(candidates)
     if show_status_only:
@@ -354,11 +328,13 @@ def run_archive_maintenance(keep_days: int, *, show_status_only: bool = False) -
             removed_files=0,
         )
 
-    compress_groups(groups)
-    removed_dirs, removed_files = prune_stale_date_dirs(keep_days)
+    removed_dirs, removed_files = prune_groups(groups)
+    stale_removed_dirs, stale_removed_files = prune_stale_date_dirs(keep_days)
+    removed_dirs += stale_removed_dirs
+    removed_files += stale_removed_files
     if removed_dirs or removed_files:
         print("=== 오래된 잔재 폴더 정리 결과 ===")
-        print(f"삭제한 잔재 파일 수: {removed_files}")
+        print(f"삭제한 잔재 포함 파일 수: {removed_files}")
         print(f"삭제한 빈 폴더 수: {removed_dirs}")
     return ArchiveMaintenanceResult(
         groups=tuple(groups),
@@ -369,11 +345,11 @@ def run_archive_maintenance(keep_days: int, *, show_status_only: bool = False) -
 
 def main() -> None:
     """CLI 진입점."""
-    parser = argparse.ArgumentParser(description="오래된 로그를 gzip 으로 압축합니다.")
+    parser = argparse.ArgumentParser(description="오래된 로그를 삭제해 보관 기간을 유지합니다.")
     parser.add_argument(
         "command",
-        choices=["status", "compress"],
-        help="status 는 후보 조회, compress 는 실제 압축 실행",
+        choices=["status", "prune"],
+        help="status 는 후보 조회, prune 는 실제 삭제 실행",
     )
     parser.add_argument(
         "--keep-days",

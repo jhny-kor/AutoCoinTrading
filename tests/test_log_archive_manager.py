@@ -1,4 +1,4 @@
-"""로그 압축 보관 기준 경계값 테스트."""
+"""로그 삭제 보관 기준 경계값 테스트."""
 
 import unittest
 from datetime import date

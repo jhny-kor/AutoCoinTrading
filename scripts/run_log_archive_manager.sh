@@ -1,6 +1,6 @@
 #!/bin/zsh
 # 수정 요약
-# - 로그 아카이브 매니저를 .venv/bin/python 우선, python3 대체 순서로 실행하는 래퍼 추가
+# - 로그 삭제형 보관 매니저를 .venv/bin/python 우선, python3 대체 순서로 실행하는 래퍼 유지
 
 set -euo pipefail
 

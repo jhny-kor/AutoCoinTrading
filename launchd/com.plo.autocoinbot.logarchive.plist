@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 수정 요약
-- 로그 압축 배치를 매일 00:10 에 실행하는 전용 launchd 잡 추가
-- 로그 압축 실행 로그를 운영 시작 로그와 분리해 별도 파일로 남기도록 구성
+- 로그 보관 배치를 매일 00:10 에 실행하는 전용 launchd 잡 유지
+- 압축형이 아니라 삭제형 보관 정리를 실행하도록 인자를 prune 으로 변경
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -13,7 +13,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/Users/plo/Documents/auto_coin_bot/scripts/run_log_archive_manager.sh</string>
-    <string>compress</string>
+    <string>prune</string>
   </array>
 
   <key>WorkingDirectory</key>
