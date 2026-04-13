@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-13: 장시간 걸리던 주간 알트/SOL 백테스트가 배치 요약 파일 생성 전에 사실상 멈추지 않도록 반복 지표 계산 입력을 최근 필요 구간으로 제한해 성능 병목을 줄였다.
 - 2026-04-10: 백테스트 실행 시 추가 override 세트를 임시 적용하고 summary 에 적용 세트 메타데이터를 남기도록 확장했다.
 - 알트 리플레이에서 점수 기반 비중 계산에 필요한 최소 거래량 기준값을 일관되게 재사용하도록 회귀 버그를 수정
 - 2026-04-09: score 기반 동적 자본 배분도 리플레이에 반영해 live 와 backtest 의 비중 규칙 차이를 줄이도록 확장
@@ -515,6 +516,73 @@ def get_active_candles_by_time(
     return candles[:end]
 
 
+def get_recent_active_candles_by_time(
+    candles: list[Candle],
+    timestamps: list[int],
+    current_timestamp_ms: int,
+    max_count: int,
+) -> list[Candle]:
+    """현재 시각까지 확정된 상위 주기 캔들 중 최근 필요한 개수만 반환한다."""
+    if max_count <= 0:
+        return []
+    end = bisect_right(timestamps, current_timestamp_ms)
+    start = max(0, end - max_count)
+    return candles[start:end]
+
+
+def build_full_ema_series(prices: list[float], period: int) -> list[float | None]:
+    """전체 히스토리 기준 EMA 시리즈를 원본 인덱스에 맞춰 계산한다."""
+    if period <= 0 or len(prices) < period:
+        return [None] * len(prices)
+
+    multiplier = 2 / (period + 1)
+    ema_values: list[float | None] = [None] * len(prices)
+    seed = sum(prices[:period]) / period
+    ema_values[period - 1] = seed
+    prev_ema = seed
+    for index in range(period, len(prices)):
+        prev_ema = (prices[index] - prev_ema) * multiplier + prev_ema
+        ema_values[index] = prev_ema
+    return ema_values
+
+
+def build_macd_histogram_series(
+    prices: list[float],
+    *,
+    fast_period: int,
+    slow_period: int,
+    signal_period: int,
+) -> list[float | None]:
+    """전체 히스토리 기준 MACD 히스토그램 시리즈를 계산한다."""
+    if (
+        fast_period <= 0
+        or slow_period <= 0
+        or signal_period <= 0
+        or fast_period >= slow_period
+        or len(prices) < slow_period + signal_period
+    ):
+        return [None] * len(prices)
+
+    fast_series = build_full_ema_series(prices, fast_period)
+    slow_series = build_full_ema_series(prices, slow_period)
+    compact_macd: list[float] = []
+    macd_indexes: list[int] = []
+    for index, (fast_value, slow_value) in enumerate(zip(fast_series, slow_series)):
+        if fast_value is None or slow_value is None:
+            continue
+        compact_macd.append(fast_value - slow_value)
+        macd_indexes.append(index)
+
+    signal_series = build_full_ema_series(compact_macd, signal_period)
+    histogram: list[float | None] = [None] * len(prices)
+    for compact_index, signal_value in enumerate(signal_series):
+        if signal_value is None:
+            continue
+        original_index = macd_indexes[compact_index]
+        histogram[original_index] = compact_macd[compact_index] - signal_value
+    return histogram
+
+
 def format_iso(timestamp_ms: int) -> str:
     """밀리초 타임스탬프를 ISO 문자열로 바꾼다."""
     return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat()
@@ -647,6 +715,14 @@ def simulate_alt_strategy(
     trade_records: list[TradeRecord] = []
     equity_curve: list[EquityPoint] = []
     entry_timing_state: dict[str, dict[str, int | str]] = {}
+    ma_period = 20
+    all_closes = [candle.close for candle in candles]
+    macd_histogram_series = build_macd_histogram_series(
+        all_closes,
+        fast_period=strategy.macd_fast_period,
+        slow_period=strategy.macd_slow_period,
+        signal_period=strategy.macd_signal_period,
+    )
 
     min_required = max(
         strategy.volume_lookback + 3,
@@ -656,9 +732,19 @@ def simulate_alt_strategy(
         strategy.noise_ratio_lookback + 3,
         25,
     )
+    max_indicator_history = max(
+        min_required + 2,
+        ma_period + strategy.trend_slope_lookback + 5,
+        strategy.bb_period + 5,
+        strategy.noise_ratio_lookback + 5,
+        max(29, 14 * 2 + 2),
+    )
+    htf_required = max(1, strategy.higher_timeframe_ma_period + 2)
+    btc_reference_required = max(1, strategy.correlation_lookback + 2)
     for index in range(min_required, len(candles)):
-        window = candles[: index + 1]
-        current = window[-1]
+        start_index = max(0, index + 1 - max_indicator_history)
+        window = candles[start_index : index + 1]
+        current = candles[index]
         if start_timestamp_ms is not None and current.timestamp_ms < start_timestamp_ms:
             continue
         current_date = local_date_key(current.timestamp_ms)
@@ -666,8 +752,7 @@ def simulate_alt_strategy(
             daily_pnl_date = current_date
             daily_realized_pnl_quote = 0.0
 
-        closes = [candle.close for candle in window]
-        ma_period = 20
+        closes = all_closes[start_index : index + 1]
         bullish, bearish, prev_close, prev_ma, last_close, last_ma = detect_sma_crossover(closes, ma_period)
         ma_series = [
             calc_sma(closes[: idx + 1], ma_period)
@@ -680,12 +765,7 @@ def simulate_alt_strategy(
             strategy.noise_ratio_lookback,
         )
         rsi_value = calc_rsi(closes, strategy.rsi_period)
-        _macd, _macd_signal, macd_histogram = calc_macd_histogram(
-            closes,
-            fast_period=strategy.macd_fast_period,
-            slow_period=strategy.macd_slow_period,
-            signal_period=strategy.macd_signal_period,
-        )
+        macd_histogram = macd_histogram_series[index]
         bb_upper, _bb_mid, _bb_lower = calc_bollinger_bands(
             closes,
             period=strategy.bb_period,
@@ -703,10 +783,11 @@ def simulate_alt_strategy(
             14,
         )
 
-        active_higher_timeframe = get_active_candles_by_time(
+        active_higher_timeframe = get_recent_active_candles_by_time(
             higher_timeframe_candles,
             higher_timeframe_timestamps,
             current.timestamp_ms,
+            htf_required,
         )
         htf_bullish = True
         htf_bearish = True
@@ -819,10 +900,11 @@ def simulate_alt_strategy(
 
         btc_reference_closes: list[float] = []
         if btc_reference_candles:
-            active_btc_reference = get_active_candles_by_time(
+            active_btc_reference = get_recent_active_candles_by_time(
                 btc_reference_candles,
                 btc_reference_timestamps,
                 current.timestamp_ms,
+                btc_reference_required,
             )
             btc_reference_closes = [candle.close for candle in active_btc_reference]
         correlation_with_btc = (
@@ -1180,6 +1262,11 @@ def simulate_btc_strategy(
         target_timeframe=settings.confirm_timeframe,
     )
     confirm_timestamps = [candle.timestamp_ms for candle in confirm_candles]
+    base_closes = [candle.close for candle in base_candles]
+    confirm_closes = [candle.close for candle in confirm_candles]
+    fast_ema_full = build_full_ema_series(base_closes, settings.fast_ema_period)
+    slow_ema_full = build_full_ema_series(base_closes, settings.slow_ema_period)
+    confirm_ema_full = build_full_ema_series(confirm_closes, settings.confirm_ema_period)
 
     cash = initial_state.cash_quote if initial_state is not None else initial_cash
     units = initial_state.units if initial_state is not None else 0.0
@@ -1223,9 +1310,20 @@ def simulate_btc_strategy(
         settings.bb_period + 5,
         settings.noise_ratio_lookback + 5,
     )
+    max_indicator_history = max(
+        min_required + 2,
+        settings.atr_period + 5,
+        settings.volume_lookback + 5,
+        settings.swing_lookback + 5,
+        settings.rsi_period + 5,
+        settings.bb_period + 5,
+        settings.noise_ratio_lookback + 5,
+        max(29, 14 * 2 + 2),
+    )
     for index in range(min_required, len(base_candles)):
-        window = base_candles[: index + 1]
-        current = window[-1]
+        start_index = max(0, index + 1 - max_indicator_history)
+        window = base_candles[start_index : index + 1]
+        current = base_candles[index]
         if start_timestamp_ms is not None and current.timestamp_ms < start_timestamp_ms:
             continue
         current_date = local_date_key(current.timestamp_ms)
@@ -1233,15 +1331,16 @@ def simulate_btc_strategy(
             daily_pnl_date = current_date
             daily_realized_pnl_quote = 0.0
 
-        closes = [candle.close for candle in window]
-        fast_ema_series = calc_ema_series(closes, settings.fast_ema_period)
-        slow_ema_series = calc_ema_series(closes, settings.slow_ema_period)
-        bullish, bearish, _, _, fast_ema, slow_ema = detect_ema_crossover(
-            closes,
-            settings.fast_ema_period,
-            settings.slow_ema_period,
-        )
-        last_close = closes[-1]
+        closes = base_closes[start_index : index + 1]
+        prev_fast = fast_ema_full[index - 1]
+        prev_slow = slow_ema_full[index - 1]
+        fast_ema = fast_ema_full[index]
+        slow_ema = slow_ema_full[index]
+        if None in {prev_fast, prev_slow, fast_ema, slow_ema}:
+            continue
+        bullish = prev_fast <= prev_slow and fast_ema > slow_ema
+        bearish = prev_fast >= prev_slow and fast_ema < slow_ema
+        last_close = base_closes[index]
         volume_ratio = calc_volume_ratio(window, settings.volume_lookback)
         atr_value = calc_atr(window, settings.atr_period)
         atr_pct = (atr_value / last_close) * 100 if last_close > 0 else 0.0
@@ -1255,18 +1354,21 @@ def simulate_btc_strategy(
             period=settings.bb_period,
             stddev_multiplier=settings.bb_stddev_multiplier,
         )
+        fast_ema_series = [value for value in fast_ema_full[max(0, index - settings.ema_slope_lookback - 1) : index + 1] if value is not None]
+        slow_ema_series = [value for value in slow_ema_full[max(0, index - settings.ema_slope_lookback - 1) : index + 1] if value is not None]
         fast_ema_slope_pct = calc_pct_slope(fast_ema_series, settings.ema_slope_lookback)
         slow_ema_slope_pct = calc_pct_slope(slow_ema_series, settings.ema_slope_lookback)
-        confirm_window = get_active_candles_by_time(confirm_candles, confirm_timestamps, current.timestamp_ms)
+        confirm_end = bisect_right(confirm_timestamps, current.timestamp_ms)
         confirm_filter_passed = True
         confirm_bullish = True
         if settings.enable_confirm_timeframe_filter:
             confirm_filter_passed = False
             confirm_bullish = False
-            if len(confirm_window) >= settings.confirm_ema_period:
-                confirm_closes = [candle.close for candle in confirm_window]
-                confirm_last_close = confirm_closes[-1]
-                confirm_last_ema = calc_ema_series(confirm_closes, settings.confirm_ema_period)[-1]
+            if confirm_end >= settings.confirm_ema_period:
+                confirm_last_close = confirm_closes[confirm_end - 1]
+                confirm_last_ema = confirm_ema_full[confirm_end - 1]
+                if confirm_last_ema is None:
+                    continue
                 confirm_bullish = confirm_last_close > confirm_last_ema
                 confirm_filter_passed = confirm_bullish
 
