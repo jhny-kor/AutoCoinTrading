@@ -1,5 +1,6 @@
 """
 수정 요약
+- 고거래량 구간에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용할 수 있는 설정 map 을 추가
 - 2026-04-10: BTC 손절 후 일정 시간 경과와 높은 점수 조건이면 fresh cross 없이 재진입 가능한 완화 설정을 추가
 - 2026-04-09: 손절 후 재진입은 최소 시간과 signal/confirm/fresh cross 복구를 함께 보는 패턴 기반 설정을 추가
 - 2026-04-08: BTC 심볼별 진입 확인 루프 override map 을 추가해 BTC/USDT 와 BTC/KRW 를 다르게 운용할 수 있게 확장
@@ -97,6 +98,9 @@ class BtcTrendSettings:
     min_volume_ratio: float
     min_volume_ratio_map: dict[str, float]
     choppy_min_volume_ratio_map: dict[str, float]
+    high_volume_ratio_threshold_map: dict[str, float]
+    high_volume_min_atr_pct_map: dict[str, float]
+    high_volume_extra_confirmation_loops_map: dict[str, int]
     position_ratio: float
     position_ratio_map: dict[str, float]
     enable_regime_position_scaling: bool
@@ -144,6 +148,18 @@ class BtcTrendSettings:
     def get_min_atr_pct(self, symbol: str) -> float:
         """심볼별 최소 ATR 기준 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.min_atr_pct_map.get(symbol, self.min_atr_pct)
+
+    def get_high_volume_ratio_threshold(self, symbol: str) -> float | None:
+        """고거래량 추가 조건을 적용할 거래량 배수 기준을 반환한다."""
+        return self.high_volume_ratio_threshold_map.get(symbol)
+
+    def get_high_volume_min_atr_pct(self, symbol: str) -> float | None:
+        """고거래량 구간에서 요구할 추가 최소 ATR 기준을 반환한다."""
+        return self.high_volume_min_atr_pct_map.get(symbol)
+
+    def get_high_volume_extra_confirmation_loops(self, symbol: str) -> int:
+        """고거래량 구간에서 추가할 confirmation loop 수를 반환한다."""
+        return max(0, self.high_volume_extra_confirmation_loops_map.get(symbol, 0))
 
     def get_regime_position_scale(self, regime: str | None) -> float:
         """레짐별 포지션 비중 스케일을 반환한다."""
@@ -251,6 +267,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         min_volume_ratio=config_float("btc_trend", "min_volume_ratio", 1.05, env_key="BTC_TREND_MIN_VOLUME_RATIO"),
         min_volume_ratio_map=parse_symbol_float_map(config_value("btc_trend", "min_volume_ratio_map", {}, env_key="BTC_TREND_MIN_VOLUME_RATIO_MAP")),
         choppy_min_volume_ratio_map=parse_symbol_float_map(config_value("btc_trend", "choppy_min_volume_ratio_map", {}, env_key="BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP")),
+        high_volume_ratio_threshold_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_ratio_threshold_map", {}, env_key="BTC_TREND_HIGH_VOLUME_RATIO_THRESHOLD_MAP")),
+        high_volume_min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_min_atr_pct_map", {}, env_key="BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP")),
+        high_volume_extra_confirmation_loops_map=parse_symbol_int_map(config_value("btc_trend", "high_volume_extra_confirmation_loops_map", {}, env_key="BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP")),
         position_ratio=config_float("btc_trend", "position_ratio", 0.25, env_key="BTC_TREND_POSITION_RATIO"),
         position_ratio_map=parse_symbol_float_map(config_value("btc_trend", "position_ratio_map", {}, env_key="BTC_TREND_POSITION_RATIO_MAP")),
         enable_regime_position_scaling=config_bool("btc_trend", "enable_regime_position_scaling", True, env_key="BTC_TREND_ENABLE_REGIME_POSITION_SCALING"),

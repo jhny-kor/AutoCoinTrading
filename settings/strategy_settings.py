@@ -1,5 +1,6 @@
 """
 수정 요약
+- 심볼별 signal_score 최소 기준 오버라이드를 추가해 ETH/KRW 같은 알트를 개별적으로 더 보수화할 수 있게 확장
 - 2026-04-10: 알트 보수형 튜닝을 위해 최대 진입 이격도와 최대 거래량 배수 상한 설정을 추가했다.
 - 2026-04-09: 알트 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 설정을 추가
 - 2026-04-08: 심볼별 정수 override 공통 파서를 추가해 BTC 확인 루프처럼 map 기반 int 설정을 재사용할 수 있게 확장
@@ -133,6 +134,7 @@ class StrategySettings:
     break_even_guard_floor_net_pnl_pct_map: dict[str, float]
     break_even_guard_max_profit_retrace_pct: float
     signal_score_min: float
+    signal_score_min_map: dict[str, float]
     dynamic_signal_score_min: float
     entry_confirmation_loops: int
     enable_correlation_filter: bool
@@ -182,6 +184,10 @@ class StrategySettings:
     def get_max_entry_gap_pct(self, symbol: str) -> float:
         """심볼별 최대 진입 이격도 상한 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.max_entry_gap_pct_map.get(symbol, self.max_entry_gap_pct)
+
+    def get_signal_score_min(self, symbol: str) -> float:
+        """심볼별 최소 신호 점수 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
+        return self.signal_score_min_map.get(symbol, self.signal_score_min)
 
     def get_regime_position_scale(self, regime: str | None) -> float:
         """레짐별 포지션 비중 스케일을 반환한다."""
@@ -557,6 +563,7 @@ def load_strategy_settings(
         break_even_guard_floor_net_pnl_pct_map=parse_symbol_float_map(config_value("strategy", "break_even_guard_floor_net_pnl_pct_map", {}, env_key="STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP")),
         break_even_guard_max_profit_retrace_pct=config_float("strategy", "break_even_guard_max_profit_retrace_pct", 0.6, env_key="STRATEGY_BREAK_EVEN_GUARD_MAX_PROFIT_RETRACE_PCT"),
         signal_score_min=config_float("strategy", "signal_score_min", 55, env_key="STRATEGY_SIGNAL_SCORE_MIN"),
+        signal_score_min_map=parse_symbol_float_map(config_value("strategy", "signal_score_min_map", {}, env_key="STRATEGY_SIGNAL_SCORE_MIN_MAP")),
         dynamic_signal_score_min=config_float("strategy", "dynamic_signal_score_min", 70, env_key="STRATEGY_DYNAMIC_SIGNAL_SCORE_MIN"),
         entry_confirmation_loops=config_int("strategy", "entry_confirmation_loops", 2, env_key="STRATEGY_ENTRY_CONFIRMATION_LOOPS"),
         enable_correlation_filter=config_bool("strategy", "enable_correlation_filter", True, env_key="STRATEGY_ENABLE_CORRELATION_FILTER"),

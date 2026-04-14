@@ -65,6 +65,20 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(settings.get_btc_atr_position_scale(0.14), 0.45)
         self.assertEqual(settings.get_btc_atr_position_scale(0.10), 0.25)
 
+    def test_loads_symbol_specific_signal_score_min(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_SIGNAL_SCORE_MIN": "55",
+                "STRATEGY_SIGNAL_SCORE_MIN_MAP": "ETH/KRW:80",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertEqual(80, settings.get_signal_score_min("ETH/KRW"))
+        self.assertEqual(55, settings.get_signal_score_min("XRP/KRW"))
+
 
 if __name__ == "__main__":
     unittest.main()

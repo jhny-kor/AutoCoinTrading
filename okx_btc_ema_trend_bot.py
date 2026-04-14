@@ -1,5 +1,6 @@
 """
 수정 요약
+- 고거래량 BTC 진입에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용해 volume spike 추격 손실을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 BTC 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: BTC 손절 후 일정 시간과 높은 점수면 fresh cross 없이 재진입 가능한 예외 경로를 추가
 - 2026-04-09: BTC 손절 후 재진입은 최소 시간 + confirm/fresh cross 복구 기준으로 보도록 패턴 기반 gate 를 추가
@@ -532,6 +533,16 @@ def run_bot():
                 and volume_ratio >= effective_min_volume_ratio
             )
             effective_min_atr_pct = effective_min_atr_pct * regime_policy.min_atr_multiplier
+            high_volume_ratio_threshold = settings.get_high_volume_ratio_threshold(symbol)
+            if (
+                volume_ratio is not None
+                and high_volume_ratio_threshold is not None
+                and volume_ratio >= high_volume_ratio_threshold
+            ):
+                high_volume_min_atr_pct = settings.get_high_volume_min_atr_pct(symbol)
+                if high_volume_min_atr_pct is not None:
+                    effective_min_atr_pct = max(effective_min_atr_pct, high_volume_min_atr_pct)
+                regime_confirmation_loops += settings.get_high_volume_extra_confirmation_loops(symbol)
             atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
             should_alert, previous_regime = update_regime_state(
                 exchange_name="okx",

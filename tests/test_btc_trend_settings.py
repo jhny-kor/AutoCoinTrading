@@ -38,6 +38,23 @@ class BtcTrendSettingsTests(unittest.TestCase):
         self.assertEqual(settings.get_atr_position_scale(0.12), 0.6)
         self.assertEqual(settings.get_atr_position_scale(0.09), 0.35)
 
+    def test_loads_high_volume_atr_and_confirmation_overrides(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BTC_TREND_HIGH_VOLUME_RATIO_THRESHOLD_MAP": "BTC/USDT:3.0,BTC/KRW:3.0",
+                "BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP": "BTC/USDT:0.16,BTC/KRW:0.14",
+                "BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP": "BTC/KRW:1",
+            },
+            clear=False,
+        ):
+            settings = load_btc_trend_settings()
+
+        self.assertEqual(3.0, settings.get_high_volume_ratio_threshold("BTC/USDT"))
+        self.assertEqual(0.14, settings.get_high_volume_min_atr_pct("BTC/KRW"))
+        self.assertEqual(1, settings.get_high_volume_extra_confirmation_loops("BTC/KRW"))
+        self.assertEqual(0, settings.get_high_volume_extra_confirmation_loops("BTC/USDT"))
+
 
 if __name__ == "__main__":
     unittest.main()

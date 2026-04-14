@@ -1,5 +1,6 @@
 """
 수정 요약
+- ETH/KRW 같은 약한 알트는 심볼별 signal_score 최소 기준 오버라이드를 적용해 저품질 진입을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: 알트 보수형 조정으로 최대 진입 이격도와 최대 거래량 배수 상한을 추가하고 과열 추격 진입을 더 줄이도록 보강
 - 2026-04-09: 알트 손절 후 재진입을 최소 시간 + 패턴 복구 기준으로 보도록 패턴 기반 재진입 gate 를 추가
@@ -673,6 +674,7 @@ def run_bot():
                     )
 
                 base_min_gap_pct = strategy.get_crossover_gap_pct(symbol)
+                effective_signal_score_min = strategy.get_signal_score_min(symbol)
                 noise_gap_multiplier = 1.0
                 if strategy.enable_noise_ratio_adaptation and noise_ratio is not None:
                     noise_gap_multiplier = 1.0 + (
@@ -739,7 +741,7 @@ def run_bot():
                     enable_macd_filter=strategy.enable_macd_filter,
                     ma_slope_pct=ma_slope_pct,
                     price_slope_pct=price_slope_pct,
-                    signal_score_min=strategy.signal_score_min,
+                    signal_score_min=effective_signal_score_min,
                     entry_mode=strategy.entry_mode,
                     bb_width_pct=bb_width_pct,
                     squeeze_max_bandwidth_pct=strategy.squeeze_max_bandwidth_pct,
@@ -965,7 +967,7 @@ def run_bot():
                     log(f"[{symbol}] 포지션 인식 최소 수량도 동일하게 {position_threshold:.4f} {base} 로 적용합니다.")
                 if (entry_signal or bearish) and not signal_is_strong:
                     log(
-                        f"[{symbol}] 신호 점수 {signal_score:.1f} 가 기준 {strategy.signal_score_min:.1f} 미만이라 이번 신호는 건너뜁니다."
+                        f"[{symbol}] 신호 점수 {signal_score:.1f} 가 기준 {effective_signal_score_min:.1f} 미만이라 이번 신호는 건너뜁니다."
                     )
                 if entry_signal and not rsi_filter_passed:
                     log(
@@ -1325,7 +1327,7 @@ def run_bot():
                     trend_follow_entry=trend_follow_entry,
                     signal_is_strong=signal_is_strong,
                     signal_score=signal_score,
-                    min_signal_score=strategy.signal_score_min,
+                    min_signal_score=effective_signal_score_min,
                     gap_pct=gap_pct,
                     min_gap_pct=min_gap_pct,
                     max_gap_pct=max_entry_gap_pct,
@@ -1398,7 +1400,7 @@ def run_bot():
                                 "signal_is_strong": signal_is_strong,
                                 "signal_score": signal_score,
                             },
-                            required={"strong_signal_required": True, "min_signal_score": strategy.signal_score_min},
+                            required={"strong_signal_required": True, "min_signal_score": effective_signal_score_min},
                         ),
                         FunnelStep(
                             stage="correlation_guard",
