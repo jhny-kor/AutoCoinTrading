@@ -1,5 +1,6 @@
 """
 수정 요약
+- 시간대 리포트, 최근 체결, 레짐/시장 요약, 최근 로그의 심볼 라벨 앞에 초록 원 배지를 붙여 텔레그램 가독성을 높임
 - /analysis 와 /weekly 에 최신 튜닝 세트 diff 요약을 붙여 보수형 대비 혼합형 개선 여부를 바로 보이도록 확장
 - /status, /positions, /analysis, 일일/주간 리포트에 복구 포지션 상태와 일일 손실 제한 상태를 함께 보여주도록 확장
 - 백테스트 대비 실거래 설명 섹션에 누락 심볼 안내와 더 구체적인 차이 설명을 함께 넣도록 보강
@@ -433,7 +434,7 @@ def build_recovered_position_state_text(settings: ListenerSettings, limit: int =
                 detail_parts.append("부분손절 완료")
         if cooldown_remaining_sec > 0:
             detail_parts.append(f"쿨다운 {cooldown_remaining_sec}초 남음")
-        lines.append(f"- {row['label']} | {symbol} | " + " | ".join(detail_parts))
+        lines.append(f"- {row['label']} | {format_symbol_badge(symbol)} | " + " | ".join(detail_parts))
     return "\n".join(lines)
 
 
@@ -1170,7 +1171,7 @@ def build_market_analysis_text(settings: ListenerSettings) -> str:
     lines = ["시장 로그 분석 요약"]
     for item in summaries:
         lines.append(
-            f"- {item.exchange.upper()} {item.symbol} | "
+            f"- {item.exchange.upper()} {format_symbol_badge(item.symbol)} | "
             f"수집 {item.count}건 | "
             f"평균 이격도 {item.avg_gap_pct:.4f}% | "
             f"평균 절대 변화율 {item.avg_abs_change_pct:.4f}% | "
@@ -1307,7 +1308,7 @@ def build_regime_text(settings: ListenerSettings) -> str:
         rsi_text = "-" if snapshot.rsi is None else f"{snapshot.rsi:.1f}"
         ready_text = "Y" if snapshot.public_buy_ready else "N"
         lines.append(
-            f"- {exchange} {symbol} | {snapshot.regime} | "
+            f"- {exchange} {format_symbol_badge(symbol)} | {snapshot.regime} | "
             f"거래량 {volume_ratio}배 | 변화율 {abs_change} | "
             f"이격도 {gap_pct} | RSI {rsi_text} | 준비 {ready_text}"
         )
@@ -1754,7 +1755,7 @@ def build_recent_trades_text(limit: int = 5) -> str:
         side_label = "매수" if side == "buy" else "매도"
 
         lines.append(
-            f"- {ts} | {exchange_name} | {symbol} | {side_label} | "
+            f"- {ts} | {exchange_name} | {format_symbol_badge(symbol)} | {side_label} | "
             f"수량 {amount_text} | 금액 {value_text} | 손익 {pnl_text} | 사유 {reason}"
         )
     return "\n".join(lines)
@@ -1910,6 +1911,12 @@ def format_numeric_token_for_telegram(token: str) -> str:
     return f"{sign}{int(raw):,}"
 
 
+def format_symbol_badge(symbol: str) -> str:
+    """텔레그램 리포트에서 심볼 앞에 초록 원을 붙인다."""
+    cleaned = symbol.strip()
+    return f"🟢 {cleaned}" if cleaned else "🟢"
+
+
 def format_recent_log_line_for_telegram(line: str) -> str:
     """대괄호 안 텍스트는 유지하고, 그 밖의 숫자만 텔레그램용으로 포맷한다."""
     parts = re.split(r"(\[[^\]]*\])", line)
@@ -1995,7 +2002,7 @@ def build_last_logs_text(settings: ListenerSettings) -> str:
         lines.append("")
         lines.append(f"[{label}]")
         for symbol, recent_lines in grouped_lines.items():
-            lines.append(f"- {symbol}")
+            lines.append(f"- {format_symbol_badge(symbol)}")
             lines.extend(
                 f"  {format_recent_log_line_for_telegram(line)}"
                 for line in recent_lines

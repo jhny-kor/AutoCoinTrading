@@ -1,4 +1,7 @@
 """
+수정 요약
+- 체결/손절/에러 텔레그램 알림 제목에서 심볼 앞에 초록 원 배지를 붙여 식별성을 높임
+
 텔레그램 알림 유틸
 
 - `config/runtime.toml` + env override / secrets 레이어를 중앙 환경 로더로 읽도록 정리
@@ -154,6 +157,12 @@ def parse_bool(raw: str | None, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def format_symbol_badge(symbol: str) -> str:
+    """텔레그램 메시지에서 심볼 앞에 초록 원을 붙인다."""
+    cleaned = symbol.strip()
+    return f"🟢 {cleaned}" if cleaned else "🟢"
+
+
 @dataclass(frozen=True)
 class TelegramNotifier:
     """텔레그램 전송 설정과 유틸 메서드."""
@@ -227,7 +236,7 @@ class TelegramNotifier:
         """매수 체결 알림을 보낸다."""
         if not self.enable_buy_notification:
             return False
-        return self.send_message(f"[{exchange_name}] {symbol} 매수 체결\n{detail}")
+        return self.send_message(f"[{exchange_name}] {format_symbol_badge(symbol)} 매수 체결\n{detail}")
 
     def notify_sell_fill(
         self, exchange_name: str, symbol: str, detail: str
@@ -235,7 +244,7 @@ class TelegramNotifier:
         """익절 매도 체결 알림을 보낸다."""
         if not self.enable_sell_notification:
             return False
-        return self.send_message(f"[{exchange_name}] {symbol} 매도 체결\n{detail}")
+        return self.send_message(f"[{exchange_name}] {format_symbol_badge(symbol)} 매도 체결\n{detail}")
 
     def notify_stop_loss_fill(
         self, exchange_name: str, symbol: str, detail: str
@@ -243,7 +252,7 @@ class TelegramNotifier:
         """손절 매도 체결 알림을 보낸다."""
         if not self.enable_stop_loss_notification:
             return False
-        return self.send_message(f"[{exchange_name}] {symbol} 손절 발생\n{detail}")
+        return self.send_message(f"[{exchange_name}] {format_symbol_badge(symbol)} 손절 발생\n{detail}")
 
     def notify_error_message(
         self, exchange_name: str, symbol: str, detail: str
@@ -257,7 +266,7 @@ class TelegramNotifier:
             detail=detail,
         )
         text = (
-            f"[{exchange_name}] {symbol} 에러 발생\n"
+            f"[{exchange_name}] {format_symbol_badge(symbol)} 에러 발생\n"
             f"인시던트 ID: {incident['id']}\n"
             f"반복 횟수: {incident['count']}\n"
             f"{detail}"
