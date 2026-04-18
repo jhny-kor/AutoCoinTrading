@@ -642,10 +642,11 @@ def run_bot():
 
             log("-" * 60)
             log(f"[{symbol}] 현재 종가: {last_close:.2f}")
+            donchian_upper_text = "N/A" if donchian_entry_upper is None else f"{donchian_entry_upper:.2f}"
+            donchian_lower_text = "N/A" if donchian_exit_lower is None else f"{donchian_exit_lower:.2f}"
             log(
                 f"[{symbol}] 진입 모드: {settings.entry_mode.upper()} "
-                f"(Donchian 상단: {0.0 if donchian_entry_upper is None else donchian_entry_upper:.2f}, "
-                f"하단: {0.0 if donchian_exit_lower is None else donchian_exit_lower:.2f})"
+                f"(Donchian 상단: {donchian_upper_text}, 하단: {donchian_lower_text})"
             )
             log(
                 f"[{symbol}] EMA 상태 - 이전 {prev_fast:.2f}/{prev_slow:.2f}, 현재 {last_fast:.2f}/{last_slow:.2f}"

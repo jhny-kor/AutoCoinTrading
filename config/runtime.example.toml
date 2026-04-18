@@ -18,6 +18,10 @@ score_bucket_weak = 55
 
 [btc_trend]
 version = "btc_mid_v1"
+entry_mode = "donchian"
+donchian_entry_lookback = 20
+donchian_exit_lookback = 10
+donchian_confirm_breakout_close = true
 
 [okx]
 sandbox = false
@@ -25,6 +29,11 @@ trade_risk_per_trade = 1.0
 
 [strategy]
 version = "alt_live_v1"
+entry_mode = "squeeze"
+bb_period = 20
+bb_stddev = 2.0
+squeeze_max_bandwidth_pct = 0.60
+squeeze_min_volume_ratio = 1.80
 
 [telegram]
 enabled = true

@@ -11,6 +11,12 @@
 
 현재는 `단타/인트라데이 전용`으로 `BTC 전용 전략`과 `알트 전용 전략`을 나누어 운영합니다.
 
+### 2026-04-18 현재 적용 핵심 강화 요약
+
+- 4차 진입 모드 전환
+  - 알트: `Bollinger Squeeze + 거래량 폭발 돌파` 모드를 실제 운영 기본값으로 전환. `STRATEGY_ENTRY_MODE="squeeze"`.
+  - BTC: `Donchian Channel + ATR 돌파` 모드를 실제 운영 기본값으로 전환. `BTC_TREND_ENTRY_MODE="donchian"`.
+
 ### 2026-04-06 현재 적용 핵심 강화 요약
 
 - 3차 로직 강화 (병렬 진입 모드 추가)

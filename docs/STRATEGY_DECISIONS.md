@@ -491,6 +491,29 @@
   - 실거래는 수익 보호 신호가 너무 늦어 장중 수익 대부분을 되돌렸다고 판단
   - 따라서 `ETH/USDT` 는 다른 알트보다 더 빠르게 보호를 켜고, 음수로 내려가기 전 더 높은 순익 구간에서 정리하는 편이 맞음
 
+### 25. BTC Donchian / 알트 Squeeze 모드 활성화 (2026-04-18, entry mode activation)
+
+- 변경 내용:
+  - BTC 기본 진입 모드를 `ema` 에서 `donchian` 으로 전환
+  - 알트 기본 진입 모드를 `ma` 에서 `squeeze` 로 전환
+  - 운영 로그에서 Donchian / Bollinger 지표값이 `N/A` 로 명확히 보이도록 문구 보정
+- 변경 전 -> 변경 후:
+  - `BTC_TREND_ENTRY_MODE`: `ema -> donchian`
+  - `BTC_TREND_DONCHIAN_ENTRY_LOOKBACK`: `미설정 -> 20`
+  - `BTC_TREND_DONCHIAN_EXIT_LOOKBACK`: `미설정 -> 10`
+  - `BTC_TREND_DONCHIAN_CONFIRM_BREAKOUT_CLOSE`: `미설정 -> true`
+  - `STRATEGY_ENTRY_MODE`: `ma -> squeeze`
+  - `STRATEGY_BB_PERIOD`: `미설정 -> 20`
+  - `STRATEGY_BB_STDDEV`: `미설정 -> 2.0`
+  - `STRATEGY_SQUEEZE_MAX_BANDWIDTH_PCT`: `미설정 -> 0.60`
+  - `STRATEGY_SQUEEZE_MIN_VOLUME_RATIO`: `미설정 -> 1.80`
+- 근거 로그:
+  - 최근 4일 BTC 는 `partial_take_profit / trailing_take_profit` 쪽은 살아 있지만 약한 EMA 크로스 노이즈가 계속 관찰됨
+  - 최근 알트 로그에서는 BB Width 가 `0.34% ~ 0.51%` 구간으로 자주 나타나 밴드 수축 구간 선별이 가능했고, 후속 탄력 없는 MA 진입을 줄일 여지가 있었음
+- 해석:
+  - BTC 는 Donchian 돌파 기반으로 추세 노이즈를 줄이고 추세 러너를 더 길게 가져가는 방향을 우선 실험
+  - 알트는 Bollinger Squeeze + 거래량 확장 돌파로 진입 빈도를 줄이되, 후속 탄력 없는 약한 진입을 줄이는 방향으로 전환
+
 ### 25. 레짐별 포지션 비중 1차 적용 (2026-04-03, alt_live_v1 / btc_mid_v1)
 
 - 변경 내용:

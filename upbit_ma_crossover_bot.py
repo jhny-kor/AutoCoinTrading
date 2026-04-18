@@ -976,8 +976,11 @@ def run_bot():
                     f"가격 기울기: {0.0 if price_slope_pct is None else price_slope_pct:.4f}% | "
                     f"신호 스코어: {signal_score:.1f}"
                 )
-                log(f"[{symbol}] 진입 모드: {strategy.entry_mode.upper()} "
-                    f"(BB Width: {bb_width_pct:.2f}% if bb_width_pct else N/A, 기준 {strategy.squeeze_max_bandwidth_pct}%)")
+                bb_width_text = "N/A" if bb_width_pct is None else f"{bb_width_pct:.2f}%"
+                log(
+                    f"[{symbol}] 진입 모드: {strategy.entry_mode.upper()} "
+                    f"(BB Width: {bb_width_text}, 기준 {strategy.squeeze_max_bandwidth_pct:.2f}%)"
+                )
                 log(f"[{symbol}] 레짐 라우터 선택 전략: {strategy_key}")
                 log(
                     f"[{symbol}] 진입 상태 머신: {entry_timing_snapshot.phase} "
