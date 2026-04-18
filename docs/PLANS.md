@@ -16,6 +16,9 @@
 - 4차 진입 모드 전환
   - 알트: `Bollinger Squeeze + 거래량 폭발 돌파` 모드를 실제 운영 기본값으로 전환. `STRATEGY_ENTRY_MODE="squeeze"`.
   - BTC: `Donchian Channel + ATR 돌파` 모드를 실제 운영 기본값으로 전환. `BTC_TREND_ENTRY_MODE="donchian"`.
+  - 해석:
+    - BTC는 EMA 크로스 노이즈를 줄이고, 채널 돌파형 강추세만 더 선별적으로 추종합니다.
+    - 알트는 단순 MA 돌파보다 `밴드 수축 + 거래량 확장` 구간만 우선 진입해 후속 탄력이 약한 진입을 줄입니다.
 
 ### 2026-04-06 현재 적용 핵심 강화 요약
 
@@ -45,9 +48,9 @@
   - BTC가 `LOW_ENERGY`이거나 `atr_pct`가 매우 낮은 구간에서는 알트 신규 진입을 바로 끄기보다 먼저 비중을 줄여 저엣지 진입을 완화
 
 - BTC 전용 전략
-  - 기본 개념: 5분봉 EMA 추세추종 + 15분봉 확인
-  - 매수 조건: EMA 골든크로스 또는 상승 정렬 유지, 거래량, ATR, RSI, 볼린저 밴드 폭, EMA 기울기, 상위 타임프레임 조건을 만족하고 상태 머신 확인을 통과할 때
-  - 청산 조건: ATR 또는 최근 스윙 기반 손절, 부분익절 후 잔량 트레일링, 수수료 반영 순익 보호 익절, 선택적 데드크로스 추세 종료 청산
+  - 기본 개념: 5분봉 `Donchian + ATR` 추세추종 + 15분봉 확인
+  - 매수 조건: Donchian 상단 돌파, 거래량, ATR, RSI, 볼린저 밴드 폭, EMA 기울기, 상위 타임프레임 조건을 만족하고 상태 머신 확인을 통과할 때
+  - 청산 조건: ATR 또는 최근 스윙 기반 손절, Donchian 하단 이탈, 부분익절 후 잔량 트레일링, 수수료 반영 순익 보호 익절
   - 현재 적용 핵심값:
     - `BTC_TREND_MIN_EMA_SPREAD_PCT_MAP=BTC/USDT:0.030,BTC/KRW:0.030`
     - `BTC_TREND_SIGNAL_SCORE_MIN=62`
@@ -74,8 +77,8 @@
     - 다만 BTC는 `confirm=true`와 높은 점수가 충분히 유지되면 일정 시간 뒤 `fresh_cross` 없이도 예외 재진입이 가능하도록 완화
     - BTC도 `regime`뿐 아니라 `ATR 퍼센트`가 너무 낮은 구간에서는 신규 진입 비중을 단계형으로 줄여 저변동 구간 과진입을 완화
 - 알트 전용 전략
-  - 기본 개념: 1분봉 20기간 이동평균선 돌파 기반 추세 추종
-  - 매수 조건: 가격이 이동평균선을 아래에서 위로 돌파하거나 상단 유지 추세 조건을 만족하고, 최소 이격도, RSI, MACD, 기울기, 상태 머신 조건을 함께 통과할 때
+  - 기본 개념: 1분봉 `Bollinger Squeeze + 거래량 확장` 기반 돌파 추종
+  - 매수 조건: 밴드폭이 기준 이하로 수축한 뒤 상단 돌파가 나오고, 거래량 확장, RSI, MACD, 기울기, 상태 머신 조건을 함께 통과할 때
   - 일반 매도 조건: 가격이 이동평균선을 위에서 아래로 이탈하고, 최소 익절률 또는 순익 보호 익절 조건을 만족할 때
   - 손절 조건: 손실률이 코인별 기준보다 커지면 데드크로스 없이 즉시 전량 청산
   - 분할 진입: 한 번에 전량 진입하지 않고 설정된 비율만큼 나눠서 진입
@@ -362,6 +365,61 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
 - 하루 최대 거래 횟수 제한
 - 일일 최대 수익 도달 시 거래 중단
 - 코인별 거래량/변동성 기준 세분화
+
+## 다음 로드맵
+
+### 1단계. Donchian / Squeeze 검증
+
+- 최소 `1~3일`은 현재 모드를 그대로 유지합니다.
+- 확인 항목
+  - BTC: 거래 수, `stop_loss` 비중, 평균 `MFE`, 평균 순손익률
+  - 알트: 진입 수 감소 여부, `profit_protect` / `break_even_guard` 비중 증가 여부
+  - 공통: `buy_ready -> filled` 비율, 심볼별 진입 차단 이유 분포
+
+### 2단계. BTC Donchian 세부 튜닝
+
+- 우선 조정 후보
+  - `BTC_TREND_DONCHIAN_ENTRY_LOOKBACK`
+  - `BTC_TREND_DONCHIAN_EXIT_LOOKBACK`
+  - `BTC_TREND_DONCHIAN_CONFIRM_BREAKOUT_CLOSE`
+- 목표
+  - 약한 돌파 추격은 줄이고
+  - `partial_take_profit -> trailing_take_profit` 러너 비중을 늘립니다.
+
+### 3단계. 알트 Squeeze 세부 튜닝
+
+- 우선 조정 후보
+  - `STRATEGY_SQUEEZE_MAX_BANDWIDTH_PCT`
+  - `STRATEGY_SQUEEZE_MIN_VOLUME_RATIO`
+  - 심볼별 `min_volume_ratio`, `max_entry_gap_pct`
+- 목표
+  - 후속 탄력 없는 진입 감소
+  - `ETH/USDT`, `ETH/KRW`, `XRP/KRW`, `XRP/USDT` 중 실제로 squeeze가 잘 맞는 심볼 선별
+
+### 4단계. 잔량 러너 관리 분리
+
+- 다음 후보는 새 진입보다 `부분익절 후 잔량 전용 관리` 입니다.
+- 목표
+  - BTC/XRP의 러너를 더 길게 가져가고
+  - 이미 잠근 수익을 다시 크게 반납하지 않도록 분리 관리합니다.
+
+### 5단계. 레짐 전환형 전략 선택기
+
+- Donchian / Squeeze 검증이 끝나면
+  - `TRENDING`에서만 적극 진입
+  - `CHOPPY`, `LOW_ENERGY`에서는 더 보수적인 경로
+로 확장합니다.
+- 목표
+  - 전략 자체보다 장세별 적용 전략을 다르게 해 손절과 과매매를 더 줄이는 것입니다.
+
+### 6단계. 그 이후 후보
+
+- `KAMA 적응형 평균`
+  - 우선 `ETH/USDT`, `ETH/KRW` 실험용 후보
+- `Cross-Sectional Momentum 로테이션`
+  - 당장 매매 규칙보다 `후보 심볼 리포트`를 먼저 만드는 쪽이 맞습니다.
+- 판단 기준
+  - 현재 Donchian / Squeeze가 기대만큼 개선되지 않을 때만 2차 전략으로 진행합니다.
 
 ## 향후 후보안
 
