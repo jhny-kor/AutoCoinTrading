@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 현물 알트 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 공통 설정을 추가
 - 심볼별 signal_score 최소 기준 오버라이드를 추가해 ETH/KRW 같은 알트를 개별적으로 더 보수화할 수 있게 확장
 - 2026-04-10: 알트 보수형 튜닝을 위해 최대 진입 이격도와 최대 거래량 배수 상한 설정을 추가했다.
 - 2026-04-09: 알트 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 설정을 추가
@@ -106,6 +107,9 @@ class StrategySettings:
     min_volume_ratio_map: dict[str, float]
     max_volume_ratio: float
     max_volume_ratio_map: dict[str, float]
+    enable_okx_funding_rate_guard: bool
+    okx_funding_rate_max_long_bias: float
+    okx_funding_rate_cache_ttl_sec: float
     position_ratio_map: dict[str, float]
     enable_regime_position_scaling: bool
     regime_position_scale_map: dict[str, float]
@@ -535,6 +539,9 @@ def load_strategy_settings(
         min_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "min_volume_ratio_map", {}, env_key="STRATEGY_MIN_VOLUME_RATIO_MAP")),
         max_volume_ratio=config_float("strategy", "max_volume_ratio", 2.5, env_key="STRATEGY_MAX_VOLUME_RATIO"),
         max_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "max_volume_ratio_map", {}, env_key="STRATEGY_MAX_VOLUME_RATIO_MAP")),
+        enable_okx_funding_rate_guard=config_bool("strategy", "enable_okx_funding_rate_guard", True, env_key="STRATEGY_ENABLE_OKX_FUNDING_RATE_GUARD"),
+        okx_funding_rate_max_long_bias=config_float("strategy", "okx_funding_rate_max_long_bias", 0.0005, env_key="STRATEGY_OKX_FUNDING_RATE_MAX_LONG_BIAS"),
+        okx_funding_rate_cache_ttl_sec=config_float("strategy", "okx_funding_rate_cache_ttl_sec", 300.0, env_key="STRATEGY_OKX_FUNDING_RATE_CACHE_TTL_SEC"),
         position_ratio_map=parse_symbol_float_map(config_value("strategy", "position_ratio_map", {}, env_key="STRATEGY_POSITION_RATIO_MAP")),
         enable_regime_position_scaling=config_bool("strategy", "enable_regime_position_scaling", True, env_key="STRATEGY_ENABLE_REGIME_POSITION_SCALING"),
         regime_position_scale_map=parse_symbol_float_map(config_value("strategy", "regime_position_scale_map", {}, env_key="STRATEGY_REGIME_POSITION_SCALE_MAP")),

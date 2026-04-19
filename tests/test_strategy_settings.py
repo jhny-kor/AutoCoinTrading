@@ -79,6 +79,22 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(80, settings.get_signal_score_min("ETH/KRW"))
         self.assertEqual(55, settings.get_signal_score_min("XRP/KRW"))
 
+    def test_loads_okx_funding_rate_guard_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_ENABLE_OKX_FUNDING_RATE_GUARD": "true",
+                "STRATEGY_OKX_FUNDING_RATE_MAX_LONG_BIAS": "0.0004",
+                "STRATEGY_OKX_FUNDING_RATE_CACHE_TTL_SEC": "180",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertTrue(settings.enable_okx_funding_rate_guard)
+        self.assertEqual(0.0004, settings.okx_funding_rate_max_long_bias)
+        self.assertEqual(180.0, settings.okx_funding_rate_cache_ttl_sec)
+
 
 if __name__ == "__main__":
     unittest.main()

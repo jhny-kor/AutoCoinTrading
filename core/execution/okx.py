@@ -1,5 +1,6 @@
 """
 작업 요약
+- OKX 현물 심볼을 대응 SWAP funding rate 로 조회하고, 짧은 TTL 캐시로 재사용하는 helper 를 추가
 - `config/runtime.toml` + env override 레이어를 중앙 환경 로더로 읽도록 정리
 - typed config access helper 를 사용해 OKX 설정 로딩의 문자열 파싱을 일관되게 정리
 - OKX 설정 로드, 조회 재시도, 잔고 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
@@ -15,6 +16,11 @@ from typing import Tuple
 import ccxt
 from settings.config_access import env_bool, env_float, env_int, env_str
 from settings.env import load_project_env
+
+
+def _get_runtime_cache(exchange: ccxt.okx) -> dict:
+    """클라이언트별 OKX 런타임 캐시 저장소를 반환한다."""
+    return exchange.options.setdefault("okx_runtime_cache", {})
 
 
 def load_okx_config() -> dict:
@@ -132,6 +138,55 @@ def fetch_ohlcv_okx(
         )
     ohlcv.sort(key=lambda x: x[0])
     return ohlcv
+
+
+def spot_symbol_to_okx_swap_inst_id(symbol: str) -> str | None:
+    """OKX 현물 심볼을 대응 perpetual swap instId 로 변환한다."""
+    if "/" not in symbol:
+        return None
+    base, quote = symbol.split("/", 1)
+    base = base.strip().upper()
+    quote = quote.strip().upper()
+    if not base or not quote:
+        return None
+    return f"{base}-{quote}-SWAP"
+
+
+def fetch_funding_rate_okx(
+    exchange: ccxt.okx,
+    symbol: str,
+    *,
+    cache_ttl_sec: float = 300.0,
+) -> float | None:
+    """OKX 현물 대응 SWAP funding rate 를 조회한다."""
+    inst_id = spot_symbol_to_okx_swap_inst_id(symbol)
+    if inst_id is None:
+        return None
+
+    cache = _get_runtime_cache(exchange).setdefault("funding_rate", {})
+    now_ts = time.time()
+    cached = cache.get(inst_id)
+    if (
+        isinstance(cached, dict)
+        and (now_ts - float(cached.get("ts", 0.0))) <= max(cache_ttl_sec, 0.0)
+    ):
+        return cached.get("value")
+
+    response = call_okx_with_retry(
+        exchange,
+        exchange.publicGetPublicFundingRate,
+        {"instId": inst_id},
+    )
+    data = response.get("data", []) if isinstance(response, dict) else response
+    first = data[0] if data else {}
+    value = None
+    try:
+        if isinstance(first, dict) and first.get("fundingRate") not in (None, ""):
+            value = float(first.get("fundingRate"))
+    except (TypeError, ValueError):
+        value = None
+    cache[inst_id] = {"ts": now_ts, "value": value}
+    return value
 
 
 def get_spot_balances_okx(exchange: ccxt.okx, base: str, quote: str) -> Tuple[float, float]:

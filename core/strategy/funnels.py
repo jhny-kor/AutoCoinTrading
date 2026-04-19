@@ -1,5 +1,6 @@
 """
 작업 요약
+- OKX funding rate 과열 차단 단계를 알트/BTC 진입 퍼널에 추가
 - 2026-04-10: 알트 보수형 튜닝용 최대 이격도와 최대 거래량 상한 단계를 퍼널에 추가했다.
 - 2026-04-09: 손절 후 패턴 기반 재진입 차단 단계를 퍼널에 추가해 reason 코드로 추적할 수 있게 확장
 - 알트/BTC 진입, 추가매수, 청산 퍼널 step 생성기를 공통 모듈로 분리했다.
@@ -48,6 +49,9 @@ def build_alt_entry_steps(
     max_daily_loss_quote: float,
     order_value_quote: float,
     min_buy_order_value: float,
+    funding_rate_filter_passed: bool = True,
+    funding_rate: float | None = None,
+    max_funding_rate: float | None = None,
     stop_loss_pattern_blocked: bool = False,
     stop_loss_pattern_elapsed_sec: float | None = None,
     stop_loss_pattern_min_cooldown_sec: int | None = None,
@@ -112,6 +116,13 @@ def build_alt_entry_steps(
             reason="volume_spike_too_high",
             actual={"volume_ratio": volume_ratio},
             required={"max_volume_ratio": max_volume_ratio},
+        ),
+        FunnelStep(
+            stage="funding_rate",
+            passed=funding_rate_filter_passed,
+            reason="funding_rate_overheated",
+            actual={"funding_rate": funding_rate},
+            required={"max_funding_rate": max_funding_rate},
         ),
         FunnelStep(
             stage="volatility",
@@ -306,6 +317,9 @@ def build_btc_entry_steps(
     min_buy_order_value: float,
     estimated_entry_amount: float,
     min_order_amount: float,
+    funding_rate_filter_passed: bool = True,
+    funding_rate: float | None = None,
+    max_funding_rate: float | None = None,
     stop_loss_pattern_blocked: bool = False,
     stop_loss_pattern_elapsed_sec: float | None = None,
     stop_loss_pattern_min_cooldown_sec: int | None = None,
@@ -415,6 +429,13 @@ def build_btc_entry_steps(
             reason="volume_low" if volume_ratio is not None else "volume_data_missing",
             actual={"volume_ratio": volume_ratio},
             required={"min_volume_ratio": effective_min_volume_ratio},
+        ),
+        FunnelStep(
+            stage="funding_rate",
+            passed=funding_rate_filter_passed,
+            reason="funding_rate_overheated",
+            actual={"funding_rate": funding_rate},
+            required={"max_funding_rate": max_funding_rate},
         ),
         FunnelStep(
             stage="atr",

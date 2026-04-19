@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 현물 BTC 신규 진입 전에 swap funding rate 과열을 확인해 롱 과열 구간 신규 진입을 차단
 - 고거래량 BTC 진입에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용해 volume spike 추격 손실을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 BTC 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: BTC 손절 후 일정 시간과 높은 점수면 fresh cross 없이 재진입 가능한 예외 경로를 추가
@@ -63,6 +64,7 @@ from btc_trend_settings import load_btc_trend_settings
 from core.execution.common import log_order_failure
 from core.execution.okx import (
     create_okx_client,
+    fetch_funding_rate_okx,
     fetch_ohlcv_okx,
     get_spot_balances_okx,
     load_okx_config,
@@ -532,6 +534,19 @@ def run_bot():
                 volume_ratio is not None
                 and volume_ratio >= effective_min_volume_ratio
             )
+            funding_rate = None
+            funding_rate_filter_passed = True
+            if settings.enable_okx_funding_rate_guard:
+                try:
+                    funding_rate = fetch_funding_rate_okx(
+                        exchange,
+                        symbol,
+                        cache_ttl_sec=settings.okx_funding_rate_cache_ttl_sec,
+                    )
+                except Exception as funding_error:
+                    log(f"[{symbol}] funding rate 조회 실패: {repr(funding_error)}")
+                if funding_rate is not None:
+                    funding_rate_filter_passed = funding_rate <= settings.okx_funding_rate_max_long_bias
             effective_min_atr_pct = effective_min_atr_pct * regime_policy.min_atr_multiplier
             high_volume_ratio_threshold = settings.get_high_volume_ratio_threshold(symbol)
             if (
@@ -618,6 +633,7 @@ def run_bot():
                     and not low_energy_guard_active
                     and not symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
+                    and funding_rate_filter_passed
                     and not stop_loss_pattern_blocked
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
@@ -627,6 +643,7 @@ def run_bot():
                     and not low_energy_guard_active
                     and not symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
+                    and funding_rate_filter_passed
                     and not stop_loss_pattern_blocked
                     and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
                     and (not symbol_regime_requires_fresh_cross or bullish)
@@ -1063,6 +1080,11 @@ def run_bot():
                     f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
                     f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
                 )
+            if funding_rate is not None:
+                log(
+                    f"[{symbol}] OKX funding rate: {funding_rate:.6f} "
+                    f"(차단 기준 {settings.okx_funding_rate_max_long_bias:.6f})"
+                )
             if stop_loss_pattern_blocked:
                 log(
                     f"[{symbol}] 손절 후 패턴 재진입 대기 중입니다. "
@@ -1109,6 +1131,9 @@ def run_bot():
                 volume_filter_passed=volume_filter_passed,
                 volume_ratio=volume_ratio,
                 effective_min_volume_ratio=effective_min_volume_ratio,
+                funding_rate_filter_passed=funding_rate_filter_passed,
+                funding_rate=funding_rate,
+                max_funding_rate=settings.okx_funding_rate_max_long_bias if settings.enable_okx_funding_rate_guard else None,
                 atr_filter_passed=atr_filter_passed,
                 atr_pct=atr_pct,
                 effective_min_atr_pct=effective_min_atr_pct,

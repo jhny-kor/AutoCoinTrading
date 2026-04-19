@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 현물 BTC 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 설정을 추가
 - 고거래량 구간에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용할 수 있는 설정 map 을 추가
 - 2026-04-10: BTC 손절 후 일정 시간 경과와 높은 점수 조건이면 fresh cross 없이 재진입 가능한 완화 설정을 추가
 - 2026-04-09: 손절 후 재진입은 최소 시간과 signal/confirm/fresh cross 복구를 함께 보는 패턴 기반 설정을 추가
@@ -101,6 +102,9 @@ class BtcTrendSettings:
     high_volume_ratio_threshold_map: dict[str, float]
     high_volume_min_atr_pct_map: dict[str, float]
     high_volume_extra_confirmation_loops_map: dict[str, int]
+    enable_okx_funding_rate_guard: bool
+    okx_funding_rate_max_long_bias: float
+    okx_funding_rate_cache_ttl_sec: float
     position_ratio: float
     position_ratio_map: dict[str, float]
     enable_regime_position_scaling: bool
@@ -270,6 +274,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         high_volume_ratio_threshold_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_ratio_threshold_map", {}, env_key="BTC_TREND_HIGH_VOLUME_RATIO_THRESHOLD_MAP")),
         high_volume_min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_min_atr_pct_map", {}, env_key="BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP")),
         high_volume_extra_confirmation_loops_map=parse_symbol_int_map(config_value("btc_trend", "high_volume_extra_confirmation_loops_map", {}, env_key="BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP")),
+        enable_okx_funding_rate_guard=config_bool("btc_trend", "enable_okx_funding_rate_guard", True, env_key="BTC_TREND_ENABLE_OKX_FUNDING_RATE_GUARD"),
+        okx_funding_rate_max_long_bias=config_float("btc_trend", "okx_funding_rate_max_long_bias", 0.0005, env_key="BTC_TREND_OKX_FUNDING_RATE_MAX_LONG_BIAS"),
+        okx_funding_rate_cache_ttl_sec=config_float("btc_trend", "okx_funding_rate_cache_ttl_sec", 300.0, env_key="BTC_TREND_OKX_FUNDING_RATE_CACHE_TTL_SEC"),
         position_ratio=config_float("btc_trend", "position_ratio", 0.25, env_key="BTC_TREND_POSITION_RATIO"),
         position_ratio_map=parse_symbol_float_map(config_value("btc_trend", "position_ratio_map", {}, env_key="BTC_TREND_POSITION_RATIO_MAP")),
         enable_regime_position_scaling=config_bool("btc_trend", "enable_regime_position_scaling", True, env_key="BTC_TREND_ENABLE_REGIME_POSITION_SCALING"),

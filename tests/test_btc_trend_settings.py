@@ -55,6 +55,22 @@ class BtcTrendSettingsTests(unittest.TestCase):
         self.assertEqual(1, settings.get_high_volume_extra_confirmation_loops("BTC/KRW"))
         self.assertEqual(0, settings.get_high_volume_extra_confirmation_loops("BTC/USDT"))
 
+    def test_loads_okx_funding_rate_guard_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BTC_TREND_ENABLE_OKX_FUNDING_RATE_GUARD": "true",
+                "BTC_TREND_OKX_FUNDING_RATE_MAX_LONG_BIAS": "0.0004",
+                "BTC_TREND_OKX_FUNDING_RATE_CACHE_TTL_SEC": "180",
+            },
+            clear=False,
+        ):
+            settings = load_btc_trend_settings()
+
+        self.assertTrue(settings.enable_okx_funding_rate_guard)
+        self.assertEqual(0.0004, settings.okx_funding_rate_max_long_bias)
+        self.assertEqual(180.0, settings.okx_funding_rate_cache_ttl_sec)
+
 
 if __name__ == "__main__":
     unittest.main()

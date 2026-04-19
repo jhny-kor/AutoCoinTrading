@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 현물 알트 신규 진입 전에 swap funding rate 과열을 확인해 롱 과열 구간 신규 진입을 차단
 - ETH/KRW 같은 약한 알트는 심볼별 signal_score 최소 기준 오버라이드를 적용해 저품질 진입을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: 알트 보수형 조정으로 최대 진입 이격도와 최대 거래량 배수 상한을 추가하고 과열 추격 진입을 더 줄이도록 보강
@@ -66,6 +67,7 @@ from bot_logger import BLUE, RED, BotLogger
 from core.execution.common import log_order_failure
 from core.execution.okx import (
     create_okx_client as create_okx_client_core,
+    fetch_funding_rate_okx as fetch_funding_rate_okx_core,
     fetch_ohlcv_okx as fetch_ohlcv_okx_core,
     get_spot_balances_okx as get_spot_balances_okx_core,
     load_okx_config as load_okx_config_core,
@@ -501,6 +503,19 @@ def run_bot():
                         f"[{symbol}] 거래량 배수: {volume_ratio:.4f}배 "
                         f"(허용 {effective_min_volume_ratio:.4f}배 ~ {effective_max_volume_ratio:.4f}배)"
                     )
+                funding_rate = None
+                funding_rate_filter_passed = True
+                if strategy.enable_okx_funding_rate_guard:
+                    try:
+                        funding_rate = fetch_funding_rate_okx_core(
+                            exchange,
+                            symbol,
+                            cache_ttl_sec=strategy.okx_funding_rate_cache_ttl_sec,
+                        )
+                    except Exception as funding_error:
+                        log(f"[{symbol}] funding rate 조회 실패: {repr(funding_error)}")
+                    if funding_rate is not None:
+                        funding_rate_filter_passed = funding_rate <= strategy.okx_funding_rate_max_long_bias
 
                 avg_abs_change_pct = calc_avg_abs_change_pct(
                     closes, strategy.volatility_lookback
@@ -853,6 +868,7 @@ def run_bot():
                         and not low_energy_guard_active
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
+                        and funding_rate_filter_passed
                         and not stop_loss_pattern_blocked
                         and gap_within_upper_bound
                         and volume_within_upper_bound
@@ -865,6 +881,7 @@ def run_bot():
                         and not low_energy_guard_active
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
+                        and funding_rate_filter_passed
                         and not stop_loss_pattern_blocked
                         and gap_within_upper_bound
                         and volume_within_upper_bound
@@ -926,6 +943,11 @@ def run_bot():
                     f"diversification {allocation_score_result.diversification_score_component:.1f} | "
                     f"주요 사유 {allocation_score_result.reason_top}"
                 )
+                if funding_rate is not None:
+                    log(
+                        f"[{symbol}] OKX funding rate: {funding_rate:.6f} "
+                        f"(차단 기준 {strategy.okx_funding_rate_max_long_bias:.6f})"
+                    )
                 log(
                     f"[{symbol}] RSI: {rsi_value:.2f} | MACD 히스토그램: "
                     f"{0.0 if macd_histogram is None else macd_histogram:.6f} | "
@@ -1343,6 +1365,9 @@ def run_bot():
                     effective_min_volume_ratio=effective_min_volume_ratio,
                     max_volume_ratio=effective_max_volume_ratio,
                     volume_within_upper_bound=volume_within_upper_bound,
+                    funding_rate_filter_passed=funding_rate_filter_passed,
+                    funding_rate=funding_rate,
+                    max_funding_rate=strategy.okx_funding_rate_max_long_bias if strategy.enable_okx_funding_rate_guard else None,
                     volatility_filter_passed=(not strategy.enable_volatility_filter or volatility_filter_passed),
                     avg_abs_change_pct=avg_abs_change_pct,
                     min_volatility_pct=strategy.min_volatility_pct,
