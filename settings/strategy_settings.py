@@ -41,7 +41,10 @@
 - 알트 봇 감시 심볼과 텔레그램/분석 수집 대상 심볼도 공통 규칙으로 재사용할 수 있도록 지원
 """
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from settings.config_access import (
     config_bool,
@@ -137,6 +140,18 @@ class StrategySettings:
     break_even_guard_floor_net_pnl_pct: float
     break_even_guard_floor_net_pnl_pct_map: dict[str, float]
     break_even_guard_max_profit_retrace_pct: float
+    enable_volume_spike_exit: bool
+    volume_spike_exit_min_profit_pct: float
+    volume_spike_exit_max_volume_ratio: float
+    enable_auto_tune: bool
+    auto_tune_window_days: int
+    auto_tune_min_trades: int
+    auto_tune_positive_win_rate: float
+    auto_tune_positive_profit_factor: float
+    auto_tune_negative_win_rate: float
+    auto_tune_negative_profit_factor: float
+    auto_tune_adjustment_limit_pct: float
+    auto_tune_adjustment_map: dict[str, float]
     signal_score_min: float
     signal_score_min_map: dict[str, float]
     dynamic_signal_score_min: float
@@ -163,15 +178,21 @@ class StrategySettings:
 
     def get_crossover_gap_pct(self, symbol: str) -> float:
         """심볼별 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
-        return self.min_crossover_gap_pct_map.get(symbol, self.min_crossover_gap_pct)
+        base_value = self.min_crossover_gap_pct_map.get(symbol, self.min_crossover_gap_pct)
+        adjustment = self.auto_tune_adjustment_map.get(symbol, 0.0)
+        return max(0.0, base_value * (1.0 - adjustment))
 
     def get_take_profit_pct(self, symbol: str) -> float:
         """심볼별 익절률 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
-        return self.min_take_profit_pct_map.get(symbol, self.min_take_profit_pct)
+        base_value = self.min_take_profit_pct_map.get(symbol, self.min_take_profit_pct)
+        adjustment = self.auto_tune_adjustment_map.get(symbol, 0.0)
+        return max(0.0, base_value * (1.0 + adjustment))
 
     def get_stop_loss_pct(self, symbol: str) -> float:
         """심볼별 손절률 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
-        return self.stop_loss_pct_map.get(symbol, self.stop_loss_pct)
+        base_value = self.stop_loss_pct_map.get(symbol, self.stop_loss_pct)
+        adjustment = self.auto_tune_adjustment_map.get(symbol, 0.0)
+        return max(0.0, base_value * (1.0 + adjustment))
 
     def get_min_volume_ratio(self, symbol: str) -> float:
         """심볼별 거래량 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
@@ -192,6 +213,10 @@ class StrategySettings:
     def get_signal_score_min(self, symbol: str) -> float:
         """심볼별 최소 신호 점수 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.signal_score_min_map.get(symbol, self.signal_score_min)
+
+    def get_auto_tune_adjustment(self, symbol: str) -> float:
+        """심볼별 자동 튜닝 조정 배율을 반환한다."""
+        return self.auto_tune_adjustment_map.get(symbol, 0.0)
 
     def get_regime_position_scale(self, regime: str | None) -> float:
         """레짐별 포지션 비중 스케일을 반환한다."""
@@ -484,11 +509,119 @@ def load_managed_symbols(exchange_name: str) -> list[str]:
     raise ValueError(f"지원하지 않는 거래소입니다: {exchange_name}")
 
 
+def _parse_trade_local_timestamp(raw: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _build_symbol_auto_tune_adjustment_map(
+    *,
+    window_days: int,
+    min_trades: int,
+    positive_win_rate: float,
+    positive_profit_factor: float,
+    negative_win_rate: float,
+    negative_profit_factor: float,
+    adjustment_limit_pct: float,
+) -> dict[str, float]:
+    """최근 실거래 성과를 기준으로 심볼별 자동 튜닝 배율을 계산한다."""
+    if window_days <= 0 or adjustment_limit_pct <= 0:
+        return {}
+
+    cutoff = datetime.now().astimezone() - timedelta(days=window_days)
+    stats: dict[str, dict[str, float]] = {}
+
+    for path in sorted(Path("trade_logs").rglob("trade_history.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not record.get("is_final_exit"):
+                continue
+            recorded_local = _parse_trade_local_timestamp(str(record.get("recorded_at_local", "")))
+            if recorded_local is None or recorded_local < cutoff:
+                continue
+
+            symbol = str(record.get("symbol", "")).strip()
+            if not symbol:
+                continue
+            pnl_quote = record.get("net_realized_pnl_quote")
+            if pnl_quote in (None, ""):
+                pnl_quote = record.get("realized_pnl_quote")
+            try:
+                pnl_quote_value = float(pnl_quote)
+            except (TypeError, ValueError):
+                continue
+
+            bucket = stats.setdefault(
+                symbol,
+                {"trades": 0.0, "wins": 0.0, "gross_profit": 0.0, "gross_loss": 0.0},
+            )
+            bucket["trades"] += 1
+            if pnl_quote_value > 0:
+                bucket["wins"] += 1
+                bucket["gross_profit"] += pnl_quote_value
+            elif pnl_quote_value < 0:
+                bucket["gross_loss"] += abs(pnl_quote_value)
+
+    adjustments: dict[str, float] = {}
+    capped_adjustment = min(abs(adjustment_limit_pct), 0.10)
+    for symbol, bucket in stats.items():
+        trade_count = int(bucket["trades"])
+        if trade_count < min_trades:
+            continue
+        win_rate = bucket["wins"] / bucket["trades"] if bucket["trades"] > 0 else 0.0
+        gross_profit = bucket["gross_profit"]
+        gross_loss = bucket["gross_loss"]
+        profit_factor = float("inf") if gross_loss == 0 and gross_profit > 0 else (
+            (gross_profit / gross_loss) if gross_loss > 0 else 0.0
+        )
+
+        adjustment = 0.0
+        if win_rate >= positive_win_rate and profit_factor >= positive_profit_factor:
+            adjustment = capped_adjustment
+        elif win_rate <= negative_win_rate or profit_factor <= negative_profit_factor:
+            adjustment = -capped_adjustment
+
+        if adjustment != 0.0:
+            adjustments[symbol] = adjustment
+
+    return adjustments
+
+
 def load_strategy_settings(
     min_buy_order_env_key: str, default_min_buy_order_value: float
 ) -> StrategySettings:
     """공통 전략 설정과 거래소별 최소 주문 금액 설정을 함께 읽는다."""
     load_project_env()
+
+    enable_auto_tune = config_bool("strategy", "enable_auto_tune", True, env_key="STRATEGY_ENABLE_AUTO_TUNE")
+    auto_tune_window_days = config_int("strategy", "auto_tune_window_days", 7, env_key="STRATEGY_AUTO_TUNE_WINDOW_DAYS")
+    auto_tune_min_trades = config_int("strategy", "auto_tune_min_trades", 2, env_key="STRATEGY_AUTO_TUNE_MIN_TRADES")
+    auto_tune_positive_win_rate = config_float("strategy", "auto_tune_positive_win_rate", 0.60, env_key="STRATEGY_AUTO_TUNE_POSITIVE_WIN_RATE")
+    auto_tune_positive_profit_factor = config_float("strategy", "auto_tune_positive_profit_factor", 1.30, env_key="STRATEGY_AUTO_TUNE_POSITIVE_PROFIT_FACTOR")
+    auto_tune_negative_win_rate = config_float("strategy", "auto_tune_negative_win_rate", 0.40, env_key="STRATEGY_AUTO_TUNE_NEGATIVE_WIN_RATE")
+    auto_tune_negative_profit_factor = config_float("strategy", "auto_tune_negative_profit_factor", 0.90, env_key="STRATEGY_AUTO_TUNE_NEGATIVE_PROFIT_FACTOR")
+    auto_tune_adjustment_limit_pct = config_float("strategy", "auto_tune_adjustment_limit_pct", 0.10, env_key="STRATEGY_AUTO_TUNE_ADJUSTMENT_LIMIT_PCT")
+    auto_tune_adjustment_map = (
+        _build_symbol_auto_tune_adjustment_map(
+            window_days=auto_tune_window_days,
+            min_trades=auto_tune_min_trades,
+            positive_win_rate=auto_tune_positive_win_rate,
+            positive_profit_factor=auto_tune_positive_profit_factor,
+            negative_win_rate=auto_tune_negative_win_rate,
+            negative_profit_factor=auto_tune_negative_profit_factor,
+            adjustment_limit_pct=auto_tune_adjustment_limit_pct,
+        )
+        if enable_auto_tune
+        else {}
+    )
 
     return StrategySettings(
         version=config_str("strategy", "version", "alt_v1", env_key="STRATEGY_VERSION").strip(),
@@ -569,6 +702,18 @@ def load_strategy_settings(
         break_even_guard_floor_net_pnl_pct=config_float("strategy", "break_even_guard_floor_net_pnl_pct", 0.0, env_key="STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT"),
         break_even_guard_floor_net_pnl_pct_map=parse_symbol_float_map(config_value("strategy", "break_even_guard_floor_net_pnl_pct_map", {}, env_key="STRATEGY_BREAK_EVEN_GUARD_FLOOR_NET_PNL_PCT_MAP")),
         break_even_guard_max_profit_retrace_pct=config_float("strategy", "break_even_guard_max_profit_retrace_pct", 0.6, env_key="STRATEGY_BREAK_EVEN_GUARD_MAX_PROFIT_RETRACE_PCT"),
+        enable_volume_spike_exit=config_bool("strategy", "enable_volume_spike_exit", True, env_key="STRATEGY_ENABLE_VOLUME_SPIKE_EXIT"),
+        volume_spike_exit_min_profit_pct=config_float("strategy", "volume_spike_exit_min_profit_pct", 0.2, env_key="STRATEGY_VOLUME_SPIKE_EXIT_MIN_PROFIT_PCT"),
+        volume_spike_exit_max_volume_ratio=config_float("strategy", "volume_spike_exit_max_volume_ratio", 0.8, env_key="STRATEGY_VOLUME_SPIKE_EXIT_MAX_VOLUME_RATIO"),
+        enable_auto_tune=enable_auto_tune,
+        auto_tune_window_days=auto_tune_window_days,
+        auto_tune_min_trades=auto_tune_min_trades,
+        auto_tune_positive_win_rate=auto_tune_positive_win_rate,
+        auto_tune_positive_profit_factor=auto_tune_positive_profit_factor,
+        auto_tune_negative_win_rate=auto_tune_negative_win_rate,
+        auto_tune_negative_profit_factor=auto_tune_negative_profit_factor,
+        auto_tune_adjustment_limit_pct=auto_tune_adjustment_limit_pct,
+        auto_tune_adjustment_map=auto_tune_adjustment_map,
         signal_score_min=config_float("strategy", "signal_score_min", 55, env_key="STRATEGY_SIGNAL_SCORE_MIN"),
         signal_score_min_map=parse_symbol_float_map(config_value("strategy", "signal_score_min_map", {}, env_key="STRATEGY_SIGNAL_SCORE_MIN_MAP")),
         dynamic_signal_score_min=config_float("strategy", "dynamic_signal_score_min", 70, env_key="STRATEGY_DYNAMIC_SIGNAL_SCORE_MIN"),

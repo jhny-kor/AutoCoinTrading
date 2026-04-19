@@ -1,7 +1,10 @@
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from settings.strategy_settings import _build_symbol_auto_tune_adjustment_map
 from strategy_settings import load_strategy_settings
 
 
@@ -78,6 +81,34 @@ class StrategySettingsTests(unittest.TestCase):
 
         self.assertEqual(80, settings.get_signal_score_min("ETH/KRW"))
         self.assertEqual(55, settings.get_signal_score_min("XRP/KRW"))
+
+    def test_auto_tune_adjustment_map_uses_recent_final_exits(self):
+        with TemporaryDirectory() as tmp_dir:
+            trade_path = Path(tmp_dir) / "trade_history.jsonl"
+            trade_path.write_text(
+                "\n".join(
+                    [
+                        '{"recorded_at_local":"2026-04-18T10:00:00+09:00","symbol":"ETH/KRW","is_final_exit":true,"net_realized_pnl_quote":100}',
+                        '{"recorded_at_local":"2026-04-18T11:00:00+09:00","symbol":"ETH/KRW","is_final_exit":true,"net_realized_pnl_quote":80}',
+                        '{"recorded_at_local":"2026-04-18T12:00:00+09:00","symbol":"XRP/KRW","is_final_exit":true,"net_realized_pnl_quote":-50}',
+                        '{"recorded_at_local":"2026-04-18T13:00:00+09:00","symbol":"XRP/KRW","is_final_exit":true,"net_realized_pnl_quote":-20}',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch("settings.strategy_settings.Path.rglob", return_value=[trade_path]):
+                adjustments = _build_symbol_auto_tune_adjustment_map(
+                    window_days=7,
+                    min_trades=2,
+                    positive_win_rate=0.6,
+                    positive_profit_factor=1.3,
+                    negative_win_rate=0.4,
+                    negative_profit_factor=0.9,
+                    adjustment_limit_pct=0.1,
+                )
+
+        self.assertEqual(0.1, adjustments["ETH/KRW"])
+        self.assertEqual(-0.1, adjustments["XRP/KRW"])
 
     def test_loads_okx_funding_rate_guard_settings(self):
         with patch.dict(

@@ -745,6 +745,67 @@
   - BTC는 fresh cross를 완전히 제거하는 것이 아니라, 충분히 강한 추세 재개 신호에만 예외를 주는 방식이 안전하다고 판단
   - score 기반 배분은 계산 자체보다 설명성이 중요하므로, 현재처럼 약점 축을 reason으로 남기는 방식이 더 실전적이라고 판단
 
+### 35. Regime 가중 신호 점수 + Exit 강화 + 최근 7일 자동 튜닝 (2026-04-19)
+
+- 변경 내용:
+  - 신호 점수 고도화
+    - [core/strategy/indicators.py](/Users/plo/Documents/auto_coin_bot/core/strategy/indicators.py)에 `calc_weighted_signal_score` 추가
+    - 알트/ BTC 신호 점수는 이제 단순 고정 합산이 아니라 레짐별 가중치로 계산
+    - 의도:
+      - `TRENDING*` 에서는 slope / trend / spread 비중 확대
+      - `CHOPPY*` 에서는 Bollinger squeeze / RSI 비중 확대
+      - `BREAKOUT_ATTEMPT` 에서는 breakout / gap / volume 비중 확대
+  - Exit 강화
+    - 알트:
+      - `Volume Spike Exit` 추가
+      - 수익 구간에서 거래량 배수가 급감하면 `volume_spike_take_profit` 으로 조기 청산
+    - BTC:
+      - `ATR trailing exit` 추가
+      - `Donchian breakout failure` 즉시 청산 추가
+      - `donchian_failure_exit` reason 으로 분리
+  - 코인별 자동 튜닝
+    - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)에서 최근 7일 final exit 기준 rolling 성과 분석
+    - 사용 지표:
+      - win-rate
+      - profit-factor
+    - 조정 대상:
+      - `min_gap_pct`
+      - `take_profit_pct`
+      - `stop_loss_pct`
+    - 조정 폭:
+      - 최대 `±10%`
+- 현재 기본 규칙:
+  - 최근 7일 final exit 가 `min_trades=2` 이상일 때만 자동 튜닝 적용
+  - `win_rate >= 0.60` and `profit_factor >= 1.30`
+    - `adjustment = +0.10`
+  - `win_rate <= 0.40` or `profit_factor <= 0.90`
+    - `adjustment = -0.10`
+  - 그 외:
+    - `adjustment = 0.0`
+- 조정 방향:
+  - `min_gap_pct`: `base * (1 - adjustment)`
+  - `take_profit_pct`: `base * (1 + adjustment)`
+  - `stop_loss_pct`: `base * (1 + adjustment)`
+- 근거:
+  - 최근 며칠 실거래에서
+    - 강한 추세 구간은 slope / breakout 성분이 실제 승패 구분력이 높았고
+    - 횡보 구간은 squeeze / RSI 계열이 더 설명력이 높았음
+  - 알트는 수익 구간에서 거래량 급감 후 빠르게 이익을 반납하는 경우가 있어 거래량 붕괴 기반 조기 청산이 필요하다고 판단
+  - BTC는 `Donchian breakout` 성격의 진입 이후 실패 시 더 빠른 실패 인식이 필요했고, 기존 퍼센트 trailing 만으로는 늦는 구간이 있어 ATR trailing 을 추가
+- 구현 범위:
+  - [core/strategy/indicators.py](/Users/plo/Documents/auto_coin_bot/core/strategy/indicators.py)
+  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
+  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
+  - [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py)
+  - [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py)
+  - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
+  - [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
+  - 알트/ BTC 봇 4개 연결
+- 검증:
+  - `unittest discover -s tests -v` 통과
+  - `py_compile` 통과
+  - 거래 봇 4개 재기동 및 healthcheck 정상
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

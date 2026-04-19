@@ -48,8 +48,11 @@ class FunnelBuilderTests(unittest.TestCase):
             max_daily_loss_quote=5.0,
             order_value_quote=50.0,
             min_buy_order_value=1.0,
+            funding_rate_filter_passed=True,
+            funding_rate=None,
+            max_funding_rate=None,
         )
-        self.assertEqual(15, len(steps))
+        self.assertEqual(16, len(steps))
         self.assertEqual("trend", steps[0].stage)
         self.assertEqual("order_value", steps[-1].stage)
 
@@ -59,6 +62,7 @@ class FunnelBuilderTests(unittest.TestCase):
             stop_loss_triggered=False,
             profit_protect_triggered=True,
             break_even_guard_triggered=False,
+            volume_spike_exit_triggered=False,
             bearish=True,
             in_cooldown=False,
             seconds_since_last_trade=30.0,
@@ -177,6 +181,7 @@ class FunnelBuilderTests(unittest.TestCase):
             partial_take_profit_triggered=True,
             profit_protect_triggered=False,
             trailing_stop_triggered=False,
+            donchian_failure_triggered=False,
             trend_exit_triggered=False,
             estimated_exit_amount=0.001,
             min_order_amount=0.0001,

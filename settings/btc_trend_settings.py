@@ -128,6 +128,9 @@ class BtcTrendSettings:
     pyramid_trigger_profit_pct: float
     pyramid_position_ratio: float
     pyramid_max_add_ons: int
+    enable_atr_trailing_exit: bool
+    trailing_atr_multiple: float
+    enable_donchian_failure_exit: bool
     stop_mode: str
     take_profit_mode: str
     stop_atr_multiple: float
@@ -300,6 +303,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         pyramid_trigger_profit_pct=config_float("btc_trend", "pyramid_trigger_profit_pct", 0.35, env_key="BTC_TREND_PYRAMID_TRIGGER_PROFIT_PCT"),
         pyramid_position_ratio=config_float("btc_trend", "pyramid_position_ratio", 0.15, env_key="BTC_TREND_PYRAMID_POSITION_RATIO"),
         pyramid_max_add_ons=config_int("btc_trend", "pyramid_max_add_ons", 1, env_key="BTC_TREND_PYRAMID_MAX_ADD_ONS"),
+        enable_atr_trailing_exit=config_bool("btc_trend", "enable_atr_trailing_exit", True, env_key="BTC_TREND_ENABLE_ATR_TRAILING_EXIT"),
+        trailing_atr_multiple=config_float("btc_trend", "trailing_atr_multiple", 1.0, env_key="BTC_TREND_TRAILING_ATR_MULTIPLE"),
+        enable_donchian_failure_exit=config_bool("btc_trend", "enable_donchian_failure_exit", True, env_key="BTC_TREND_ENABLE_DONCHIAN_FAILURE_EXIT"),
         stop_mode=config_str("btc_trend", "stop_mode", "atr", env_key="BTC_TREND_STOP_MODE").strip().lower(),
         take_profit_mode=config_str("btc_trend", "take_profit_mode", "atr", env_key="BTC_TREND_TAKE_PROFIT_MODE").strip().lower(),
         stop_atr_multiple=config_float("btc_trend", "stop_atr_multiple", 1.5, env_key="BTC_TREND_STOP_ATR_MULTIPLE"),

@@ -2,7 +2,7 @@
 
 import unittest
 
-from core.strategy.indicators import calc_noise_ratio
+from core.strategy.indicators import calc_noise_ratio, calc_weighted_signal_score
 
 
 class IndicatorTests(unittest.TestCase):
@@ -17,6 +17,13 @@ class IndicatorTests(unittest.TestCase):
         self.assertIsNotNone(noise_ratio)
         self.assertGreater(noise_ratio, 0.0)
         self.assertLess(noise_ratio, 1.0)
+
+    def test_weighted_signal_score_normalizes_weights(self):
+        score = calc_weighted_signal_score(
+            {"slope": 80.0, "trend": 40.0},
+            {"slope": 4.0, "trend": 1.0},
+        )
+        self.assertAlmostEqual(score, 72.0)
 
 
 if __name__ == "__main__":

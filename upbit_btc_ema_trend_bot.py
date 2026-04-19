@@ -451,6 +451,10 @@ def run_bot():
                 )
             # 노이즈가 큰 장은 EMA 스프레드와 신호 점수 기준을 같이 높여 가짜 돌파를 줄인다.
             effective_min_ema_spread_pct = base_min_ema_spread_pct * noise_spread_multiplier
+            symbol_regime_snapshot = classify_symbol_regime(
+                load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
+            )
+            symbol_regime = symbol_regime_snapshot.regime
             btc_entry_state = compute_btc_entry_state(
                 bullish=bullish,
                 last_fast=last_fast,
@@ -471,6 +475,7 @@ def run_bot():
                 min_bb_width_pct=settings.min_bb_width_pct,
                 max_bb_width_pct=settings.max_bb_width_pct,
                 signal_score_min=effective_signal_score_min,
+                symbol_regime=symbol_regime,
                 entry_mode=settings.entry_mode,
                 donchian_entry_upper=donchian_entry_upper,
                 donchian_confirm_breakout_close=settings.donchian_confirm_breakout_close,
@@ -549,10 +554,6 @@ def run_bot():
                 managed_symbols=load_managed_symbols("upbit"),
             )
             low_energy_guard_active = low_energy_snapshot.active and not has_position
-            symbol_regime_snapshot = classify_symbol_regime(
-                load_latest_symbol_record(exchange_name="upbit", symbol=symbol)
-            )
-            symbol_regime = symbol_regime_snapshot.regime
             regime_route = route_btc_strategy(symbol_regime)
             regime_policy = regime_route.policy
             strategy_key = regime_route.strategy_key
@@ -886,17 +887,22 @@ def run_bot():
                 trailing_armed=trailing_armed,
                 enable_fee_protect_exit=settings.enable_fee_protect_exit,
                 fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
+                enable_atr_trailing_exit=settings.enable_atr_trailing_exit,
+                trailing_atr_multiple=settings.trailing_atr_multiple,
+                atr_value=atr_value,
                 pnl_pct=current_net_realized_pnl_pct,
                 bearish=(bearish or (not ema_aligned) or (not price_above_fast)),
                 confirm_bullish=confirm_bullish and not bull_pullback_hold_active,
                 entry_mode=settings.entry_mode,
                 donchian_exit_lower=donchian_exit_lower,
                 last_low=last_low,
+                enable_donchian_failure_exit=settings.enable_donchian_failure_exit,
             )
             drawdown_from_high_pct = btc_exit_flags["drawdown_from_high_pct"]
             stop_triggered = bool(btc_exit_flags["stop_triggered"])
             trailing_stop_triggered = bool(btc_exit_flags["trailing_stop_triggered"])
             profit_protect_triggered = bool(btc_exit_flags["profit_protect_triggered"])
+            donchian_failure_triggered = bool(btc_exit_flags["donchian_failure_triggered"])
             trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
             base_position_ratio = settings.get_position_ratio(symbol)
             regime_position_scale = settings.get_regime_position_scale(symbol_regime)
@@ -1250,6 +1256,7 @@ def run_bot():
                 partial_take_profit_triggered=partial_take_profit_triggered,
                 profit_protect_triggered=profit_protect_triggered,
                 trailing_stop_triggered=trailing_stop_triggered,
+                donchian_failure_triggered=donchian_failure_triggered,
                 trend_exit_triggered=trend_exit_triggered,
                 estimated_exit_amount=safe_amount_to_precision_upbit(exchange, symbol, base_free),
                 min_order_amount=0.0,
@@ -1271,6 +1278,8 @@ def run_bot():
                     if profit_protect_triggered
                     else "trailing_stop_triggered"
                     if trailing_stop_triggered
+                    else "donchian_failure_triggered"
+                    if donchian_failure_triggered
                     else "trend_exit_triggered"
                 ),
             )
@@ -1654,6 +1663,10 @@ def run_bot():
                         sell_reason = "trailing_take_profit"
                         notify_fn = notifier.notify_sell_fill
                         title = "BTC EMA 전략 트레일링 익절 체결"
+                    elif donchian_failure_triggered:
+                        sell_reason = "donchian_failure_exit"
+                        notify_fn = notifier.notify_sell_fill
+                        title = "BTC EMA 전략 돌파 실패 청산"
                     else:
                         sell_reason = "trend_exit"
                         notify_fn = notifier.notify_sell_fill

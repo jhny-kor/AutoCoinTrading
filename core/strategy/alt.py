@@ -1,5 +1,6 @@
 """
 작업 요약
+- regime별 동적 가중치를 적용하는 알트 신호 점수 계산으로 EMA slope / Bollinger Squeeze 비중을 장 상태에 맞게 조정
 - 2026-04-09: 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 gate helper 를 추가
 - 2026-04-06: Bollinger Squeeze + 거래량 확장 돌파 기반 병렬 진입 모드 구성
 - 알트 신호 계산과 평균단가 대비 추가매수 허용 여부를 공통 함수로 분리했다.
@@ -9,10 +10,63 @@
 
 from __future__ import annotations
 
+from core.strategy.indicators import calc_weighted_signal_score
+
 
 def _clamp_score(raw: float) -> float:
     """신호 스코어를 0~100 범위로 제한한다."""
     return max(0.0, min(100.0, raw))
+
+
+def _get_alt_signal_weights(symbol_regime: str | None, entry_mode: str) -> dict[str, float]:
+    """레짐별 알트 신호 점수 가중치를 반환한다."""
+    if entry_mode == "squeeze":
+        return {
+            "squeeze": 0.5,
+            "volume": 0.2,
+            "trend": 0.1,
+            "slope": 0.1,
+            "macd": 0.05,
+            "rsi": 0.05,
+        }
+
+    if symbol_regime in {"TRENDING", "TRENDING_EARLY", "TRENDING_MATURE"}:
+        return {
+            "slope": 0.4,
+            "trend": 0.2,
+            "gap": 0.15,
+            "volume": 0.1,
+            "macd": 0.1,
+            "rsi": 0.05,
+        }
+    if symbol_regime == "BREAKOUT_ATTEMPT":
+        return {
+            "gap": 0.25,
+            "volume": 0.2,
+            "trend": 0.15,
+            "slope": 0.15,
+            "squeeze": 0.15,
+            "macd": 0.05,
+            "rsi": 0.05,
+        }
+    if symbol_regime in {"CHOPPY", "CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL"}:
+        return {
+            "squeeze": 0.5,
+            "rsi": 0.15,
+            "macd": 0.15,
+            "gap": 0.1,
+            "volume": 0.05,
+            "slope": 0.05,
+        }
+    return {
+        "gap": 0.2,
+        "volume": 0.15,
+        "rsi": 0.15,
+        "macd": 0.15,
+        "slope": 0.15,
+        "trend": 0.1,
+        "squeeze": 0.1,
+    }
 
 
 def compute_alt_signal_state(
@@ -37,6 +91,7 @@ def compute_alt_signal_state(
     ma_slope_pct: float | None,
     price_slope_pct: float | None,
     signal_score_min: float,
+    symbol_regime: str | None = None,
     entry_mode: str = "ma",
     bb_width_pct: float | None = None,
     squeeze_max_bandwidth_pct: float = 3.0,
@@ -70,39 +125,49 @@ def compute_alt_signal_state(
         )
     gap_component = 0.0
     if min_gap_pct > 0:
-        gap_component = min(1.0, gap_pct / min_gap_pct) * 35.0
+        gap_component = min(1.0, gap_pct / min_gap_pct) * 100.0
     elif gap_pct > 0:
-        gap_component = 35.0
+        gap_component = 100.0
 
     volume_component = 0.0
     if volume_ratio is not None and min_volume_ratio > 0:
-        volume_component = min(1.0, volume_ratio / min_volume_ratio) * 20.0
+        volume_component = min(1.0, volume_ratio / min_volume_ratio) * 100.0
     elif volume_ratio is not None and volume_ratio > 0:
-        volume_component = 20.0
+        volume_component = 100.0
 
     rsi_component = 0.0
     if rsi_filter_passed and rsi_value is not None:
         band_center = (rsi_entry_min + rsi_entry_max) / 2
         half_band = max((rsi_entry_max - rsi_entry_min) / 2, 1e-9)
         normalized_distance = min(1.0, abs(rsi_value - band_center) / half_band)
-        rsi_component = (1.0 - normalized_distance) * 15.0
+        rsi_component = (1.0 - normalized_distance) * 100.0
 
     macd_component = 0.0
     if macd_filter_passed and macd_histogram is not None and last_close > 0:
         macd_hist_pct = abs(macd_histogram) / last_close * 100
-        macd_component = min(1.0, macd_hist_pct / 0.12) * 15.0
+        macd_component = min(1.0, macd_hist_pct / 0.12) * 100.0
 
     slope_component = 0.0
     if ma_slope_positive:
-        slope_component += 7.5
+        slope_component += 50.0
     if price_slope_positive:
-        slope_component += 7.5
+        slope_component += 50.0
 
     trend_component = 0.0
     if bullish:
-        trend_component = 15.0
+        trend_component = 100.0
     elif trend_follow_entry:
-        trend_component = 10.0
+        trend_component = 70.0
+
+    squeeze_component = 0.0
+    if bb_width_pct is not None and squeeze_max_bandwidth_pct > 0:
+        if bb_width_pct <= squeeze_max_bandwidth_pct:
+            squeeze_component = 100.0
+        else:
+            squeeze_component = max(
+                0.0,
+                100.0 - ((bb_width_pct - squeeze_max_bandwidth_pct) / squeeze_max_bandwidth_pct) * 100.0,
+            )
 
     entry_signal = False
     signal_score = 0.0
@@ -119,15 +184,29 @@ def compute_alt_signal_state(
             and rsi_filter_passed
             and macd_filter_passed
         )
-        signal_score = 100.0 if entry_signal else 0.0
+        signal_score = calc_weighted_signal_score(
+            {
+                "squeeze": squeeze_component,
+                "volume": volume_component,
+                "trend": 100.0 if breakout else 0.0,
+                "slope": slope_component,
+                "macd": macd_component,
+                "rsi": rsi_component,
+            },
+            _get_alt_signal_weights(symbol_regime, entry_mode),
+        )
     else:
-        signal_score = _clamp_score(
-            gap_component
-            + volume_component
-            + rsi_component
-            + macd_component
-            + slope_component
-            + trend_component
+        signal_score = calc_weighted_signal_score(
+            {
+                "gap": gap_component,
+                "volume": volume_component,
+                "rsi": rsi_component,
+                "macd": macd_component,
+                "slope": slope_component,
+                "trend": trend_component,
+                "squeeze": squeeze_component,
+            },
+            _get_alt_signal_weights(symbol_regime, entry_mode),
         )
         entry_signal = (bullish or trend_follow_entry) and rsi_filter_passed and macd_filter_passed
 

@@ -1,5 +1,6 @@
 """
 작업 요약
+- regime별 지표 가중치 조합에 재사용할 수 있는 weighted signal score helper 를 추가
 - 2026-04-12: ATR/거래량 분포 기반 percentile, z-score, 호가 압력 점수를 추가해 약한 지표를 결합 판단에 쓸 수 있게 확장
 - 2026-04-08: 볼린저 밴드 계산에서 사용하는 `math.sqrt` 누락 import 를 추가해 알트 봇 런타임 예외를 수정했다.
 - 최근 ATR 과 ATR 퍼센트를 공통으로 계산하는 helper 를 추가해 BTC 변동성 기반 진입 비중 조절에 재사용할 수 있게 확장했다.
@@ -20,6 +21,31 @@ def calc_sma(prices: list[float], period: int) -> float:
         raise ValueError("SMA 계산에 필요한 가격 데이터가 부족합니다.")
     window = prices[-period:]
     return sum(window) / len(window)
+
+
+def calc_weighted_signal_score(
+    components: dict[str, float | None],
+    weights: dict[str, float],
+) -> float:
+    """0~100 점수 컴포넌트를 가중 평균해 최종 신호 점수를 계산한다."""
+    positive_weights = {
+        key: float(weight)
+        for key, weight in weights.items()
+        if float(weight) > 0 and components.get(key) is not None
+    }
+    if not positive_weights:
+        return 0.0
+
+    total_weight = sum(positive_weights.values())
+    if total_weight <= 0:
+        return 0.0
+
+    weighted_sum = 0.0
+    for key, weight in positive_weights.items():
+        value = float(components.get(key) or 0.0)
+        value = max(0.0, min(100.0, value))
+        weighted_sum += value * weight
+    return max(0.0, min(100.0, weighted_sum / total_weight))
 
 
 def calc_ema_series(prices: list[float], period: int) -> list[float]:

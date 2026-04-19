@@ -1,5 +1,7 @@
 """
 작업 요약
+- ATR trailing stop 과 Donchian breakout failure 즉시 청산 트리거를 추가
+- regime별 동적 가중치를 적용하는 BTC 신호 점수 계산으로 TRENDING에서는 EMA slope, CHOPPY에서는 BB 폭 비중을 크게 반영
 - 2026-04-10: 손절 후 일정 시간과 높은 점수가 충족되면 fresh cross 없이도 BTC 재진입을 허용하는 완화 경로를 추가
 - 2026-04-09: 손절 후 BTC 재진입은 최소 시간과 confirm/fresh cross 복구를 함께 보는 패턴 기반 gate helper 를 추가
 - 2026-04-06: Donchian Channel + ATR 돌파 기반 병렬 진입 모드 추가
@@ -10,10 +12,60 @@
 
 from __future__ import annotations
 
+from core.strategy.indicators import calc_weighted_signal_score
+
 
 def _clamp_score(raw: float) -> float:
     """신호 스코어를 0~100 범위로 제한한다."""
     return max(0.0, min(100.0, raw))
+
+
+def _get_btc_signal_weights(symbol_regime: str | None, entry_mode: str) -> dict[str, float]:
+    """레짐별 BTC 신호 점수 가중치를 반환한다."""
+    if entry_mode == "donchian":
+        return {
+            "breakout": 0.35,
+            "spread": 0.2,
+            "bb": 0.15,
+            "slope": 0.15,
+            "trend": 0.1,
+            "rsi": 0.05,
+        }
+    if symbol_regime in {"TRENDING", "TRENDING_EARLY", "TRENDING_MATURE"}:
+        return {
+            "slope": 0.4,
+            "trend": 0.2,
+            "spread": 0.2,
+            "breakout": 0.1,
+            "rsi": 0.05,
+            "bb": 0.05,
+        }
+    if symbol_regime == "BREAKOUT_ATTEMPT":
+        return {
+            "breakout": 0.35,
+            "spread": 0.2,
+            "bb": 0.15,
+            "slope": 0.15,
+            "trend": 0.1,
+            "rsi": 0.05,
+        }
+    if symbol_regime in {"CHOPPY", "CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL"}:
+        return {
+            "bb": 0.5,
+            "rsi": 0.2,
+            "spread": 0.1,
+            "slope": 0.1,
+            "trend": 0.05,
+            "breakout": 0.05,
+        }
+    return {
+        "spread": 0.25,
+        "rsi": 0.15,
+        "bb": 0.2,
+        "slope": 0.2,
+        "trend": 0.1,
+        "breakout": 0.1,
+    }
 
 
 def compute_btc_entry_state(
@@ -37,6 +89,7 @@ def compute_btc_entry_state(
     min_bb_width_pct: float,
     max_bb_width_pct: float,
     signal_score_min: float,
+    symbol_regime: str | None = None,
     entry_mode: str = "ema",
     donchian_entry_upper: float | None = None,
     donchian_confirm_breakout_close: bool = True,
@@ -86,26 +139,26 @@ def compute_btc_entry_state(
 
     spread_component = 0.0
     if min_ema_spread_pct > 0:
-        spread_component = min(1.0, ema_spread_pct / min_ema_spread_pct) * 35.0
+        spread_component = min(1.0, ema_spread_pct / min_ema_spread_pct) * 100.0
     elif ema_spread_pct > 0:
-        spread_component = 35.0
+        spread_component = 100.0
 
     rsi_component = 0.0
     if rsi_filter_passed and rsi_value is not None:
         band_center = (rsi_entry_min + rsi_entry_max) / 2
         half_band = max((rsi_entry_max - rsi_entry_min) / 2, 1e-9)
         normalized_distance = min(1.0, abs(rsi_value - band_center) / half_band)
-        rsi_component = (1.0 - normalized_distance) * 20.0
+        rsi_component = (1.0 - normalized_distance) * 100.0
 
     bb_component = 0.0
     if bb_width_filter_passed and bb_width_pct is not None and min_bb_width_pct > 0:
-        bb_component = min(1.0, bb_width_pct / min_bb_width_pct) * 20.0
+        bb_component = min(1.0, bb_width_pct / min_bb_width_pct) * 100.0
     elif bb_width_filter_passed and bb_width_pct is not None:
-        bb_component = 20.0
+        bb_component = 100.0
 
-    slope_component = 15.0 if ema_slope_positive else 0.0
-    trend_component = 10.0 if price_above_fast else 0.0
-    cross_component = 15.0 if bullish else 0.0
+    slope_component = 100.0 if ema_slope_positive else 0.0
+    trend_component = 100.0 if price_above_fast else 0.0
+    breakout_component = 100.0 if bullish else 0.0
 
     entry_signal = False
     signal_score = 0.0
@@ -116,20 +169,33 @@ def compute_btc_entry_state(
             and rsi_filter_passed
             and bb_width_filter_passed
         )
-        signal_score = 100.0 if entry_signal else 0.0
+        signal_score = calc_weighted_signal_score(
+            {
+                "breakout": 100.0 if donchian_breakout else 0.0,
+                "spread": spread_component,
+                "bb": bb_component,
+                "slope": slope_component,
+                "trend": trend_component,
+                "rsi": rsi_component,
+            },
+            _get_btc_signal_weights(symbol_regime, entry_mode),
+        )
     else:
         entry_signal = (
             (bullish or trend_follow_entry)
             and rsi_filter_passed
             and bb_width_filter_passed
         )
-        signal_score = _clamp_score(
-            spread_component
-            + rsi_component
-            + bb_component
-            + slope_component
-            + trend_component
-            + cross_component
+        signal_score = calc_weighted_signal_score(
+            {
+                "spread": spread_component,
+                "rsi": rsi_component,
+                "bb": bb_component,
+                "slope": slope_component,
+                "trend": trend_component,
+                "breakout": breakout_component,
+            },
+            _get_btc_signal_weights(symbol_regime, entry_mode),
         )
         
     signal_is_strong = signal_score >= signal_score_min
@@ -159,12 +225,16 @@ def compute_btc_exit_flags(
     trailing_armed: bool,
     enable_fee_protect_exit: bool,
     fee_protect_min_net_pnl_pct: float,
+    enable_atr_trailing_exit: bool,
+    trailing_atr_multiple: float,
+    atr_value: float | None,
     pnl_pct: float | None,
     bearish: bool,
     confirm_bullish: bool,
     entry_mode: str = "ema",
     donchian_exit_lower: float | None = None,
     last_low: float = 0.0,
+    enable_donchian_failure_exit: bool = True,
 ) -> dict[str, float | bool | None]:
     drawdown_from_high_pct = None
     if highest_price_since_entry and highest_price_since_entry > 0:
@@ -181,6 +251,18 @@ def compute_btc_exit_flags(
         and drawdown_from_high_pct is not None
         and drawdown_from_high_pct >= trailing_drawdown_pct
     )
+    atr_trailing_stop_price = None
+    atr_trailing_stop_triggered = False
+    if (
+        has_position
+        and enable_atr_trailing_exit
+        and trailing_armed
+        and highest_price_since_entry is not None
+        and atr_value is not None
+    ):
+        atr_trailing_stop_price = highest_price_since_entry - (atr_value * trailing_atr_multiple)
+        atr_trailing_stop_triggered = last_close <= atr_trailing_stop_price
+        trailing_stop_triggered = trailing_stop_triggered or atr_trailing_stop_triggered
     profit_protect_triggered = (
         has_position
         and enable_fee_protect_exit
@@ -193,11 +275,12 @@ def compute_btc_exit_flags(
     trend_exit_triggered = False
     donchian_exit_triggered = False
     
+    donchian_exit_triggered = (
+        enable_donchian_failure_exit
+        and donchian_exit_lower is not None
+        and last_low < donchian_exit_lower
+    )
     if entry_mode == "donchian":
-        donchian_exit_triggered = (
-            donchian_exit_lower is not None 
-            and last_low < donchian_exit_lower
-        )
         trend_exit_triggered = (
             has_position
             and donchian_exit_triggered
@@ -220,8 +303,11 @@ def compute_btc_exit_flags(
         "stop_triggered": stop_triggered,
         "take_profit_triggered": take_profit_triggered,
         "trailing_stop_triggered": trailing_stop_triggered,
+        "atr_trailing_stop_triggered": atr_trailing_stop_triggered,
+        "atr_trailing_stop_price": atr_trailing_stop_price,
         "profit_protect_triggered": profit_protect_triggered,
         "trend_exit_triggered": trend_exit_triggered,
+        "donchian_failure_triggered": donchian_exit_triggered,
     }
 
 

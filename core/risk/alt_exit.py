@@ -1,5 +1,6 @@
 """
 작업 요약
+- 익절 구간에서 거래량 급감 시 조기 청산하는 Volume Spike Exit 트리거를 추가
 - 알트 포지션의 수익률/순익률/MFE/MAE 계산과 청산 보호 판단을 공통화했다.
 - 브레이크이븐 가드와 순익 보호 익절 계산을 한 곳으로 모았다.
 - MFE 대비 되돌림 폭 기준을 추가해 수익 구간에서 급한 반납을 더 빠르게 정리할 수 있게 보강했다.
@@ -72,6 +73,10 @@ def compute_alt_exit_decisions(
     break_even_guard_min_mfe_pct: float,
     break_even_guard_floor_net_pnl_pct: float,
     break_even_guard_max_profit_retrace_pct: float,
+    enable_volume_spike_exit: bool,
+    volume_spike_exit_min_profit_pct: float,
+    volume_spike_exit_max_volume_ratio: float,
+    volume_ratio: float | None,
     bearish: bool,
     sell_split_ratio: float,
 ) -> dict[str, float | bool]:
@@ -115,9 +120,26 @@ def compute_alt_exit_decisions(
         and not stop_loss_triggered
         and not profit_protect_triggered
     )
+    volume_spike_exit_triggered = (
+        has_position
+        and enable_volume_spike_exit
+        and current_net_realized_pnl_pct is not None
+        and current_net_realized_pnl_pct >= volume_spike_exit_min_profit_pct
+        and volume_ratio is not None
+        and volume_ratio <= volume_spike_exit_max_volume_ratio
+        and bearish
+        and not stop_loss_triggered
+        and not profit_protect_triggered
+        and not break_even_guard_triggered
+    )
     estimated_sell_ratio = (
         1.0
-        if (stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered)
+        if (
+            stop_loss_triggered
+            or profit_protect_triggered
+            or break_even_guard_triggered
+            or volume_spike_exit_triggered
+        )
         else sell_split_ratio
     )
     return {
@@ -127,6 +149,7 @@ def compute_alt_exit_decisions(
         "stop_loss_triggered": stop_loss_triggered,
         "profit_protect_triggered": profit_protect_triggered,
         "break_even_guard_triggered": break_even_guard_triggered,
+        "volume_spike_exit_triggered": volume_spike_exit_triggered,
         "profit_retrace_from_mfe_pct": (
             None if (mfe_pct is None or pnl_pct is None) else max(0.0, mfe_pct - pnl_pct)
         ),

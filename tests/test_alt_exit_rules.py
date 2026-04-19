@@ -38,6 +38,10 @@ class AltExitRuleTests(unittest.TestCase):
             break_even_guard_min_mfe_pct=1.0,
             break_even_guard_floor_net_pnl_pct=0.0,
             break_even_guard_max_profit_retrace_pct=0.5,
+            enable_volume_spike_exit=True,
+            volume_spike_exit_min_profit_pct=0.2,
+            volume_spike_exit_max_volume_ratio=0.8,
+            volume_ratio=1.2,
             bearish=True,
             sell_split_ratio=0.5,
         )
@@ -61,6 +65,10 @@ class AltExitRuleTests(unittest.TestCase):
             break_even_guard_min_mfe_pct=1.0,
             break_even_guard_floor_net_pnl_pct=0.0,
             break_even_guard_max_profit_retrace_pct=0.5,
+            enable_volume_spike_exit=True,
+            volume_spike_exit_min_profit_pct=0.2,
+            volume_spike_exit_max_volume_ratio=0.8,
+            volume_ratio=1.2,
             bearish=True,
             sell_split_ratio=0.5,
         )
@@ -83,10 +91,39 @@ class AltExitRuleTests(unittest.TestCase):
             break_even_guard_min_mfe_pct=1.0,
             break_even_guard_floor_net_pnl_pct=0.0,
             break_even_guard_max_profit_retrace_pct=0.5,
+            enable_volume_spike_exit=True,
+            volume_spike_exit_min_profit_pct=0.2,
+            volume_spike_exit_max_volume_ratio=0.8,
+            volume_ratio=1.2,
             bearish=True,
             sell_split_ratio=0.5,
         )
         self.assertFalse(decisions["break_even_guard_triggered"])
+
+    def test_volume_spike_exit_triggers_when_profit_and_volume_collapse(self):
+        decisions = compute_alt_exit_decisions(
+            has_position=True,
+            pnl_pct=0.6,
+            mfe_pct=1.0,
+            current_net_realized_pnl_pct=0.3,
+            take_profit_pct=1.0,
+            stop_loss_pct=1.5,
+            fee_rate_pct=0.05,
+            enable_fee_protect_exit=True,
+            fee_protect_min_net_pnl_pct=0.5,
+            enable_break_even_guard=True,
+            break_even_guard_min_mfe_pct=1.0,
+            break_even_guard_floor_net_pnl_pct=0.0,
+            break_even_guard_max_profit_retrace_pct=0.5,
+            enable_volume_spike_exit=True,
+            volume_spike_exit_min_profit_pct=0.2,
+            volume_spike_exit_max_volume_ratio=0.8,
+            volume_ratio=0.5,
+            bearish=True,
+            sell_split_ratio=0.5,
+        )
+        self.assertTrue(decisions["volume_spike_exit_triggered"])
+        self.assertEqual(decisions["estimated_sell_ratio"], 1.0)
 
 
 if __name__ == "__main__":

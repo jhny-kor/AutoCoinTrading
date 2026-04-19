@@ -193,6 +193,7 @@ def build_alt_exit_steps(
     stop_loss_triggered: bool,
     profit_protect_triggered: bool,
     break_even_guard_triggered: bool,
+    volume_spike_exit_triggered: bool,
     bearish: bool,
     in_cooldown: bool,
     seconds_since_last_trade: float,
@@ -219,40 +220,41 @@ def build_alt_exit_steps(
         ),
         FunnelStep(
             stage="exit_trigger",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or bearish),
+            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or bearish),
             reason="no_exit_signal",
             actual={
                 "stop_loss_triggered": stop_loss_triggered,
                 "profit_protect_triggered": profit_protect_triggered,
                 "break_even_guard_triggered": break_even_guard_triggered,
+                "volume_spike_exit_triggered": volume_spike_exit_triggered,
                 "bearish_signal": bearish,
             },
             required={"exit_signal": True},
         ),
         FunnelStep(
             stage="cooldown",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or not in_cooldown),
+            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or not in_cooldown),
             reason="cooldown_active",
             actual={"seconds_since_last_trade": seconds_since_last_trade},
             required={"cooldown_inactive": True},
         ),
         FunnelStep(
             stage="distance",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or signal_is_strong),
+            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or signal_is_strong),
             reason="distance_too_small",
             actual={"gap_pct": gap_pct},
             required={"min_gap_pct": min_gap_pct},
         ),
         FunnelStep(
             stage="higher_timeframe",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or htf_bearish),
+            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or htf_bearish),
             reason="higher_timeframe_not_bearish",
             actual={"htf_bearish": htf_bearish},
             required={"htf_bearish": True},
         ),
         FunnelStep(
             stage="take_profit",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or take_profit_ready),
+            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or take_profit_ready),
             reason="take_profit_not_reached",
             actual={
                 "pnl_pct": pnl_pct,
@@ -634,6 +636,7 @@ def build_btc_exit_steps(
     partial_take_profit_triggered: bool,
     profit_protect_triggered: bool,
     trailing_stop_triggered: bool,
+    donchian_failure_triggered: bool,
     trend_exit_triggered: bool,
     estimated_exit_amount: float,
     min_order_amount: float,
@@ -655,6 +658,7 @@ def build_btc_exit_steps(
                 or partial_take_profit_triggered
                 or profit_protect_triggered
                 or trailing_stop_triggered
+                or donchian_failure_triggered
                 or trend_exit_triggered
             ),
             reason="no_exit_signal",
@@ -663,6 +667,7 @@ def build_btc_exit_steps(
                 "partial_take_profit_triggered": partial_take_profit_triggered,
                 "profit_protect_triggered": profit_protect_triggered,
                 "trailing_stop_triggered": trailing_stop_triggered,
+                "donchian_failure_triggered": donchian_failure_triggered,
                 "trend_exit_triggered": trend_exit_triggered,
             },
             required={"exit_triggered": True},

@@ -757,6 +757,7 @@ def run_bot():
                     ma_slope_pct=ma_slope_pct,
                     price_slope_pct=price_slope_pct,
                     signal_score_min=effective_signal_score_min,
+                    symbol_regime=symbol_regime,
                     entry_mode=strategy.entry_mode,
                     bb_width_pct=bb_width_pct,
                     squeeze_max_bandwidth_pct=strategy.squeeze_max_bandwidth_pct,
@@ -1197,6 +1198,10 @@ def run_bot():
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
                     break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
                     break_even_guard_max_profit_retrace_pct=break_even_guard_max_profit_retrace_pct,
+                    enable_volume_spike_exit=strategy.enable_volume_spike_exit,
+                    volume_spike_exit_min_profit_pct=strategy.volume_spike_exit_min_profit_pct,
+                    volume_spike_exit_max_volume_ratio=strategy.volume_spike_exit_max_volume_ratio,
+                    volume_ratio=volume_ratio,
                     bearish=bearish,
                     sell_split_ratio=strategy.sell_split_ratio,
                 )
@@ -1204,6 +1209,7 @@ def run_bot():
                 stop_loss_triggered = bool(alt_exit_state["stop_loss_triggered"])
                 profit_protect_triggered = bool(alt_exit_state["profit_protect_triggered"])
                 break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
+                volume_spike_exit_triggered = bool(alt_exit_state["volume_spike_exit_triggered"])
                 profit_retrace_from_mfe_pct = alt_exit_state["profit_retrace_from_mfe_pct"]
                 estimated_sell_amount = (
                     base_free * float(alt_exit_state["estimated_sell_ratio"])
@@ -1218,6 +1224,7 @@ def run_bot():
                     and not take_profit_ready
                     and not profit_protect_triggered
                     and not break_even_guard_triggered
+                    and not volume_spike_exit_triggered
                     and not stop_loss_triggered
                 ):
                     log(
@@ -1238,9 +1245,16 @@ def run_bot():
                     log(
                         f"[{symbol}] 손절 조건 충족: 현재 수익률 {pnl_pct:.2f}% <= -{stop_loss_pct:.2f}%"
                     )
+                if has_position and volume_spike_exit_triggered:
+                    log(
+                        f"[{symbol}] Volume Spike Exit 조건 충족: 순익률 "
+                        f"{0.0 if current_net_realized_pnl_pct is None else current_net_realized_pnl_pct:.2f}% "
+                        f"상태에서 거래량 배수 {0.0 if volume_ratio is None else volume_ratio:.4f} 가 "
+                        f"{strategy.volume_spike_exit_max_volume_ratio:.4f} 이하로 급감해 조기 청산합니다."
+                    )
                 if (
                     has_position
-                    and (stop_loss_triggered or profit_protect_triggered or bearish)
+                    and (stop_loss_triggered or profit_protect_triggered or volume_spike_exit_triggered or bearish)
                     and min_order_amount > 0
                     and 0 < estimated_sell_amount < min_order_amount
                 ):
@@ -1493,6 +1507,7 @@ def run_bot():
                     stop_loss_triggered=stop_loss_triggered,
                     profit_protect_triggered=profit_protect_triggered,
                     break_even_guard_triggered=break_even_guard_triggered,
+                    volume_spike_exit_triggered=volume_spike_exit_triggered,
                     bearish=bearish,
                     in_cooldown=in_cooldown,
                     seconds_since_last_trade=seconds_since_last_trade,
@@ -1541,6 +1556,8 @@ def run_bot():
                         if profit_protect_triggered
                         else "break_even_guard_triggered"
                         if break_even_guard_triggered
+                        else "volume_spike_exit_triggered"
+                        if volume_spike_exit_triggered
                         else "take_profit_conditions_met"
                     ),
                 )
@@ -1733,6 +1750,10 @@ def run_bot():
                         sell_ratio = 1.0
                         exit_reason_key = "break_even_guard_take_profit"
                         sell_reason = "브레이크이븐보호익절"
+                    elif volume_spike_exit_triggered:
+                        sell_ratio = 1.0
+                        exit_reason_key = "volume_spike_take_profit"
+                        sell_reason = "거래량급감익절"
                     elif partial_take_profit_pending:
                         sell_ratio = effective_partial_take_profit_ratio
                         exit_reason_key = "partial_take_profit"
