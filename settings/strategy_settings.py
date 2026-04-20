@@ -1,5 +1,6 @@
 """
 수정 요약
+- 알트 자체 ATR 퍼센트 기반 포지션 사이징 설정을 추가
 - OKX 현물 알트 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 공통 설정을 추가
 - 심볼별 signal_score 최소 기준 오버라이드를 추가해 ETH/KRW 같은 알트를 개별적으로 더 보수화할 수 있게 확장
 - 2026-04-10: 알트 보수형 튜닝을 위해 최대 진입 이격도와 최대 거래량 배수 상한 설정을 추가했다.
@@ -122,6 +123,8 @@ class StrategySettings:
     enable_btc_atr_position_scaling: bool
     btc_atr_position_scale_lookback: int
     btc_atr_position_scale_threshold_map: dict[float, float]
+    enable_alt_atr_position_sizing: bool
+    alt_atr_position_scale_threshold_map: dict[float, float]
     enable_volatility_filter: bool
     volatility_lookback: int
     min_volatility_pct: float
@@ -264,6 +267,17 @@ class StrategySettings:
         if not matched_scales:
             return 1.0
         return min(matched_scales)
+
+    def get_alt_atr_position_scale(self, atr_pct: float | None) -> float:
+        """알트 자체 ATR 퍼센트 기준 포지션 비중 스케일을 반환한다."""
+        if not self.enable_alt_atr_position_sizing:
+            return 1.0
+        if atr_pct is None:
+            return 1.0
+        for threshold, scale in sorted(self.alt_atr_position_scale_threshold_map.items(), key=lambda item: item[0]):
+            if atr_pct < threshold:
+                return scale
+        return 1.0
 
     def get_break_even_guard_min_mfe_pct(self, symbol: str) -> float:
         """심볼별 브레이크이븐 가드 최소 MFE 기준을 반환한다."""
@@ -684,6 +698,8 @@ def load_strategy_settings(
         enable_btc_atr_position_scaling=config_bool("strategy", "enable_btc_atr_position_scaling", True, env_key="STRATEGY_ENABLE_BTC_ATR_POSITION_SCALING"),
         btc_atr_position_scale_lookback=config_int("strategy", "btc_atr_position_scale_lookback", 14, env_key="STRATEGY_BTC_ATR_POSITION_SCALE_LOOKBACK"),
         btc_atr_position_scale_threshold_map=parse_float_float_map(config_value("strategy", "btc_atr_position_scale_threshold_map", {}, env_key="STRATEGY_BTC_ATR_POSITION_SCALE_THRESHOLD_MAP")),
+        enable_alt_atr_position_sizing=config_bool("strategy", "enable_alt_atr_position_sizing", True, env_key="STRATEGY_ENABLE_ALT_ATR_POSITION_SIZING"),
+        alt_atr_position_scale_threshold_map=parse_float_float_map(config_value("strategy", "alt_atr_position_scale_threshold_map", {}, env_key="STRATEGY_ALT_ATR_POSITION_SCALE_THRESHOLD_MAP")),
         enable_volatility_filter=config_bool("strategy", "enable_volatility_filter", True, env_key="STRATEGY_ENABLE_VOLATILITY_FILTER"),
         volatility_lookback=config_int("strategy", "volatility_lookback", 20, env_key="STRATEGY_VOLATILITY_LOOKBACK"),
         min_volatility_pct=config_float("strategy", "min_volatility_pct", 0.05, env_key="STRATEGY_MIN_VOLATILITY_PCT"),

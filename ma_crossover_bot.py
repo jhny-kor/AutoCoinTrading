@@ -89,6 +89,7 @@ from core.strategy.alt import (
     compute_alt_stop_loss_reentry_gate,
 )
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
+from core.strategy.mean_reversion import compute_bollinger_mean_reversion_state
 from core.strategy.regime_router import route_alt_strategy
 from core.strategy.indicators import (
     calc_atr,
@@ -726,9 +727,10 @@ def run_bot():
                     * btc_regime_position_scale
                     * btc_atr_position_scale
                 )
+                alt_atr_position_scale = strategy.get_alt_atr_position_scale(atr_pct)
                 pre_score_position_ratio = apply_regime_position_scale(
                     base_position_ratio=base_position_ratio,
-                    regime_scale=combined_position_scale,
+                    regime_scale=(combined_position_scale * alt_atr_position_scale),
                 )
                 bb_upper, bb_mid, bb_lower = calc_bollinger_bands(
                     closes, period=strategy.bb_period, stddev_multiplier=strategy.bb_stddev
@@ -736,7 +738,7 @@ def run_bot():
                 bb_width_pct = calc_bollinger_band_width_pct(
                     closes, period=strategy.bb_period, stddev_multiplier=strategy.bb_stddev
                 )
-                alt_signal_state = compute_alt_signal_state(
+                signal_state = compute_alt_signal_state(
                     prev_close=prev_close,
                     prev_ma=prev_ma,
                     last_close=last_close,
@@ -764,16 +766,30 @@ def run_bot():
                     bb_upper=bb_upper,
                     squeeze_min_volume_ratio=strategy.squeeze_min_volume_ratio,
                 )
-                bullish = bool(alt_signal_state["bullish"])
-                bearish = bool(alt_signal_state["bearish"])
-                gap_pct = float(alt_signal_state["gap_pct"])
+                if strategy_key == "mean_reversion":
+                    signal_state = compute_bollinger_mean_reversion_state(
+                        prev_close=prev_close,
+                        last_close=last_close,
+                        bb_lower=bb_lower,
+                        bb_mid=bb_mid,
+                        bb_upper=bb_upper,
+                        bb_width_pct=bb_width_pct,
+                        squeeze_max_bandwidth_pct=strategy.squeeze_max_bandwidth_pct,
+                        rsi_value=rsi_value,
+                        signal_score_min=effective_signal_score_min,
+                        rsi_filter_passed=bool(signal_state["rsi_filter_passed"]),
+                        macd_filter_passed=bool(signal_state["macd_filter_passed"]),
+                    )
+                bullish = bool(signal_state["bullish"])
+                bearish = bool(signal_state["bearish"])
+                gap_pct = float(signal_state["gap_pct"])
                 gap_within_upper_bound = gap_pct <= max_entry_gap_pct
-                signal_is_strong = bool(alt_signal_state["signal_is_strong"])
-                signal_score = float(alt_signal_state["signal_score"])
-                rsi_filter_passed = bool(alt_signal_state["rsi_filter_passed"])
-                macd_filter_passed = bool(alt_signal_state["macd_filter_passed"])
-                trend_follow_entry = bool(alt_signal_state["trend_follow_entry"])
-                entry_signal = bool(alt_signal_state["entry_signal"])
+                signal_is_strong = bool(signal_state["signal_is_strong"])
+                signal_score = float(signal_state["signal_score"])
+                rsi_filter_passed = bool(signal_state["rsi_filter_passed"])
+                macd_filter_passed = bool(signal_state["macd_filter_passed"])
+                trend_follow_entry = bool(signal_state["trend_follow_entry"])
+                entry_signal = bool(signal_state["entry_signal"])
                 # 알트가 BTC와 너무 같은 방향으로 움직이는 구간은 포트폴리오 중복 노출을 줄이기 위해 진입을 막는다.
                 correlation_with_btc = (
                     calc_return_correlation(
@@ -933,6 +949,7 @@ def run_bot():
                     f"심볼 레짐 스케일 {regime_position_scale:.2f}x | "
                     f"BTC 레짐({btc_reference_regime}) 스케일 {btc_regime_position_scale:.2f}x | "
                     f"BTC ATR({0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%) 스케일 {btc_atr_position_scale:.2f}x | "
+                    f"ALT ATR({0.0 if atr_pct is None else atr_pct:.4f}%) 스케일 {alt_atr_position_scale:.2f}x | "
                     f"score 스케일 {allocation_score_result.score_scale:.2f}x | "
                     f"최종 {position_ratio:.4f}"
                 )

@@ -1,5 +1,6 @@
 """
 작업 요약
+- CHOPPY 계열 레짐에서 `mean_reversion` 전략 경로를 선택하도록 확장
 - BTC/알트가 레짐을 단순 필터가 아니라 전략 선택기로 쓰도록 공통 레짐 라우터를 추가했다.
 - 현재 구현은 기존 전략 엔진을 유지한 채 `skip / breakout / trend_follow` 경로를 명시적으로 고르게 만든다.
 """
@@ -22,9 +23,11 @@ class StrategyRoute:
 
 def _choose_strategy_key(regime: str) -> str:
     """레짐 이름을 기존 전략 경로 키로 변환한다."""
-    if regime in {"LOW_ENERGY", "EXHAUSTION_RISK", "OVERHEATED", "CHOPPY_LOW_VOL"}:
+    if regime in {"LOW_ENERGY", "EXHAUSTION_RISK", "OVERHEATED"}:
         return "skip"
-    if regime in {"BREAKOUT_ATTEMPT", "CHOPPY_HIGH_VOL", "TRENDING_EARLY"}:
+    if regime in {"CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL"}:
+        return "mean_reversion"
+    if regime in {"BREAKOUT_ATTEMPT", "TRENDING_EARLY"}:
         return "breakout"
     if regime in {"TRENDING_MATURE"}:
         return "trend_follow"

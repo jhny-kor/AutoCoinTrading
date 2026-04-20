@@ -22,8 +22,8 @@ class RegimeRouterTests(unittest.TestCase):
         self.assertFalse(route.policy.allow_trend_follow_entry)
 
     def test_alt_router_shares_same_route_keys(self):
-        self.assertEqual("skip", route_alt_strategy("CHOPPY_LOW_VOL").strategy_key)
-        self.assertEqual("breakout", route_alt_strategy("CHOPPY_HIGH_VOL").strategy_key)
+        self.assertEqual("mean_reversion", route_alt_strategy("CHOPPY_LOW_VOL").strategy_key)
+        self.assertEqual("mean_reversion", route_alt_strategy("CHOPPY_HIGH_VOL").strategy_key)
         self.assertEqual("trend_follow", route_alt_strategy("TRENDING_MATURE").strategy_key)
 
 

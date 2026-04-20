@@ -126,6 +126,22 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(0.0004, settings.okx_funding_rate_max_long_bias)
         self.assertEqual(180.0, settings.okx_funding_rate_cache_ttl_sec)
 
+    def test_loads_alt_atr_position_sizing_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_ENABLE_ALT_ATR_POSITION_SIZING": "true",
+                "STRATEGY_ALT_ATR_POSITION_SCALE_THRESHOLD_MAP": "0.12:1.10,0.20:0.90,0.35:0.65",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertTrue(settings.enable_alt_atr_position_sizing)
+        self.assertEqual(1.10, settings.get_alt_atr_position_scale(0.10))
+        self.assertEqual(0.90, settings.get_alt_atr_position_scale(0.18))
+        self.assertEqual(0.65, settings.get_alt_atr_position_scale(0.30))
+
 
 if __name__ == "__main__":
     unittest.main()
