@@ -1,5 +1,6 @@
 """
 수정 요약
+- heartbeat 상태 이벤트와 최대 무수신 시간 초과 시 세션 재연결을 요청하는 watchdog 을 추가
 - 업비트 private 웹소켓도 같은 클라이언트로 처리할 수 있도록 사용자 지정 구독 payload, 헤더, 라벨을 지원하도록 확장했다.
 - 업비트 시세용 공개 웹소켓 연결, 재연결, 구독 메시지 전송, payload 디코딩을 담당하는 경량 클라이언트를 추가했다.
 - trade, orderbook, candle.1m 스트림을 한 연결에서 함께 구독하도록 구성했다.
@@ -40,6 +41,8 @@ class UpbitWebSocketClient:
         subscription_payload: list[dict[str, Any]] | None = None,
         headers: list[str] | None = None,
         client_label: str = "public",
+        heartbeat_interval_sec: float = 60.0,
+        max_idle_sec: float = 120.0,
     ) -> None:
         self.url = url
         self.markets = sorted(set(markets or []))
@@ -53,11 +56,14 @@ class UpbitWebSocketClient:
         self.subscription_payload = subscription_payload
         self.headers = headers or []
         self.client_label = client_label
+        self.heartbeat_interval_sec = heartbeat_interval_sec
+        self.max_idle_sec = max_idle_sec
         self.stop_event = threading.Event()
         self.connected = False
         self.last_message_received_at = 0.0
         self.connection_started_at = 0.0
         self.reconnect_count = 0
+        self.last_heartbeat_at = 0.0
 
     def build_subscription_payload(self) -> list[dict[str, Any]]:
         """업비트 웹소켓 구독 payload 를 생성한다."""
@@ -120,10 +126,13 @@ class UpbitWebSocketClient:
 
     def _run_single_session(self) -> None:
         subscription_payload = self.build_subscription_payload()
+        app_holder: dict[str, websocket.WebSocketApp] = {}
 
         def on_open(ws_app: websocket.WebSocketApp) -> None:
             self.connected = True
             self.connection_started_at = time.time()
+            self.last_message_received_at = 0.0
+            self.last_heartbeat_at = 0.0
             ws_app.send(json.dumps(subscription_payload))
             self._emit_state("connected")
 
@@ -153,11 +162,20 @@ class UpbitWebSocketClient:
             on_error=on_error,
             on_close=on_close,
         )
+        app_holder["app"] = app
+        watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            args=(app_holder,),
+            name=f"upbit-{self.client_label}-watchdog",
+            daemon=True,
+        )
+        watchdog_thread.start()
         app.run_forever(
             ping_interval=self.ping_interval_sec,
             ping_timeout=max(5.0, self.ping_interval_sec / 2),
             sslopt={"cert_reqs": ssl.CERT_REQUIRED},
         )
+        watchdog_thread.join(timeout=1.0)
 
     def _emit_state(self, event: str, **extra: Any) -> None:
         if self.on_state is None:
@@ -165,6 +183,33 @@ class UpbitWebSocketClient:
         payload = self.build_state_snapshot(event=event)
         payload.update(extra)
         self.on_state(payload)
+
+    def _watchdog_loop(self, app_holder: dict[str, websocket.WebSocketApp]) -> None:
+        """heartbeat 를 내보내고 무수신 상태가 길면 현재 세션을 닫아 재연결을 유도한다."""
+        while not self.stop_event.is_set():
+            time.sleep(1.0)
+            now_ts = time.time()
+            if self.heartbeat_interval_sec > 0 and (
+                now_ts - self.last_heartbeat_at
+            ) >= self.heartbeat_interval_sec:
+                self.last_heartbeat_at = now_ts
+                self._emit_state("heartbeat")
+
+            if not self.connected or self.max_idle_sec <= 0:
+                continue
+
+            last_activity_ts = self.last_message_received_at or self.connection_started_at
+            if last_activity_ts <= 0:
+                continue
+            idle_sec = now_ts - last_activity_ts
+            if idle_sec < self.max_idle_sec:
+                continue
+
+            self._emit_state("stale_reconnect", idle_sec=idle_sec)
+            app = app_holder.get("app")
+            if app is not None:
+                app.close()
+            break
 
 
 def _decode_message(message: str | bytes) -> dict[str, Any] | None:

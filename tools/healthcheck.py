@@ -1,5 +1,6 @@
 """
 작업 요약
+- upbit_stream 은 프로그램 로그 대신 `logs/runtime/upbit_ws/health.json` heartbeat 를 우선 기준으로 판단하도록 개선
 - 2026-04-08: 헬스체크를 warning/strict 모드로 분리하고 비핵심 프로그램은 warning 모드에서 전체 실패로 보지 않도록 확장
 - 관리 대상 프로세스와 최신 로그 갱신 상태를 점검하는 운영 헬스체크를 추가했다.
 - collector/telegram 특성에 맞는 로그 판정 기준을 포함해 JSON/텍스트 출력이 가능하도록 구성했다.
@@ -35,6 +36,43 @@ def latest_program_log(script: str) -> Path | None:
     return latest_file(Path("logs") / current_date_str(), f"{Path(script).stem}.log")
 
 
+def read_json_file(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def build_upbit_stream_health(max_log_age_sec: int) -> dict:
+    """업비트 웹소켓 health heartbeat 기준 상태를 반환한다."""
+    health_path = Path("logs/runtime/upbit_ws/health.json")
+    payload = read_json_file(health_path)
+    health_age = file_age_seconds(health_path)
+    public_state = payload.get("public") if isinstance(payload.get("public"), dict) else {}
+    private_state = payload.get("private") if isinstance(payload.get("private"), dict) else {}
+    last_message_received_at = public_state.get("last_message_received_at") or payload.get(
+        "last_message_received_at"
+    )
+    last_message_age = None
+    try:
+        if last_message_received_at:
+            last_message_age = max(0.0, time.time() - float(last_message_received_at))
+    except (TypeError, ValueError):
+        last_message_age = None
+
+    connected = bool(payload.get("connected") or public_state.get("connected"))
+    return {
+        "path": health_path,
+        "payload": payload,
+        "health_age_sec": health_age,
+        "last_message_age_sec": last_message_age,
+        "connected": connected,
+        "public_event": public_state.get("event"),
+        "private_event": private_state.get("event"),
+        "ok": health_age is not None and health_age <= max_log_age_sec and connected,
+    }
+
+
 def build_health_report(max_log_age_sec: int, mode: str = "warning") -> dict:
     results: dict[str, dict] = {}
     overall_ok = True
@@ -54,6 +92,9 @@ def build_health_report(max_log_age_sec: int, mode: str = "warning") -> dict:
             log_ok = analysis_age is not None and analysis_age <= max_log_age_sec
         elif name == "telegram":
             log_ok = True
+        elif name == "upbit_stream":
+            upbit_ws_health = build_upbit_stream_health(max_log_age_sec)
+            log_ok = bool(upbit_ws_health["ok"])
         else:
             log_ok = log_age is not None and log_age <= max_log_age_sec
         healthy = alive and log_ok
@@ -76,6 +117,15 @@ def build_health_report(max_log_age_sec: int, mode: str = "warning") -> dict:
             "status": status,
             "ok": healthy if severity == "strict" or mode == "strict" else status != "FAIL",
         }
+        if name == "upbit_stream":
+            results[name]["ws_health"] = {
+                "path": str(upbit_ws_health["path"]),
+                "health_age_sec": upbit_ws_health["health_age_sec"],
+                "last_message_age_sec": upbit_ws_health["last_message_age_sec"],
+                "connected": upbit_ws_health["connected"],
+                "public_event": upbit_ws_health["public_event"],
+                "private_event": upbit_ws_health["private_event"],
+            }
 
     analysis_ok = (analysis_age or 10**9) <= max_log_age_sec
     structured_ok = (structured_age or 10**9) <= max_log_age_sec

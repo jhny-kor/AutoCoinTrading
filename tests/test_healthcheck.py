@@ -2,6 +2,8 @@
 
 import tempfile
 import unittest
+import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -79,6 +81,49 @@ class HealthcheckTests(unittest.TestCase):
             self.assertEqual("WARN", warning_report["programs"]["upbit_stream"]["status"])
             self.assertEqual("WARN", warning_report["status"])
             self.assertEqual("FAIL", strict_report["status"])
+
+    def test_upbit_stream_uses_runtime_health_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logs_dir = root / "logs" / "2026-03-29"
+            analysis_dir = root / "analysis_logs" / "2026-03-29"
+            structured_dir = root / "structured_logs" / "live" / "2026-03-29" / "x"
+            health_dir = root / "logs" / "runtime" / "upbit_ws"
+            logs_dir.mkdir(parents=True)
+            analysis_dir.mkdir(parents=True)
+            structured_dir.mkdir(parents=True)
+            health_dir.mkdir(parents=True)
+
+            (analysis_dir / "okx__ETH_USDT.jsonl").write_text("{}", encoding="utf-8")
+            (structured_dir / "strategy.jsonl").write_text("{}", encoding="utf-8")
+            (health_dir / "health.json").write_text(
+                json.dumps(
+                    {
+                        "connected": True,
+                        "public": {
+                            "event": "heartbeat",
+                            "connected": True,
+                            "last_message_received_at": time.time(),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            programs = {"upbit_stream": "run/upbit_market_data_stream.py"}
+
+            def fake_path(path_str=""):
+                return root / path_str if path_str else root
+
+            with patch("tools.healthcheck.PROGRAMS", programs), \
+                 patch("tools.healthcheck.current_date_str", return_value="2026-03-29"), \
+                 patch("tools.healthcheck.read_pid_file", return_value=123), \
+                 patch("tools.healthcheck.is_pid_alive", return_value=True), \
+                 patch("tools.healthcheck.Path", side_effect=fake_path):
+                report = build_health_report(1800, mode="warning")
+
+            self.assertEqual("OK", report["programs"]["upbit_stream"]["status"])
+            self.assertTrue(report["programs"]["upbit_stream"]["ws_health"]["connected"])
 
 
 if __name__ == "__main__":

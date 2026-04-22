@@ -1,5 +1,6 @@
 """
 수정 요약
+- heartbeat health 기록과 max idle 기반 재연결 설정을 추가해 수집기 정상 여부를 운영에서 판단할 수 있게 개선
 - 업비트 private 웹소켓을 추가해 myOrder / myAsset 이벤트를 실시간 수집하고 로컬 latest/jsonl 파일로 저장하도록 확장했다.
 - 업비트 공개 웹소켓에서 trade, orderbook, candle.1m 스트림을 공용으로 수집해 로컬 스냅샷으로 저장하는 1단계 수집기를 추가했다.
 - 수집기 연결 상태를 health JSON 으로 남기고 봇 프로세스 관리 대상에 연결할 준비를 맞췄다.
@@ -54,6 +55,10 @@ def build_runtime_settings() -> dict[str, float | str | bool]:
         "latest_write_interval_sec": float(
             os.getenv("UPBIT_WS_LATEST_WRITE_INTERVAL_SEC", "0.4")
         ),
+        "heartbeat_interval_sec": float(
+            os.getenv("UPBIT_WS_HEARTBEAT_INTERVAL_SEC", "60.0")
+        ),
+        "max_idle_sec": float(os.getenv("UPBIT_WS_MAX_IDLE_SEC", "120.0")),
         "enable_trade": os.getenv("UPBIT_WS_ENABLE_TRADE", "true").strip().lower() in {"1", "true", "yes", "y", "on"},
         "enable_orderbook": os.getenv("UPBIT_WS_ENABLE_ORDERBOOK", "true").strip().lower() in {"1", "true", "yes", "y", "on"},
         "enable_candle_1m": os.getenv("UPBIT_WS_ENABLE_CANDLE_1M", "true").strip().lower() in {"1", "true", "yes", "y", "on"},
@@ -111,6 +116,10 @@ def main() -> int:
                 f"업비트 웹소켓 종료: status={payload.get('status_code')} "
                 f"message={payload.get('message')}"
             )
+        elif event == "stale_reconnect":
+            log(
+                f"업비트 웹소켓 무수신 재연결: idle={payload.get('idle_sec'):.1f}초"
+            )
 
     def handle_private_payload(payload: dict) -> None:
         event_type = str(payload.get("type", "") or "")
@@ -139,6 +148,10 @@ def main() -> int:
                 f"업비트 private 웹소켓 종료: status={payload.get('status_code')} "
                 f"message={payload.get('message')}"
             )
+        elif event == "stale_reconnect":
+            log(
+                f"업비트 private 웹소켓 무수신 재연결: idle={payload.get('idle_sec'):.1f}초"
+            )
 
     client = UpbitWebSocketClient(
         url=str(settings["url"]),
@@ -150,6 +163,8 @@ def main() -> int:
         subscribe_candle_1m=bool(settings["enable_candle_1m"]),
         reconnect_delay_sec=float(settings["reconnect_delay_sec"]),
         ping_interval_sec=float(settings["ping_interval_sec"]),
+        heartbeat_interval_sec=float(settings["heartbeat_interval_sec"]),
+        max_idle_sec=float(settings["max_idle_sec"]),
         client_label="public",
     )
 
@@ -181,6 +196,8 @@ def main() -> int:
             subscribe_candle_1m=False,
             reconnect_delay_sec=float(settings["reconnect_delay_sec"]),
             ping_interval_sec=float(settings["ping_interval_sec"]),
+            heartbeat_interval_sec=float(settings["heartbeat_interval_sec"]),
+            max_idle_sec=float(settings["max_idle_sec"]),
             subscription_payload=private_payload,
             headers=private_headers,
             client_label="private",
