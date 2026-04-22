@@ -1,4 +1,4 @@
-# Auto Coin Bot 
+# Auto Coin Bot
 
 OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 프로젝트입니다.  
 현재 구조는 `run/` 실행 진입점, `core/` 공통 전략/리스크/실행 로직, `settings/` 설정 로더, `reporting/` 분석/텔레그램, `tools/` 운영 유틸 기준으로 정리돼 있습니다.
