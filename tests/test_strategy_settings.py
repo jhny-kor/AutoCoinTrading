@@ -142,6 +142,26 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(0.90, settings.get_alt_atr_position_scale(0.18))
         self.assertEqual(0.65, settings.get_alt_atr_position_scale(0.30))
 
+    def test_loads_mean_reversion_filter_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_MEAN_REVERSION_RSI_MIN": "25",
+                "STRATEGY_MEAN_REVERSION_RSI_MAX": "58",
+                "STRATEGY_MEAN_REVERSION_ALLOW_NEGATIVE_MACD": "true",
+                "STRATEGY_MEAN_REVERSION_REQUIRE_MACD_RECOVERING": "true",
+                "STRATEGY_MEAN_REVERSION_MACD_RECOVERY_EPSILON": "0.001",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertEqual(25, settings.mean_reversion_rsi_min)
+        self.assertEqual(58, settings.mean_reversion_rsi_max)
+        self.assertTrue(settings.mean_reversion_allow_negative_macd)
+        self.assertTrue(settings.mean_reversion_require_macd_recovering)
+        self.assertEqual(0.001, settings.mean_reversion_macd_recovery_epsilon)
+
 
 if __name__ == "__main__":
     unittest.main()

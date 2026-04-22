@@ -582,6 +582,12 @@ def run_bot():
                     slow_period=strategy.macd_slow_period,
                     signal_period=strategy.macd_signal_period,
                 )
+                _prev_macd_value, _prev_macd_signal, prev_macd_histogram = calc_macd_histogram(
+                    closes[:-1],
+                    fast_period=strategy.macd_fast_period,
+                    slow_period=strategy.macd_slow_period,
+                    signal_period=strategy.macd_signal_period,
+                )
                 ma_slope_pct = calc_pct_slope(
                     ma_series,
                     strategy.trend_slope_lookback,
@@ -869,8 +875,13 @@ def run_bot():
                         squeeze_max_bandwidth_pct=strategy.squeeze_max_bandwidth_pct,
                         rsi_value=rsi_value,
                         signal_score_min=effective_signal_score_min,
-                        rsi_filter_passed=bool(signal_state["rsi_filter_passed"]),
-                        macd_filter_passed=bool(signal_state["macd_filter_passed"]),
+                        rsi_min=strategy.mean_reversion_rsi_min,
+                        rsi_max=strategy.mean_reversion_rsi_max,
+                        macd_histogram=macd_histogram,
+                        prev_macd_histogram=prev_macd_histogram,
+                        allow_negative_macd=strategy.mean_reversion_allow_negative_macd,
+                        require_macd_recovering=strategy.mean_reversion_require_macd_recovering,
+                        macd_recovery_epsilon=strategy.mean_reversion_macd_recovery_epsilon,
                     )
                 bullish = bool(signal_state["bullish"])
                 bearish = bool(signal_state["bearish"])

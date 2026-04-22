@@ -1,5 +1,6 @@
 """
 수정 요약
+- mean_reversion 전용 RSI 범위와 MACD 회복 조건 설정을 추가
 - 알트 자체 ATR 퍼센트 기반 포지션 사이징 설정을 추가
 - OKX 현물 알트 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 공통 설정을 추가
 - 심볼별 signal_score 최소 기준 오버라이드를 추가해 ETH/KRW 같은 알트를 개별적으로 더 보수화할 수 있게 확장
@@ -100,6 +101,11 @@ class StrategySettings:
     macd_fast_period: int
     macd_slow_period: int
     macd_signal_period: int
+    mean_reversion_rsi_min: float
+    mean_reversion_rsi_max: float
+    mean_reversion_allow_negative_macd: bool
+    mean_reversion_require_macd_recovering: bool
+    mean_reversion_macd_recovery_epsilon: float
     enable_noise_ratio_adaptation: bool
     noise_ratio_lookback: int
     noise_ratio_baseline: float
@@ -675,6 +681,11 @@ def load_strategy_settings(
         macd_fast_period=config_int("strategy", "macd_fast_period", 12, env_key="STRATEGY_MACD_FAST_PERIOD"),
         macd_slow_period=config_int("strategy", "macd_slow_period", 26, env_key="STRATEGY_MACD_SLOW_PERIOD"),
         macd_signal_period=config_int("strategy", "macd_signal_period", 9, env_key="STRATEGY_MACD_SIGNAL_PERIOD"),
+        mean_reversion_rsi_min=config_float("strategy", "mean_reversion_rsi_min", 25.0, env_key="STRATEGY_MEAN_REVERSION_RSI_MIN"),
+        mean_reversion_rsi_max=config_float("strategy", "mean_reversion_rsi_max", 58.0, env_key="STRATEGY_MEAN_REVERSION_RSI_MAX"),
+        mean_reversion_allow_negative_macd=config_bool("strategy", "mean_reversion_allow_negative_macd", True, env_key="STRATEGY_MEAN_REVERSION_ALLOW_NEGATIVE_MACD"),
+        mean_reversion_require_macd_recovering=config_bool("strategy", "mean_reversion_require_macd_recovering", True, env_key="STRATEGY_MEAN_REVERSION_REQUIRE_MACD_RECOVERING"),
+        mean_reversion_macd_recovery_epsilon=config_float("strategy", "mean_reversion_macd_recovery_epsilon", 0.0, env_key="STRATEGY_MEAN_REVERSION_MACD_RECOVERY_EPSILON"),
         enable_noise_ratio_adaptation=config_bool("strategy", "enable_noise_ratio_adaptation", True, env_key="STRATEGY_ENABLE_NOISE_RATIO_ADAPTATION"),
         noise_ratio_lookback=config_int("strategy", "noise_ratio_lookback", 20, env_key="STRATEGY_NOISE_RATIO_LOOKBACK"),
         noise_ratio_baseline=config_float("strategy", "noise_ratio_baseline", 0.50, env_key="STRATEGY_NOISE_RATIO_BASELINE"),

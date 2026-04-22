@@ -806,6 +806,43 @@
   - `py_compile` 통과
   - 거래 봇 4개 재기동 및 healthcheck 정상
 
+### 36. Mean Reversion 라우팅 + 알트 ATR sizing + Sharpe 후보 랭킹 (2026-04-20)
+
+- 변경 내용:
+  - `mean_reversion` 전략 모듈 추가
+    - [core/strategy/mean_reversion.py](/Users/plo/Documents/auto_coin_bot/core/strategy/mean_reversion.py)
+    - Bollinger 하단 이탈 후 복귀와 중단 회귀 여지를 기준으로 진입 점수 계산
+    - 기존 `signal_score_min`, RSI, MACD 필터 결과를 그대로 전달받아 우회하지 않도록 설계
+  - 레짐 라우터 확장
+    - [core/strategy/regime_router.py](/Users/plo/Documents/auto_coin_bot/core/strategy/regime_router.py)
+    - `CHOPPY_LOW_VOL`, `CHOPPY_HIGH_VOL` 알트 경로를 `mean_reversion` 으로 전환
+    - [settings/market_regime_guard.py](/Users/plo/Documents/auto_coin_bot/settings/market_regime_guard.py)
+    - 알트 CHOPPY 정책은 mean reversion 이 실제로 작동하도록 신규 진입 일시정지를 완화
+  - 알트 ATR position sizing 직접 연결
+    - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
+    - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
+    - [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+    - 알트 자체 `atr_pct` 로 포지션 비중 scale 을 직접 조정
+  - Sharpe 기반 후보 랭킹
+    - [tools/discover_untracked_symbols.py](/Users/plo/Documents/auto_coin_bot/tools/discover_untracked_symbols.py)
+    - 최근 N일 일봉 수익률 평균 / 변동성 기반 Sharpe 유사 점수로 미등록 심볼 후보 정렬
+    - 실거래 심볼 목록은 자동 변경하지 않고 discovery 출력만 제공
+- 기본 설정:
+  - `CHOPPY_LOW_VOL` 알트 레짐 포지션 스케일: `0.25`
+  - 알트 ATR scale:
+    - `<0.12%`: `1.10x`
+    - `<0.20%`: `0.90x`
+    - `<0.35%`: `0.65x`
+    - 그 이상: `1.0x`
+- Architect 검증:
+  - `APPROVED WITH RISKS`
+  - 잔여 리스크:
+    - Sharpe 랭킹은 discovery 출력만 하며 live 심볼 자동 변경은 하지 않음
+- 검증:
+  - `unittest discover -s tests -v` 통과
+  - `py_compile` 통과
+  - OKX/업비트 알트 봇 재기동 및 healthcheck 정상
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

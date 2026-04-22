@@ -1,5 +1,6 @@
 """
 작업 요약
+- mean_reversion 전용 RSI 범위와 MACD 회복 조건을 적용해 추세형 hard filter 를 보수적으로 완화
 - 횡보/혼조 구간에서 Bollinger 하단 복귀 기반 mean reversion 진입 신호를 계산하는 모듈을 추가
 """
 
@@ -19,8 +20,13 @@ def compute_bollinger_mean_reversion_state(
     squeeze_max_bandwidth_pct: float,
     rsi_value: float | None,
     signal_score_min: float,
-    rsi_filter_passed: bool,
-    macd_filter_passed: bool,
+    rsi_min: float,
+    rsi_max: float,
+    macd_histogram: float | None,
+    prev_macd_histogram: float | None,
+    allow_negative_macd: bool,
+    require_macd_recovering: bool,
+    macd_recovery_epsilon: float,
 ) -> dict[str, float | bool]:
     """볼린저 하단 복귀와 중단 회귀 여지를 기반으로 mean reversion 신호를 계산한다."""
     if bb_lower is None or bb_mid is None:
@@ -32,8 +38,8 @@ def compute_bollinger_mean_reversion_state(
             "signal_is_strong": False,
             "entry_signal": False,
             "trend_follow_entry": False,
-            "rsi_filter_passed": rsi_filter_passed,
-            "macd_filter_passed": macd_filter_passed,
+            "rsi_filter_passed": False,
+            "macd_filter_passed": False,
         }
 
     lower_reclaim = prev_close <= bb_lower and last_close > bb_lower
@@ -59,6 +65,21 @@ def compute_bollinger_mean_reversion_state(
             rsi_component = 40.0
 
     headroom_component = min(100.0, gap_pct / 0.25 * 100.0) if gap_pct > 0 else 0.0
+
+    rsi_filter_passed = rsi_value is not None and rsi_min <= rsi_value <= rsi_max
+    macd_recovering = (
+        macd_histogram is not None
+        and prev_macd_histogram is not None
+        and macd_histogram >= (prev_macd_histogram + macd_recovery_epsilon)
+    )
+    macd_direction_ok = (
+        macd_histogram is not None
+        and (allow_negative_macd or macd_histogram >= 0)
+    )
+    macd_filter_passed = (
+        macd_direction_ok
+        and ((not require_macd_recovering) or macd_recovering)
+    )
 
     signal_score = calc_weighted_signal_score(
         {
