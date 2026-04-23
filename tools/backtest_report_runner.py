@@ -35,6 +35,7 @@ from backtest_replay import (
     build_execution_model,
     build_output_dir,
     load_candles,
+    load_orderbook_snapshots,
     parse_timeframe_to_minutes,
     resolve_default_fee_rate,
     resolve_default_max_daily_loss,
@@ -289,12 +290,18 @@ def run_single_backtest(
     buy_fill_ratio: float,
     sell_fill_ratio: float,
     latency_ms: int,
+    orderbook_dir: str | None,
 ) -> dict[str, Any]:
     """심볼 1개 기준 fetch -> run -> compare 를 수행한다."""
     strategy_type = infer_strategy_type(symbol)
     data_dir = batch_root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     data_path = data_dir / f"{exchange_name}__{sanitize_symbol(symbol)}__{timeframe}.jsonl"
+    orderbook_path = None
+    if orderbook_dir:
+        candidate = Path(orderbook_dir) / f"{exchange_name}__{sanitize_symbol(symbol)}.jsonl"
+        if candidate.exists():
+            orderbook_path = candidate
     rows = fetch_symbol_ohlcv(
         exchange_name=exchange_name,
         symbol=symbol,
@@ -411,6 +418,7 @@ def run_single_backtest(
                     latency_ms=latency_ms,
                 )
             ),
+            orderbook_snapshots=load_orderbook_snapshots(orderbook_path),
             initial_state=alt_initial_state,
             start_timestamp_ms=start_timestamp_ms,
         )
@@ -433,6 +441,7 @@ def run_single_backtest(
                     latency_ms=latency_ms,
                 )
             ),
+            orderbook_snapshots=load_orderbook_snapshots(orderbook_path),
             initial_state=btc_initial_state,
             start_timestamp_ms=start_timestamp_ms,
         )
@@ -480,6 +489,7 @@ def run_single_backtest(
         "data_end": data_end,
         "covered_days": covered_days,
         "expected_days": expected_days,
+        "orderbook_path": str(orderbook_path) if orderbook_path else None,
         "position_aware": bool(alt_initial_state or btc_initial_state),
         "flags": flags,
         "summary": summary,
@@ -508,7 +518,7 @@ def build_batch_markdown(
         f"- fetch limit: `{limit}`",
         f"- 실거래 비교 시작: `{since or '-'}`",
         f"- 실거래 비교 종료: `{until or '-'}`",
-        f"- 실행 모델: `slippage {execution_model.get('slippage_bps', 0.0)}bps / buy_fill {execution_model.get('buy_fill_ratio', 1.0):.2f} / sell_fill {execution_model.get('sell_fill_ratio', 1.0):.2f} / latency {execution_model.get('latency_ms', 0)}ms`",
+        f"- 실행 모델: `slippage {execution_model.get('slippage_bps', 0.0)}bps / buy_fill {execution_model.get('buy_fill_ratio', 1.0):.2f} / sell_fill {execution_model.get('sell_fill_ratio', 1.0):.2f} / latency {execution_model.get('latency_ms', 0)}ms / orderbook_dir {execution_model.get('orderbook_dir') or '-'}`",
         f"- override 세트: `{', '.join(override_set_names) if override_set_names else '-'}`",
         f"- override 경로: `{', '.join(override_paths) if override_paths else '-'}`",
         "",
@@ -600,6 +610,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
                 buy_fill_ratio=args.buy_fill_ratio,
                 sell_fill_ratio=args.sell_fill_ratio,
                 latency_ms=args.latency_ms,
+                orderbook_dir=args.orderbook_dir,
             )
             row["override_set_names"] = override_set_names
             row["override_paths"] = [str(path) for path in override_paths]
@@ -617,6 +628,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
             "buy_fill_ratio": args.buy_fill_ratio,
             "sell_fill_ratio": args.sell_fill_ratio,
             "latency_ms": args.latency_ms,
+            "orderbook_dir": args.orderbook_dir,
         },
         "override_set_names": override_set_names,
         "override_paths": [str(path) for path in override_paths],
@@ -710,6 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--buy-fill-ratio", type=float, default=1.0, help="매수 체결 비율 0~1")
     common.add_argument("--sell-fill-ratio", type=float, default=1.0, help="매도 체결 비율 0~1")
     common.add_argument("--latency-ms", type=int, default=0, help="0보다 크면 다음 캔들 시가 체결로 근사")
+    common.add_argument("--orderbook-dir", help="analysis_logs 형식 호가 스냅샷 디렉토리")
     common.add_argument("--override-set", action="append", default=[], help="config/sets 아래 실험 세트 이름 또는 경로")
     common.add_argument("--override-toml", action="append", default=[], help="추가 TOML override 경로")
 

@@ -4,11 +4,14 @@ from tools.backtest_replay import (
     Candle,
     EquityPoint,
     ExecutionModel,
+    OrderbookSnapshot,
     TradeRecord,
     apply_execution_price,
+    estimate_orderbook_fill_ratio,
     compute_profit_factor,
     compute_sharpe_ratio,
     resolve_execution_candle,
+    resolve_orderbook_snapshot,
 )
 
 
@@ -98,6 +101,56 @@ class BacktestReplayMetricsTests(unittest.TestCase):
     def test_apply_execution_price_moves_against_side(self):
         self.assertAlmostEqual(100.5, apply_execution_price(reference_price=100.0, side="buy", slippage_bps=50))
         self.assertAlmostEqual(99.5, apply_execution_price(reference_price=100.0, side="sell", slippage_bps=50))
+
+    def test_resolve_orderbook_snapshot_returns_latest_before_timestamp(self):
+        snapshots = [
+            OrderbookSnapshot(
+                timestamp_ms=1000,
+                best_bid=99.0,
+                best_ask=101.0,
+                best_bid_size=1.0,
+                best_ask_size=1.0,
+                bid_depth_notional_3=100.0,
+                ask_depth_notional_3=120.0,
+                spread_pct=0.2,
+            ),
+            OrderbookSnapshot(
+                timestamp_ms=2000,
+                best_bid=100.0,
+                best_ask=102.0,
+                best_bid_size=1.0,
+                best_ask_size=1.0,
+                bid_depth_notional_3=150.0,
+                ask_depth_notional_3=180.0,
+                spread_pct=0.2,
+            ),
+        ]
+
+        resolved = resolve_orderbook_snapshot(snapshots, target_timestamp_ms=2500)
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(2000, resolved.timestamp_ms)
+
+    def test_estimate_orderbook_fill_ratio_uses_depth_notional(self):
+        snapshot = OrderbookSnapshot(
+            timestamp_ms=1000,
+            best_bid=99.0,
+            best_ask=101.0,
+            best_bid_size=1.0,
+            best_ask_size=1.0,
+            bid_depth_notional_3=90.0,
+            ask_depth_notional_3=120.0,
+            spread_pct=0.2,
+        )
+
+        self.assertAlmostEqual(
+            0.6,
+            estimate_orderbook_fill_ratio(
+                side="buy",
+                snapshot=snapshot,
+                requested_order_value_quote=200.0,
+            ),
+        )
 
 
 if __name__ == "__main__":

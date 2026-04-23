@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-24: analysis_logs 호가 스냅샷을 읽어 best bid/ask 와 depth 기반 부분체결을 반영하는 체결 모델을 추가했다.
 - 2026-04-23: Sharpe ratio, profit factor, 슬리피지/부분체결/지연 실행 모델을 추가해 백테스트 요약과 실행 가정을 강화했다.
 - 2026-04-13: 장시간 걸리던 주간 알트/SOL 백테스트가 배치 요약 파일 생성 전에 사실상 멈추지 않도록 반복 지표 계산 입력을 최근 필요 구간으로 제한해 성능 병목을 줄였다.
 - 2026-04-10: 백테스트 실행 시 추가 override 세트를 임시 적용하고 summary 에 적용 세트 메타데이터를 남기도록 확장했다.
@@ -130,6 +131,20 @@ class ExecutionModel:
     buy_fill_ratio: float
     sell_fill_ratio: float
     latency_ms: int
+
+
+@dataclass(frozen=True)
+class OrderbookSnapshot:
+    """분석 로그에서 읽은 호가 스냅샷."""
+
+    timestamp_ms: int
+    best_bid: float | None
+    best_ask: float | None
+    best_bid_size: float | None
+    best_ask_size: float | None
+    bid_depth_notional_3: float | None
+    ask_depth_notional_3: float | None
+    spread_pct: float | None
 
 
 @dataclass(frozen=True)
@@ -672,6 +687,81 @@ def build_execution_model(args: argparse.Namespace) -> ExecutionModel:
     )
 
 
+def load_orderbook_snapshots(path: Path | None) -> list[OrderbookSnapshot]:
+    """analysis_logs JSONL 에서 호가 스냅샷을 읽는다."""
+    if path is None or not path.exists():
+        return []
+    snapshots: list[OrderbookSnapshot] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        timestamp_ms = _safe_int(payload.get("last_candle_ts"))
+        if timestamp_ms is None:
+            collected_at = payload.get("collected_at")
+            if isinstance(collected_at, str):
+                try:
+                    timestamp_ms = int(datetime.fromisoformat(collected_at).timestamp() * 1000)
+                except ValueError:
+                    timestamp_ms = None
+        if timestamp_ms is None:
+            continue
+        snapshots.append(
+            OrderbookSnapshot(
+                timestamp_ms=timestamp_ms,
+                best_bid=_safe_float(payload.get("best_bid")),
+                best_ask=_safe_float(payload.get("best_ask")),
+                best_bid_size=_safe_float(payload.get("best_bid_size")),
+                best_ask_size=_safe_float(payload.get("best_ask_size")),
+                bid_depth_notional_3=_safe_float(payload.get("bid_depth_notional_3")),
+                ask_depth_notional_3=_safe_float(payload.get("ask_depth_notional_3")),
+                spread_pct=_safe_float(payload.get("spread_pct")),
+            )
+        )
+    snapshots.sort(key=lambda item: item.timestamp_ms)
+    return snapshots
+
+
+def resolve_orderbook_snapshot(
+    snapshots: list[OrderbookSnapshot],
+    *,
+    target_timestamp_ms: int,
+) -> OrderbookSnapshot | None:
+    """지정 시점 이전의 가장 가까운 호가 스냅샷을 찾는다."""
+    if not snapshots:
+        return None
+    timestamps = [snapshot.timestamp_ms for snapshot in snapshots]
+    index = bisect_right(timestamps, target_timestamp_ms) - 1
+    if index < 0:
+        return None
+    return snapshots[index]
+
+
+def estimate_orderbook_fill_ratio(
+    *,
+    side: str,
+    snapshot: OrderbookSnapshot | None,
+    requested_order_value_quote: float,
+) -> float:
+    """상위 호가 depth 기준으로 부분체결 비율을 추정한다."""
+    if snapshot is None or requested_order_value_quote <= 0:
+        return 1.0
+    if side == "buy":
+        depth_notional = snapshot.ask_depth_notional_3
+        if depth_notional is None and snapshot.best_ask is not None and snapshot.best_ask_size is not None:
+            depth_notional = snapshot.best_ask * snapshot.best_ask_size
+    else:
+        depth_notional = snapshot.bid_depth_notional_3
+        if depth_notional is None and snapshot.best_bid is not None and snapshot.best_bid_size is not None:
+            depth_notional = snapshot.best_bid * snapshot.best_bid_size
+    if depth_notional is None or depth_notional <= 0:
+        return 1.0
+    return min(1.0, depth_notional / requested_order_value_quote)
+
+
 def resolve_execution_candle(
     candles: list[Candle],
     *,
@@ -757,6 +847,7 @@ def simulate_alt_strategy(
     min_buy_order_value: float,
     max_daily_loss_quote: float,
     execution_model: ExecutionModel | None = None,
+    orderbook_snapshots: list[OrderbookSnapshot] | None = None,
     initial_state: AltReplayInitialState | None = None,
     start_timestamp_ms: int | None = None,
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
@@ -771,6 +862,7 @@ def simulate_alt_strategy(
         sell_fill_ratio=1.0,
         latency_ms=0,
     )
+    orderbook_snapshots = orderbook_snapshots or []
     portfolio_settings = load_portfolio_allocation_settings()
     higher_timeframe_candles = resample_candles(
         candles,
@@ -1141,8 +1233,16 @@ def simulate_alt_strategy(
                         current_index=index,
                         execution_model=execution_model,
                     )
+                    orderbook_snapshot = resolve_orderbook_snapshot(
+                        orderbook_snapshots,
+                        target_timestamp_ms=execution_candle.timestamp_ms,
+                    )
                     execution_price = apply_execution_price(
-                        reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                        reference_price=(
+                            orderbook_snapshot.best_bid
+                            if orderbook_snapshot is not None and orderbook_snapshot.best_bid is not None
+                            else execution_candle.open if execution_timing == "next_open" else last_close
+                        ),
                         side="sell",
                         slippage_bps=execution_model.slippage_bps,
                     )
@@ -1207,6 +1307,8 @@ def simulate_alt_strategy(
                                 "slippage_bps": execution_model.slippage_bps,
                                 "execution_timing": execution_timing,
                                 "latency_ms": execution_model.latency_ms,
+                                "orderbook_snapshot_used": orderbook_snapshot is not None,
+                                "orderbook_spread_pct": None if orderbook_snapshot is None else orderbook_snapshot.spread_pct,
                             },
                         )
                     )
@@ -1262,7 +1364,16 @@ def simulate_alt_strategy(
 
         if entry_allowed:
             order_value = min(cash, requested_order_value)
-            executed_order_value = order_value * execution_model.buy_fill_ratio
+            orderbook_snapshot = resolve_orderbook_snapshot(
+                orderbook_snapshots,
+                target_timestamp_ms=current.timestamp_ms,
+            )
+            orderbook_fill_ratio = estimate_orderbook_fill_ratio(
+                side="buy",
+                snapshot=orderbook_snapshot,
+                requested_order_value_quote=order_value,
+            )
+            executed_order_value = order_value * min(execution_model.buy_fill_ratio, orderbook_fill_ratio)
             fee_quote = executed_order_value * (fee_rate_pct / 100.0)
             net_order_value = executed_order_value - fee_quote
             if net_order_value >= min_buy_order_value and last_close > 0:
@@ -1271,8 +1382,17 @@ def simulate_alt_strategy(
                     current_index=index,
                     execution_model=execution_model,
                 )
+                if execution_timing == "next_open":
+                    orderbook_snapshot = resolve_orderbook_snapshot(
+                        orderbook_snapshots,
+                        target_timestamp_ms=execution_candle.timestamp_ms,
+                    )
                 execution_price = apply_execution_price(
-                    reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                    reference_price=(
+                        orderbook_snapshot.best_ask
+                        if orderbook_snapshot is not None and orderbook_snapshot.best_ask is not None
+                        else execution_candle.open if execution_timing == "next_open" else last_close
+                    ),
                     side="buy",
                     slippage_bps=execution_model.slippage_bps,
                 )
@@ -1324,6 +1444,9 @@ def simulate_alt_strategy(
                             "slippage_bps": execution_model.slippage_bps,
                             "execution_timing": execution_timing,
                             "latency_ms": execution_model.latency_ms,
+                            "orderbook_snapshot_used": orderbook_snapshot is not None,
+                            "orderbook_fill_ratio": orderbook_fill_ratio,
+                            "orderbook_spread_pct": None if orderbook_snapshot is None else orderbook_snapshot.spread_pct,
                         },
                     )
                 )
@@ -1373,6 +1496,7 @@ def simulate_alt_strategy(
             and execution_model.sell_fill_ratio >= 0.999
         ),
         "execution_model": asdict(execution_model),
+        "orderbook_snapshot_count": len(orderbook_snapshots),
     }
     return summary, trade_records, equity_curve
 
@@ -1389,6 +1513,7 @@ def simulate_btc_strategy(
     min_buy_order_value: float,
     max_daily_loss_quote: float,
     execution_model: ExecutionModel | None = None,
+    orderbook_snapshots: list[OrderbookSnapshot] | None = None,
     initial_state: BtcReplayInitialState | None = None,
     start_timestamp_ms: int | None = None,
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
@@ -1401,6 +1526,7 @@ def simulate_btc_strategy(
         sell_fill_ratio=1.0,
         latency_ms=0,
     )
+    orderbook_snapshots = orderbook_snapshots or []
     base_candles = resample_candles(candles, source_timeframe=source_timeframe, target_timeframe=settings.timeframe)
     confirm_candles = resample_candles(
         candles,
@@ -1733,8 +1859,16 @@ def simulate_btc_strategy(
                     current_index=index,
                     execution_model=execution_model,
                 )
+                orderbook_snapshot = resolve_orderbook_snapshot(
+                    orderbook_snapshots,
+                    target_timestamp_ms=execution_candle.timestamp_ms,
+                )
                 execution_price = apply_execution_price(
-                    reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                    reference_price=(
+                        orderbook_snapshot.best_bid
+                        if orderbook_snapshot is not None and orderbook_snapshot.best_bid is not None
+                        else execution_candle.open if execution_timing == "next_open" else last_close
+                    ),
                     side="sell",
                     slippage_bps=execution_model.slippage_bps,
                 )
@@ -1798,6 +1932,8 @@ def simulate_btc_strategy(
                             "slippage_bps": execution_model.slippage_bps,
                             "execution_timing": execution_timing,
                             "latency_ms": execution_model.latency_ms,
+                            "orderbook_snapshot_used": orderbook_snapshot is not None,
+                            "orderbook_spread_pct": None if orderbook_snapshot is None else orderbook_snapshot.spread_pct,
                         },
                     )
                 )
@@ -1849,7 +1985,16 @@ def simulate_btc_strategy(
             reason = "entry" if entry_allowed else "pyramid_add_on"
             order_value = requested_order_value if entry_allowed else requested_add_on_order_value
             order_value = min(cash, order_value)
-            executed_order_value = order_value * execution_model.buy_fill_ratio
+            orderbook_snapshot = resolve_orderbook_snapshot(
+                orderbook_snapshots,
+                target_timestamp_ms=current.timestamp_ms,
+            )
+            orderbook_fill_ratio = estimate_orderbook_fill_ratio(
+                side="buy",
+                snapshot=orderbook_snapshot,
+                requested_order_value_quote=order_value,
+            )
+            executed_order_value = order_value * min(execution_model.buy_fill_ratio, orderbook_fill_ratio)
             fee_quote = executed_order_value * (fee_rate_pct / 100.0)
             net_order_value = executed_order_value - fee_quote
             if net_order_value >= min_buy_order_value and last_close > 0:
@@ -1858,8 +2003,17 @@ def simulate_btc_strategy(
                     current_index=index,
                     execution_model=execution_model,
                 )
+                if execution_timing == "next_open":
+                    orderbook_snapshot = resolve_orderbook_snapshot(
+                        orderbook_snapshots,
+                        target_timestamp_ms=execution_candle.timestamp_ms,
+                    )
                 execution_price = apply_execution_price(
-                    reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                    reference_price=(
+                        orderbook_snapshot.best_ask
+                        if orderbook_snapshot is not None and orderbook_snapshot.best_ask is not None
+                        else execution_candle.open if execution_timing == "next_open" else last_close
+                    ),
                     side="buy",
                     slippage_bps=execution_model.slippage_bps,
                 )
@@ -1910,6 +2064,9 @@ def simulate_btc_strategy(
                             "slippage_bps": execution_model.slippage_bps,
                             "execution_timing": execution_timing,
                             "latency_ms": execution_model.latency_ms,
+                            "orderbook_snapshot_used": orderbook_snapshot is not None,
+                            "orderbook_fill_ratio": orderbook_fill_ratio,
+                            "orderbook_spread_pct": None if orderbook_snapshot is None else orderbook_snapshot.spread_pct,
                         },
                     )
                 )
@@ -1957,6 +2114,7 @@ def simulate_btc_strategy(
             and execution_model.sell_fill_ratio >= 0.999
         ),
         "execution_model": asdict(execution_model),
+        "orderbook_snapshot_count": len(orderbook_snapshots),
     }
     return summary, trade_records, equity_curve
 
@@ -2025,6 +2183,9 @@ def run_backtest_command(args: argparse.Namespace) -> int:
     override_set_names = list(args.override_set or [])
     override_paths = resolve_set_paths(override_set_names)
     override_paths.extend(Path(path) for path in (args.override_toml or []))
+    orderbook_snapshots = load_orderbook_snapshots(
+        Path(args.orderbook_input) if getattr(args, "orderbook_input", None) else None
+    )
 
     with temporary_runtime_overrides(override_paths):
         if args.strategy == "alt":
@@ -2040,6 +2201,7 @@ def run_backtest_command(args: argparse.Namespace) -> int:
                 min_buy_order_value=min_buy_order_value,
                 max_daily_loss_quote=max_daily_loss_quote,
                 execution_model=execution_model,
+                orderbook_snapshots=orderbook_snapshots,
             )
         else:
             summary, trades, equity_curve = simulate_btc_strategy(
@@ -2053,10 +2215,12 @@ def run_backtest_command(args: argparse.Namespace) -> int:
                 min_buy_order_value=min_buy_order_value,
                 max_daily_loss_quote=max_daily_loss_quote,
                 execution_model=execution_model,
+                orderbook_snapshots=orderbook_snapshots,
             )
 
     summary["override_set_names"] = override_set_names
     summary["override_paths"] = [str(path) for path in override_paths]
+    summary["orderbook_input"] = str(args.orderbook_input) if getattr(args, "orderbook_input", None) else None
 
     output_dir = build_output_dir(Path(args.output_dir), args.strategy, args.symbol)
     write_json(output_dir / "summary.json", summary)
@@ -2107,6 +2271,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--buy-fill-ratio", type=float, default=1.0, help="매수 체결 비율 0~1")
     run_parser.add_argument("--sell-fill-ratio", type=float, default=1.0, help="매도 체결 비율 0~1")
     run_parser.add_argument("--latency-ms", type=int, default=0, help="0보다 크면 다음 캔들 시가 체결로 근사")
+    run_parser.add_argument("--orderbook-input", help="analysis_logs 형식 호가 스냅샷 JSONL 경로")
     run_parser.add_argument("--override-set", action="append", default=[], help="config/sets 아래 실험 세트 이름 또는 경로")
     run_parser.add_argument("--override-toml", action="append", default=[], help="추가 TOML override 경로")
     run_parser.add_argument("--output-dir", default="reports/backtests")

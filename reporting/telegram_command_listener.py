@@ -75,6 +75,7 @@ import urllib.request
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta
 from pathlib import Path
+from math import sqrt
 
 import analyze_logs
 import analyze_strategy_logs
@@ -597,7 +598,9 @@ def build_latest_tuning_diff_text(limit: int = 6) -> str:
             source_label = latest_diff_path.parent.name
 
     if not rows and len(batch_paths) >= 2:
-        latest_two = sorted(batch_paths, key=lambda path: path.stat().st_mtime)[-2:]
+        latest_two = select_recent_batch_pair_with_activity(batch_paths)
+        if latest_two is None:
+            latest_two = sorted(batch_paths, key=lambda path: path.stat().st_mtime)[-2:]
         try:
             before_payload = json.loads(latest_two[0].read_text(encoding="utf-8"))
             after_payload = json.loads(latest_two[1].read_text(encoding="utf-8"))
@@ -644,8 +647,20 @@ def build_tuning_diff_rows_from_batch_summaries(
     common_keys = sorted(set(before_map) & set(after_map))
     rows: list[dict[str, object]] = []
     for key in common_keys:
-        before_summary = before_map[key].get("summary", {}) if isinstance(before_map[key].get("summary"), dict) else {}
-        after_summary = after_map[key].get("summary", {}) if isinstance(after_map[key].get("summary"), dict) else {}
+        before_row = before_map[key]
+        after_row = after_map[key]
+        before_summary = before_row.get("summary", {}) if isinstance(before_row.get("summary"), dict) else {}
+        after_summary = after_row.get("summary", {}) if isinstance(after_row.get("summary"), dict) else {}
+        before_metrics = enrich_summary_metrics_from_result_dir(
+            before_summary,
+            result_dir=str(before_row.get("result_dir", "") or ""),
+            timeframe=str(before_payload.get("timeframe", "1m") or "1m"),
+        )
+        after_metrics = enrich_summary_metrics_from_result_dir(
+            after_summary,
+            result_dir=str(after_row.get("result_dir", "") or ""),
+            timeframe=str(after_payload.get("timeframe", "1m") or "1m"),
+        )
         rows.append(
             {
                 "key": key,
@@ -657,13 +672,137 @@ def build_tuning_diff_rows_from_batch_summaries(
                 "after_trade_count": int(after_summary.get("trade_count", 0) or 0),
                 "before_max_drawdown_pct": float(before_summary.get("max_drawdown_pct", 0.0) or 0.0),
                 "after_max_drawdown_pct": float(after_summary.get("max_drawdown_pct", 0.0) or 0.0),
-                "before_sharpe_ratio": before_summary.get("sharpe_ratio"),
-                "after_sharpe_ratio": after_summary.get("sharpe_ratio"),
-                "before_profit_factor": before_summary.get("profit_factor"),
-                "after_profit_factor": after_summary.get("profit_factor"),
+                "before_sharpe_ratio": before_metrics.get("sharpe_ratio"),
+                "after_sharpe_ratio": after_metrics.get("sharpe_ratio"),
+                "before_profit_factor": before_metrics.get("profit_factor"),
+                "after_profit_factor": after_metrics.get("profit_factor"),
             }
         )
     return rows
+
+
+def select_recent_batch_pair_with_activity(batch_paths: list[Path]) -> tuple[Path, Path] | None:
+    """최신 batch 중 공통 심볼 거래가 있는 비교쌍을 고른다."""
+    if len(batch_paths) < 2:
+        return None
+    sorted_paths = sorted(batch_paths, key=lambda path: path.stat().st_mtime, reverse=True)
+    payloads: dict[Path, dict[str, object]] = {}
+    for path in sorted_paths:
+        try:
+            payloads[path] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            payloads[path] = {}
+    for newer_index, newer in enumerate(sorted_paths[:-1]):
+        for older in sorted_paths[newer_index + 1:]:
+            rows = build_tuning_diff_rows_from_batch_summaries(
+                payloads.get(older, {}),
+                payloads.get(newer, {}),
+            )
+            if any(
+                int(row.get("before_trade_count", 0) or 0) > 0
+                or int(row.get("after_trade_count", 0) or 0) > 0
+                for row in rows
+            ):
+                return older, newer
+    return None
+
+
+def enrich_summary_metrics_from_result_dir(
+    summary: dict[str, object],
+    *,
+    result_dir: str,
+    timeframe: str,
+) -> dict[str, float | None]:
+    """summary 에 없는 Sharpe/PF 를 result_dir 파일에서 보강 계산한다."""
+    sharpe_ratio = summary.get("sharpe_ratio")
+    profit_factor = summary.get("profit_factor")
+    if sharpe_ratio is not None and profit_factor is not None:
+        return {
+            "sharpe_ratio": float(sharpe_ratio),
+            "profit_factor": float(profit_factor),
+        }
+    result_path = Path(result_dir)
+    if not result_dir or not result_path.exists():
+        return {
+            "sharpe_ratio": None if sharpe_ratio is None else float(sharpe_ratio),
+            "profit_factor": None if profit_factor is None else float(profit_factor),
+        }
+    if sharpe_ratio is None:
+        sharpe_ratio = compute_sharpe_ratio_from_equity_curve(result_path / "equity_curve.jsonl", timeframe=timeframe)
+    if profit_factor is None:
+        profit_factor = compute_profit_factor_from_trades(result_path / "trades.jsonl")
+    return {
+        "sharpe_ratio": None if sharpe_ratio is None else float(sharpe_ratio),
+        "profit_factor": None if profit_factor is None else float(profit_factor),
+    }
+
+
+def compute_profit_factor_from_trades(path: Path) -> float | None:
+    """trades.jsonl 에서 profit factor 를 계산한다."""
+    if not path.exists():
+        return None
+    gross_profit = 0.0
+    gross_loss = 0.0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if str(payload.get("side", "")).lower() != "sell":
+            continue
+        pnl = payload.get("net_realized_pnl_quote")
+        try:
+            pnl_value = float(pnl)
+        except (TypeError, ValueError):
+            continue
+        if pnl_value > 0:
+            gross_profit += pnl_value
+        elif pnl_value < 0:
+            gross_loss += abs(pnl_value)
+    if gross_loss <= 0:
+        if gross_profit <= 0:
+            return None
+        return float("inf")
+    return gross_profit / gross_loss
+
+
+def compute_sharpe_ratio_from_equity_curve(path: Path, *, timeframe: str) -> float | None:
+    """equity_curve.jsonl 에서 단순 annualized Sharpe 를 계산한다."""
+    if not path.exists():
+        return None
+    equities: list[float] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+            equities.append(float(payload["equity_quote"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    if len(equities) < 3:
+        return None
+    returns: list[float] = []
+    prev = equities[0]
+    for equity in equities[1:]:
+        if prev > 0:
+            returns.append((equity / prev) - 1.0)
+        prev = equity
+    if len(returns) < 2:
+        return None
+    mean_return = sum(returns) / len(returns)
+    variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
+    if variance <= 0:
+        return None
+    timeframe_minutes = 1
+    timeframe_raw = timeframe.strip().lower()
+    if timeframe_raw.endswith("m"):
+        timeframe_minutes = max(1, int(timeframe_raw[:-1]))
+    elif timeframe_raw.endswith("h"):
+        timeframe_minutes = max(1, int(timeframe_raw[:-1]) * 60)
+    periods_per_year = (365.0 * 24.0 * 60.0) / timeframe_minutes
+    return (mean_return / sqrt(variance)) * sqrt(periods_per_year)
 
 
 def format_tuning_diff_row(row: dict[str, object]) -> str:

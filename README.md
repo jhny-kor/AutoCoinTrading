@@ -236,6 +236,7 @@ live 설정을 건드리지 않고 백테스트에만 추가 override TOML 을 �
   - `--buy-fill-ratio`
   - `--sell-fill-ratio`
   - `--latency-ms`
+  - `--orderbook-input` 또는 배치의 `--orderbook-dir`
 
 상세 사용법은 [docs/BACKTEST_REPLAY_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/BACKTEST_REPLAY_GUIDE.md) 를 봅니다.
 

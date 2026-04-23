@@ -95,6 +95,8 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
   - 매도 부분체결 비율
 - `--latency-ms`
   - 0보다 크면 다음 캔들 시가 체결로 근사
+- `--orderbook-input`
+  - `analysis_logs` 형식 호가 스냅샷 JSONL 파일
 - `--output-dir`
   - 결과 저장 루트
 
@@ -137,6 +139,7 @@ override 실험 세트를 같이 쓰려면 다음 옵션을 사용합니다.
   --exchange okx \
   --symbol BTC/USDT \
   --input data/okx_btc_usdt_1m.jsonl \
+  --orderbook-input analysis_logs/2026-04-24/okx__BTC_USDT.jsonl \
   --timeframe 1m \
   --slippage-bps 5 \
   --buy-fill-ratio 0.95 \
@@ -147,6 +150,7 @@ override 실험 세트를 같이 쓰려면 다음 옵션을 사용합니다.
 주의:
 - 현재는 캔들 백테스트이므로 `100~300ms` 지연을 실제 틱 단위로 재현하지는 않습니다.
 - `latency-ms > 0`이면 보수적으로 `다음 캔들 시가 체결`로 근사합니다.
+- `orderbook-input` 을 주면 체결 기준 가격은 `best_ask / best_bid` 우선, 부분체결 비율은 상위 depth notional 기준으로 한 번 더 제한합니다.
 
 ## 5.1 실거래와 비교
 
@@ -220,6 +224,7 @@ override 실험 세트를 같이 쓰려면 다음 옵션을 사용합니다.
 - 가져온 캔들 수
 - 목표 일수 대비 실제 커버 일수
 - `no_backtest_trades`, `backtest_sample_too_small`, `live_exists_without_backtest` 같은 상태 플래그
+- 배치에서 호가 스냅샷을 같이 쓰려면 `--orderbook-dir analysis_logs/<date>` 형태로 넘깁니다.
 
 ## 6. 현재 제한 사항
 

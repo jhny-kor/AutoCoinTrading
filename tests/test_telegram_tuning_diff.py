@@ -1,7 +1,11 @@
 import unittest
+import tempfile
+import json
+from pathlib import Path
 
 from reporting.telegram_command_listener import (
     build_tuning_diff_rows_from_batch_summaries,
+    enrich_summary_metrics_from_result_dir,
     format_tuning_diff_row,
 )
 
@@ -66,6 +70,37 @@ class TelegramTuningDiffTests(unittest.TestCase):
 
         self.assertIn("Sharpe 0.800 -> 1.100", text)
         self.assertIn("PF 1.200 -> 1.500", text)
+
+    def test_enrich_summary_metrics_from_result_dir_backfills_missing_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result_dir = Path(tmp)
+            (result_dir / "equity_curve.jsonl").write_text(
+                "\n".join(
+                    json.dumps({"equity_quote": value})
+                    for value in [1000.0, 1010.0, 1020.0, 1015.0]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (result_dir / "trades.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"side": "sell", "net_realized_pnl_quote": 10.0}),
+                        json.dumps({"side": "sell", "net_realized_pnl_quote": -5.0}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            metrics = enrich_summary_metrics_from_result_dir(
+                {},
+                result_dir=str(result_dir),
+                timeframe="1m",
+            )
+
+            self.assertIsNotNone(metrics["sharpe_ratio"])
+            self.assertEqual(2.0, metrics["profit_factor"])
 
 
 if __name__ == "__main__":
