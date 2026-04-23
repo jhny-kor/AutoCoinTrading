@@ -21,6 +21,10 @@ class RegimeRouterTests(unittest.TestCase):
         self.assertEqual("breakout", route.strategy_key)
         self.assertFalse(route.policy.allow_trend_follow_entry)
 
+    def test_btc_router_keeps_choppy_in_btc_paths(self):
+        self.assertEqual("breakout", route_btc_strategy("CHOPPY_LOW_VOL").strategy_key)
+        self.assertEqual("breakout", route_btc_strategy("CHOPPY_HIGH_VOL").strategy_key)
+
     def test_alt_router_shares_same_route_keys(self):
         self.assertEqual("mean_reversion", route_alt_strategy("CHOPPY_LOW_VOL").strategy_key)
         self.assertEqual("mean_reversion", route_alt_strategy("CHOPPY_HIGH_VOL").strategy_key)
