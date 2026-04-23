@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-23: BTC 손절 억제를 위해 확인 타임프레임 slope 하한과 거래량 보너스용 ATR 동반 조건을 추가
 - OKX 현물 BTC 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 설정을 추가
 - 고거래량 구간에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용할 수 있는 설정 map 을 추가
 - 2026-04-10: BTC 손절 후 일정 시간 경과와 높은 점수 조건이면 fresh cross 없이 재진입 가능한 완화 설정을 추가
@@ -99,6 +100,9 @@ class BtcTrendSettings:
     min_volume_ratio: float
     min_volume_ratio_map: dict[str, float]
     choppy_min_volume_ratio_map: dict[str, float]
+    confirm_ema_slope_min_pct_map: dict[str, float]
+    volume_bonus_ratio_threshold_map: dict[str, float]
+    volume_bonus_min_atr_pct_map: dict[str, float]
     high_volume_ratio_threshold_map: dict[str, float]
     high_volume_min_atr_pct_map: dict[str, float]
     high_volume_extra_confirmation_loops_map: dict[str, int]
@@ -160,6 +164,18 @@ class BtcTrendSettings:
         """고거래량 추가 조건을 적용할 거래량 배수 기준을 반환한다."""
         return self.high_volume_ratio_threshold_map.get(symbol)
 
+    def get_confirm_ema_slope_min_pct(self, symbol: str) -> float:
+        """확인 타임프레임 bullish 판정에 필요한 최소 EMA 기울기를 반환한다."""
+        return self.confirm_ema_slope_min_pct_map.get(symbol, 0.0)
+
+    def get_volume_bonus_ratio_threshold(self, symbol: str) -> float | None:
+        """거래량 보너스를 검토할 최소 거래량 배수 기준을 반환한다."""
+        return self.volume_bonus_ratio_threshold_map.get(symbol)
+
+    def get_volume_bonus_min_atr_pct(self, symbol: str) -> float | None:
+        """거래량 보너스를 허용할 최소 ATR 비율 기준을 반환한다."""
+        return self.volume_bonus_min_atr_pct_map.get(symbol)
+
     def get_high_volume_min_atr_pct(self, symbol: str) -> float | None:
         """고거래량 구간에서 요구할 추가 최소 ATR 기준을 반환한다."""
         return self.high_volume_min_atr_pct_map.get(symbol)
@@ -167,6 +183,39 @@ class BtcTrendSettings:
     def get_high_volume_extra_confirmation_loops(self, symbol: str) -> int:
         """고거래량 구간에서 추가할 confirmation loop 수를 반환한다."""
         return max(0, self.high_volume_extra_confirmation_loops_map.get(symbol, 0))
+
+    def is_confirm_trend_quality_passed(
+        self,
+        *,
+        symbol: str,
+        confirm_bullish: bool,
+        confirm_ema_slope_pct: float | None,
+    ) -> bool:
+        """상위 타임프레임 bullish 상태가 충분한 기울기를 동반하는지 확인한다."""
+        if not confirm_bullish or confirm_ema_slope_pct is None:
+            return False
+        return confirm_ema_slope_pct >= self.get_confirm_ema_slope_min_pct(symbol)
+
+    def is_volume_bonus_allowed(
+        self,
+        *,
+        symbol: str,
+        volume_ratio: float | None,
+        atr_pct: float | None,
+    ) -> bool:
+        """거래량 보너스를 줄 수 있을 만큼 거래량과 ATR 이 함께 강한지 확인한다."""
+        volume_bonus_ratio_threshold = self.get_volume_bonus_ratio_threshold(symbol)
+        if (
+            volume_ratio is None
+            or atr_pct is None
+            or volume_bonus_ratio_threshold is None
+            or volume_ratio < volume_bonus_ratio_threshold
+        ):
+            return False
+        volume_bonus_min_atr_pct = self.get_volume_bonus_min_atr_pct(symbol)
+        if volume_bonus_min_atr_pct is None:
+            return True
+        return atr_pct >= volume_bonus_min_atr_pct
 
     def get_regime_position_scale(self, regime: str | None) -> float:
         """레짐별 포지션 비중 스케일을 반환한다."""
@@ -274,6 +323,9 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         min_volume_ratio=config_float("btc_trend", "min_volume_ratio", 1.05, env_key="BTC_TREND_MIN_VOLUME_RATIO"),
         min_volume_ratio_map=parse_symbol_float_map(config_value("btc_trend", "min_volume_ratio_map", {}, env_key="BTC_TREND_MIN_VOLUME_RATIO_MAP")),
         choppy_min_volume_ratio_map=parse_symbol_float_map(config_value("btc_trend", "choppy_min_volume_ratio_map", {}, env_key="BTC_TREND_CHOPPY_MIN_VOLUME_RATIO_MAP")),
+        confirm_ema_slope_min_pct_map=parse_symbol_float_map(config_value("btc_trend", "confirm_ema_slope_min_pct_map", {}, env_key="BTC_TREND_CONFIRM_EMA_SLOPE_MIN_PCT_MAP")),
+        volume_bonus_ratio_threshold_map=parse_symbol_float_map(config_value("btc_trend", "volume_bonus_ratio_threshold_map", {}, env_key="BTC_TREND_VOLUME_BONUS_RATIO_THRESHOLD_MAP")),
+        volume_bonus_min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "volume_bonus_min_atr_pct_map", {}, env_key="BTC_TREND_VOLUME_BONUS_MIN_ATR_PCT_MAP")),
         high_volume_ratio_threshold_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_ratio_threshold_map", {}, env_key="BTC_TREND_HIGH_VOLUME_RATIO_THRESHOLD_MAP")),
         high_volume_min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_min_atr_pct_map", {}, env_key="BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP")),
         high_volume_extra_confirmation_loops_map=parse_symbol_int_map(config_value("btc_trend", "high_volume_extra_confirmation_loops_map", {}, env_key="BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP")),

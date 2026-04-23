@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-23: Sharpe ratio, profit factor, 슬리피지/부분체결/지연 실행 모델을 추가해 백테스트 요약과 실행 가정을 강화했다.
 - 2026-04-13: 장시간 걸리던 주간 알트/SOL 백테스트가 배치 요약 파일 생성 전에 사실상 멈추지 않도록 반복 지표 계산 입력을 최근 필요 구간으로 제한해 성능 병목을 줄였다.
 - 2026-04-10: 백테스트 실행 시 추가 override 세트를 임시 적용하고 summary 에 적용 세트 메타데이터를 남기도록 확장했다.
 - 알트 리플레이에서 점수 기반 비중 계산에 필요한 최소 거래량 기준값을 일관되게 재사용하도록 회귀 버그를 수정
@@ -47,6 +48,7 @@ from core.strategy.indicators import (
     calc_adx,
     calc_bollinger_bands,
     calc_bollinger_band_width_pct,
+    calc_donchian_channel,
     calc_macd_histogram,
     calc_noise_ratio,
     calc_pct_slope,
@@ -118,6 +120,16 @@ class EquityPoint:
     cash_quote: float
     position_amount: float
     close: float
+
+
+@dataclass(frozen=True)
+class ExecutionModel:
+    """백테스트 체결 가정."""
+
+    slippage_bps: float
+    buy_fill_ratio: float
+    sell_fill_ratio: float
+    latency_ms: int
 
 
 @dataclass(frozen=True)
@@ -606,6 +618,87 @@ def compute_max_drawdown(equity_curve: list[EquityPoint]) -> float:
     return max_drawdown
 
 
+def compute_profit_factor(sell_records: list[TradeRecord]) -> float | None:
+    """최종 청산 순손익 기준 profit factor 를 계산한다."""
+    gross_profit = sum(
+        (record.net_realized_pnl_quote or 0.0)
+        for record in sell_records
+        if (record.net_realized_pnl_quote or 0.0) > 0
+    )
+    gross_loss = abs(
+        sum(
+            (record.net_realized_pnl_quote or 0.0)
+            for record in sell_records
+            if (record.net_realized_pnl_quote or 0.0) < 0
+        )
+    )
+    if gross_loss <= 0:
+        if gross_profit <= 0:
+            return None
+        return float("inf")
+    return gross_profit / gross_loss
+
+
+def compute_sharpe_ratio(equity_curve: list[EquityPoint], *, timeframe: str) -> float | None:
+    """자산곡선의 캔들 단위 수익률로 단순 Sharpe ratio 를 계산한다."""
+    if len(equity_curve) < 3:
+        return None
+    returns: list[float] = []
+    previous_equity = equity_curve[0].equity_quote
+    for point in equity_curve[1:]:
+        if previous_equity <= 0:
+            previous_equity = point.equity_quote
+            continue
+        returns.append((point.equity_quote / previous_equity) - 1.0)
+        previous_equity = point.equity_quote
+    if len(returns) < 2:
+        return None
+    mean_return = sum(returns) / len(returns)
+    variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
+    if variance <= 0:
+        return None
+    timeframe_minutes = parse_timeframe_to_minutes(timeframe)
+    periods_per_year = max(1.0, (365.0 * 24.0 * 60.0) / max(1, timeframe_minutes))
+    return (mean_return / (variance ** 0.5)) * (periods_per_year ** 0.5)
+
+
+def build_execution_model(args: argparse.Namespace) -> ExecutionModel:
+    """CLI 인자에서 실행 모델을 만든다."""
+    return ExecutionModel(
+        slippage_bps=max(0.0, float(args.slippage_bps or 0.0)),
+        buy_fill_ratio=min(1.0, max(0.0, float(args.buy_fill_ratio or 1.0))),
+        sell_fill_ratio=min(1.0, max(0.0, float(args.sell_fill_ratio or 1.0))),
+        latency_ms=max(0, int(args.latency_ms or 0)),
+    )
+
+
+def resolve_execution_candle(
+    candles: list[Candle],
+    *,
+    current_index: int,
+    execution_model: ExecutionModel,
+) -> tuple[Candle, int, str]:
+    """지연이 있으면 다음 캔들 시가 체결로 근사한 실행 캔들을 고른다."""
+    if execution_model.latency_ms <= 0 or current_index + 1 >= len(candles):
+        return candles[current_index], current_index, "close"
+    return candles[current_index + 1], current_index + 1, "next_open"
+
+
+def apply_execution_price(
+    *,
+    reference_price: float,
+    side: str,
+    slippage_bps: float,
+) -> float:
+    """사이드 기준으로 불리한 방향의 슬리피지를 적용한다."""
+    multiplier = slippage_bps / 10_000.0
+    if side == "buy":
+        return reference_price * (1.0 + multiplier)
+    if side == "sell":
+        return reference_price * max(0.0, 1.0 - multiplier)
+    return reference_price
+
+
 def build_output_dir(base_dir: Path, strategy_type: str, symbol: str) -> Path:
     """리포트 디렉토리를 만든다."""
     slug = symbol.replace("/", "_").replace("-", "_")
@@ -663,6 +756,7 @@ def simulate_alt_strategy(
     risk_per_trade: float,
     min_buy_order_value: float,
     max_daily_loss_quote: float,
+    execution_model: ExecutionModel | None = None,
     initial_state: AltReplayInitialState | None = None,
     start_timestamp_ms: int | None = None,
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
@@ -670,6 +764,12 @@ def simulate_alt_strategy(
     strategy = load_strategy_settings(
         "UPBIT_MIN_BUY_ORDER_VALUE" if exchange_name.lower() == "upbit" else "OKX_MIN_BUY_ORDER_VALUE",
         min_buy_order_value,
+    )
+    execution_model = execution_model or ExecutionModel(
+        slippage_bps=0.0,
+        buy_fill_ratio=1.0,
+        sell_fill_ratio=1.0,
+        latency_ms=0,
     )
     portfolio_settings = load_portfolio_allocation_settings()
     higher_timeframe_candles = resample_candles(
@@ -1033,11 +1133,22 @@ def simulate_alt_strategy(
                     exit_reason = "take_profit"
 
             if exit_ratio > 0:
-                amount = units * min(max(exit_ratio, 0.0), 1.0)
+                requested_amount = units * min(max(exit_ratio, 0.0), 1.0)
+                amount = requested_amount * execution_model.sell_fill_ratio
                 if amount > 0:
-                    proceeds = amount * last_close
+                    execution_candle, _, execution_timing = resolve_execution_candle(
+                        candles,
+                        current_index=index,
+                        execution_model=execution_model,
+                    )
+                    execution_price = apply_execution_price(
+                        reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                        side="sell",
+                        slippage_bps=execution_model.slippage_bps,
+                    )
+                    proceeds = amount * execution_price
                     sell_fee_quote = proceeds * (fee_rate_pct / 100.0)
-                    realized_pnl_quote = (last_close - avg_entry_price) * amount
+                    realized_pnl_quote = (execution_price - avg_entry_price) * amount
                     entry_fee_quote = (avg_entry_price * amount) * (fee_rate_pct / 100.0)
                     net_realized_pnl_quote = realized_pnl_quote - entry_fee_quote - sell_fee_quote
                     net_realized_pnl_pct = (
@@ -1069,9 +1180,9 @@ def simulate_alt_strategy(
                             symbol=symbol,
                             side="sell",
                             reason=exit_reason,
-                            timestamp_ms=current.timestamp_ms,
-                            recorded_at=format_iso(current.timestamp_ms),
-                            price=last_close,
+                            timestamp_ms=execution_candle.timestamp_ms,
+                            recorded_at=format_iso(execution_candle.timestamp_ms),
+                            price=execution_price,
                             amount=amount,
                             order_value_quote=proceeds,
                             fee_quote=sell_fee_quote + entry_fee_quote,
@@ -1091,6 +1202,11 @@ def simulate_alt_strategy(
                                 "current_net_realized_pnl_pct": current_net_realized_pnl_pct,
                                 "signal_score": signal_score,
                                 "symbol_regime": regime_snapshot.regime,
+                                "requested_amount": requested_amount,
+                                "fill_ratio": execution_model.sell_fill_ratio,
+                                "slippage_bps": execution_model.slippage_bps,
+                                "execution_timing": execution_timing,
+                                "latency_ms": execution_model.latency_ms,
                             },
                         )
                     )
@@ -1146,27 +1262,38 @@ def simulate_alt_strategy(
 
         if entry_allowed:
             order_value = min(cash, requested_order_value)
-            fee_quote = order_value * (fee_rate_pct / 100.0)
-            net_order_value = order_value - fee_quote
+            executed_order_value = order_value * execution_model.buy_fill_ratio
+            fee_quote = executed_order_value * (fee_rate_pct / 100.0)
+            net_order_value = executed_order_value - fee_quote
             if net_order_value >= min_buy_order_value and last_close > 0:
-                amount = net_order_value / last_close
+                execution_candle, _, execution_timing = resolve_execution_candle(
+                    candles,
+                    current_index=index,
+                    execution_model=execution_model,
+                )
+                execution_price = apply_execution_price(
+                    reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                    side="buy",
+                    slippage_bps=execution_model.slippage_bps,
+                )
+                amount = net_order_value / execution_price
                 previous_cost = (avg_entry_price or 0.0) * units
                 units += amount
                 avg_entry_price = ((previous_cost + net_order_value) / units) if units > 0 else last_close
-                cash -= order_value
+                cash -= executed_order_value
                 entry_count += 1
-                highest_price_since_entry = last_close
-                lowest_price_since_entry = last_close
-                last_trade_ts = current.timestamp_ms
+                highest_price_since_entry = execution_price
+                lowest_price_since_entry = execution_price
+                last_trade_ts = execution_candle.timestamp_ms
                 trade_records.append(
                     TradeRecord(
                         strategy_type="alt",
                         symbol=symbol,
                         side="buy",
                         reason="entry" if not has_position else "average_down",
-                        timestamp_ms=current.timestamp_ms,
-                        recorded_at=format_iso(current.timestamp_ms),
-                        price=last_close,
+                        timestamp_ms=execution_candle.timestamp_ms,
+                        recorded_at=format_iso(execution_candle.timestamp_ms),
+                        price=execution_price,
                         amount=amount,
                         order_value_quote=net_order_value,
                         fee_quote=fee_quote,
@@ -1191,6 +1318,12 @@ def simulate_alt_strategy(
                             "correlation_with_btc": correlation_with_btc,
                             "symbol_regime": regime_snapshot.regime,
                             "entry_timing_phase": entry_timing_snapshot.phase,
+                            "requested_order_value_quote": order_value,
+                            "executed_order_value_quote": executed_order_value,
+                            "fill_ratio": execution_model.buy_fill_ratio,
+                            "slippage_bps": execution_model.slippage_bps,
+                            "execution_timing": execution_timing,
+                            "latency_ms": execution_model.latency_ms,
                         },
                     )
                 )
@@ -1232,8 +1365,14 @@ def simulate_alt_strategy(
         "win_count": len(winning_trades),
         "win_rate_pct": (len(winning_trades) / len(sell_records) * 100) if sell_records else 0.0,
         "total_net_realized_pnl_quote": sum((record.net_realized_pnl_quote or 0.0) for record in sell_records),
+        "profit_factor": compute_profit_factor(sell_records),
+        "sharpe_ratio": compute_sharpe_ratio(equity_curve, timeframe=source_timeframe),
         "max_drawdown_pct": compute_max_drawdown(equity_curve),
-        "backtest_assumes_full_fill": True,
+        "backtest_assumes_full_fill": (
+            execution_model.buy_fill_ratio >= 0.999
+            and execution_model.sell_fill_ratio >= 0.999
+        ),
+        "execution_model": asdict(execution_model),
     }
     return summary, trade_records, equity_curve
 
@@ -1249,12 +1388,19 @@ def simulate_btc_strategy(
     risk_per_trade: float,
     min_buy_order_value: float,
     max_daily_loss_quote: float,
+    execution_model: ExecutionModel | None = None,
     initial_state: BtcReplayInitialState | None = None,
     start_timestamp_ms: int | None = None,
 ) -> tuple[dict[str, Any], list[TradeRecord], list[EquityPoint]]:
     """BTC EMA 전략을 오프라인으로 재생한다."""
     settings = load_btc_trend_settings()
     portfolio_settings = load_portfolio_allocation_settings()
+    execution_model = execution_model or ExecutionModel(
+        slippage_bps=0.0,
+        buy_fill_ratio=1.0,
+        sell_fill_ratio=1.0,
+        latency_ms=0,
+    )
     base_candles = resample_candles(candles, source_timeframe=source_timeframe, target_timeframe=settings.timeframe)
     confirm_candles = resample_candles(
         candles,
@@ -1341,12 +1487,26 @@ def simulate_btc_strategy(
         bullish = prev_fast <= prev_slow and fast_ema > slow_ema
         bearish = prev_fast >= prev_slow and fast_ema < slow_ema
         last_close = base_closes[index]
+        last_high = current.high
+        last_low = current.low
+        base_ohlcv_window = [
+            [c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume]
+            for c in window
+        ]
+        donchian_entry_upper, _ = calc_donchian_channel(
+            base_ohlcv_window,
+            settings.donchian_entry_lookback,
+        )
+        _, donchian_exit_lower = calc_donchian_channel(
+            base_ohlcv_window,
+            settings.donchian_exit_lookback,
+        )
         volume_ratio = calc_volume_ratio(window, settings.volume_lookback)
         atr_value = calc_atr(window, settings.atr_period)
         atr_pct = (atr_value / last_close) * 100 if last_close > 0 else 0.0
         rsi_value = calc_rsi(closes, settings.rsi_period)
         noise_ratio = calc_noise_ratio(
-            [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+            base_ohlcv_window,
             settings.noise_ratio_lookback,
         )
         bb_width_pct = calc_bollinger_band_width_pct(
@@ -1411,6 +1571,11 @@ def simulate_btc_strategy(
             min_bb_width_pct=settings.min_bb_width_pct,
             max_bb_width_pct=settings.max_bb_width_pct,
             signal_score_min=effective_signal_score_min,
+            symbol_regime=None,
+            entry_mode=settings.entry_mode,
+            donchian_entry_upper=donchian_entry_upper,
+            donchian_confirm_breakout_close=settings.donchian_confirm_breakout_close,
+            last_high=last_high,
         )
         ema_aligned = bool(btc_entry_state["ema_aligned"])
         price_above_fast = bool(btc_entry_state["price_above_fast"])
@@ -1449,7 +1614,7 @@ def simulate_btc_strategy(
             gap_pct=ema_spread_pct,
             rsi_value=rsi_value,
             adx_value=calc_adx(
-                [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+                base_ohlcv_window,
                 14,
             ),
             bullish_signal=bullish,
@@ -1525,9 +1690,16 @@ def simulate_btc_strategy(
             trailing_armed=trailing_armed,
             enable_fee_protect_exit=settings.enable_fee_protect_exit,
             fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
+            enable_atr_trailing_exit=settings.enable_atr_trailing_exit,
+            trailing_atr_multiple=settings.trailing_atr_multiple,
+            atr_value=atr_value,
             pnl_pct=current_net_pnl_pct,
             bearish=(bearish or (not ema_aligned) or (not price_above_fast)),
             confirm_bullish=confirm_bullish and not bull_pullback_hold_active,
+            entry_mode=settings.entry_mode,
+            donchian_exit_lower=donchian_exit_lower,
+            last_low=last_low,
+            enable_donchian_failure_exit=settings.enable_donchian_failure_exit,
         )
         stop_triggered = bool(btc_exit_flags["stop_triggered"])
         trailing_triggered = bool(btc_exit_flags["trailing_stop_triggered"])
@@ -1554,10 +1726,21 @@ def simulate_btc_strategy(
                 exit_reason = "trend_exit"
 
             if sell_ratio > 0:
-                amount = units * min(max(sell_ratio, 0.0), 1.0)
-                proceeds = amount * last_close
+                requested_amount = units * min(max(sell_ratio, 0.0), 1.0)
+                amount = requested_amount * execution_model.sell_fill_ratio
+                execution_candle, _, execution_timing = resolve_execution_candle(
+                    candles,
+                    current_index=index,
+                    execution_model=execution_model,
+                )
+                execution_price = apply_execution_price(
+                    reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                    side="sell",
+                    slippage_bps=execution_model.slippage_bps,
+                )
+                proceeds = amount * execution_price
                 sell_fee_quote = proceeds * (fee_rate_pct / 100.0)
-                realized_pnl_quote = (last_close - entry_price) * amount
+                realized_pnl_quote = (execution_price - entry_price) * amount
                 entry_fee_quote = (entry_price * amount) * (fee_rate_pct / 100.0)
                 net_realized_pnl_quote = realized_pnl_quote - entry_fee_quote - sell_fee_quote
                 net_realized_pnl_pct = (
@@ -1586,9 +1769,9 @@ def simulate_btc_strategy(
                         symbol=symbol,
                         side="sell",
                         reason=exit_reason,
-                        timestamp_ms=current.timestamp_ms,
-                        recorded_at=format_iso(current.timestamp_ms),
-                        price=last_close,
+                        timestamp_ms=execution_candle.timestamp_ms,
+                        recorded_at=format_iso(execution_candle.timestamp_ms),
+                        price=execution_price,
                         amount=amount,
                         order_value_quote=proceeds,
                         fee_quote=sell_fee_quote + entry_fee_quote,
@@ -1610,10 +1793,15 @@ def simulate_btc_strategy(
                             "drawdown_from_high_pct": drawdown_from_high_pct,
                             "mfe_pct": mfe_pct,
                             "mae_pct": mae_pct,
+                            "requested_amount": requested_amount,
+                            "fill_ratio": execution_model.sell_fill_ratio,
+                            "slippage_bps": execution_model.slippage_bps,
+                            "execution_timing": execution_timing,
+                            "latency_ms": execution_model.latency_ms,
                         },
                     )
                 )
-                last_trade_ts = current.timestamp_ms
+                last_trade_ts = execution_candle.timestamp_ms
 
         pre_score_position_ratio = settings.get_position_ratio(symbol)
         allocation_score_result = compute_allocation_score(
@@ -1661,17 +1849,28 @@ def simulate_btc_strategy(
             reason = "entry" if entry_allowed else "pyramid_add_on"
             order_value = requested_order_value if entry_allowed else requested_add_on_order_value
             order_value = min(cash, order_value)
-            fee_quote = order_value * (fee_rate_pct / 100.0)
-            net_order_value = order_value - fee_quote
+            executed_order_value = order_value * execution_model.buy_fill_ratio
+            fee_quote = executed_order_value * (fee_rate_pct / 100.0)
+            net_order_value = executed_order_value - fee_quote
             if net_order_value >= min_buy_order_value and last_close > 0:
-                amount = net_order_value / last_close
+                execution_candle, _, execution_timing = resolve_execution_candle(
+                    candles,
+                    current_index=index,
+                    execution_model=execution_model,
+                )
+                execution_price = apply_execution_price(
+                    reference_price=execution_candle.open if execution_timing == "next_open" else last_close,
+                    side="buy",
+                    slippage_bps=execution_model.slippage_bps,
+                )
+                amount = net_order_value / execution_price
                 previous_cost = (entry_price or 0.0) * units
                 units += amount
-                entry_price = ((previous_cost + net_order_value) / units) if units > 0 else last_close
-                cash -= order_value
-                last_trade_ts = current.timestamp_ms
-                highest_price_since_entry = last_close
-                lowest_price_since_entry = last_close
+                entry_price = ((previous_cost + net_order_value) / units) if units > 0 else execution_price
+                cash -= executed_order_value
+                last_trade_ts = execution_candle.timestamp_ms
+                highest_price_since_entry = execution_price
+                lowest_price_since_entry = execution_price
                 if reason == "pyramid_add_on":
                     add_on_count += 1
                 trade_records.append(
@@ -1680,9 +1879,9 @@ def simulate_btc_strategy(
                         symbol=symbol,
                         side="buy",
                         reason=reason,
-                        timestamp_ms=current.timestamp_ms,
-                        recorded_at=format_iso(current.timestamp_ms),
-                        price=last_close,
+                        timestamp_ms=execution_candle.timestamp_ms,
+                        recorded_at=format_iso(execution_candle.timestamp_ms),
+                        price=execution_price,
                         amount=amount,
                         order_value_quote=net_order_value,
                         fee_quote=fee_quote,
@@ -1705,6 +1904,12 @@ def simulate_btc_strategy(
                             "noise_spread_multiplier": noise_spread_multiplier,
                             "symbol_regime": regime_snapshot.regime,
                             "entry_timing_phase": entry_timing_snapshot.phase,
+                            "requested_order_value_quote": order_value,
+                            "executed_order_value_quote": executed_order_value,
+                            "fill_ratio": execution_model.buy_fill_ratio,
+                            "slippage_bps": execution_model.slippage_bps,
+                            "execution_timing": execution_timing,
+                            "latency_ms": execution_model.latency_ms,
                         },
                     )
                 )
@@ -1744,8 +1949,14 @@ def simulate_btc_strategy(
         "win_count": len(winning_trades),
         "win_rate_pct": (len(winning_trades) / len(sell_records) * 100) if sell_records else 0.0,
         "total_net_realized_pnl_quote": sum((record.net_realized_pnl_quote or 0.0) for record in sell_records),
+        "profit_factor": compute_profit_factor(sell_records),
+        "sharpe_ratio": compute_sharpe_ratio(equity_curve, timeframe=source_timeframe),
         "max_drawdown_pct": compute_max_drawdown(equity_curve),
-        "backtest_assumes_full_fill": True,
+        "backtest_assumes_full_fill": (
+            execution_model.buy_fill_ratio >= 0.999
+            and execution_model.sell_fill_ratio >= 0.999
+        ),
+        "execution_model": asdict(execution_model),
     }
     return summary, trade_records, equity_curve
 
@@ -1809,6 +2020,7 @@ def run_backtest_command(args: argparse.Namespace) -> int:
     max_daily_loss_quote = args.max_daily_loss_quote
     if max_daily_loss_quote is None:
         max_daily_loss_quote = resolve_default_max_daily_loss(args.exchange)
+    execution_model = build_execution_model(args)
 
     override_set_names = list(args.override_set or [])
     override_paths = resolve_set_paths(override_set_names)
@@ -1827,6 +2039,7 @@ def run_backtest_command(args: argparse.Namespace) -> int:
                 risk_per_trade=args.risk_per_trade,
                 min_buy_order_value=min_buy_order_value,
                 max_daily_loss_quote=max_daily_loss_quote,
+                execution_model=execution_model,
             )
         else:
             summary, trades, equity_curve = simulate_btc_strategy(
@@ -1839,6 +2052,7 @@ def run_backtest_command(args: argparse.Namespace) -> int:
                 risk_per_trade=args.risk_per_trade,
                 min_buy_order_value=min_buy_order_value,
                 max_daily_loss_quote=max_daily_loss_quote,
+                execution_model=execution_model,
             )
 
     summary["override_set_names"] = override_set_names
@@ -1855,6 +2069,8 @@ def run_backtest_command(args: argparse.Namespace) -> int:
         f"전략={summary['strategy_type']} "
         f"수익률={summary['net_return_pct']:.2f}% "
         f"거래수={summary['trade_count']} "
+        f"Sharpe={float(summary.get('sharpe_ratio', 0.0) or 0.0):.3f} "
+        f"PF={float(summary.get('profit_factor', 0.0) or 0.0):.3f} "
         f"최대낙폭={summary['max_drawdown_pct']:.2f}%"
     )
     return 0
@@ -1887,6 +2103,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--risk-per-trade", type=float, default=DEFAULT_RISK_PER_TRADE)
     run_parser.add_argument("--min-buy-order-value", type=float, default=None)
     run_parser.add_argument("--max-daily-loss-quote", type=float, default=None)
+    run_parser.add_argument("--slippage-bps", type=float, default=0.0, help="매수/매도에 불리하게 적용할 슬리피지 bps")
+    run_parser.add_argument("--buy-fill-ratio", type=float, default=1.0, help="매수 체결 비율 0~1")
+    run_parser.add_argument("--sell-fill-ratio", type=float, default=1.0, help="매도 체결 비율 0~1")
+    run_parser.add_argument("--latency-ms", type=int, default=0, help="0보다 크면 다음 캔들 시가 체결로 근사")
     run_parser.add_argument("--override-set", action="append", default=[], help="config/sets 아래 실험 세트 이름 또는 경로")
     run_parser.add_argument("--override-toml", action="append", default=[], help="추가 TOML override 경로")
     run_parser.add_argument("--output-dir", default="reports/backtests")

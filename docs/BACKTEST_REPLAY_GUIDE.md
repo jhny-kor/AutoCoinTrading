@@ -87,6 +87,14 @@ BTC 전략은 입력 주기가 더 낮으면 내부에서 `5m`, `15m` 로 리샘
   - 거래소 최소 주문 금액 직접 지정
 - `--max-daily-loss-quote`
   - 일일 최대 손실 제한 직접 지정
+- `--slippage-bps`
+  - 매수/매도에 불리하게 적용할 슬리피지 bps
+- `--buy-fill-ratio`
+  - 매수 부분체결 비율
+- `--sell-fill-ratio`
+  - 매도 부분체결 비율
+- `--latency-ms`
+  - 0보다 크면 다음 캔들 시가 체결로 근사
 - `--output-dir`
   - 결과 저장 루트
 
@@ -115,11 +123,30 @@ override 실험 세트를 같이 쓰려면 다음 옵션을 사용합니다.
 이렇게 실행하면 `summary.json` 과 `reports/backtest_registry.json` 에 적용된 세트 경로가 같이 남습니다.
 
 - `summary.json`
-  - 수익률, 거래 수, 승률, 최대 낙폭
-- `trades.jsonl`
+  - 수익률, 거래 수, 승률, 최대 낙폭, Sharpe, Profit Factor
+  - `trades.jsonl`
   - 백테스트 체결 이력
 - `equity_curve.jsonl`
   - 자산곡선
+
+실행 모델 예시
+
+```bash
+.venv/bin/python backtest_replay.py run \
+  --strategy btc \
+  --exchange okx \
+  --symbol BTC/USDT \
+  --input data/okx_btc_usdt_1m.jsonl \
+  --timeframe 1m \
+  --slippage-bps 5 \
+  --buy-fill-ratio 0.95 \
+  --sell-fill-ratio 0.90 \
+  --latency-ms 200
+```
+
+주의:
+- 현재는 캔들 백테스트이므로 `100~300ms` 지연을 실제 틱 단위로 재현하지는 않습니다.
+- `latency-ms > 0`이면 보수적으로 `다음 캔들 시가 체결`로 근사합니다.
 
 ## 5.1 실거래와 비교
 
@@ -198,7 +225,8 @@ override 실험 세트를 같이 쓰려면 다음 옵션을 사용합니다.
 
 - 실봇 100% 복제보다 `같은 설정 기반의 1차 오프라인 검증`에 초점을 둡니다.
 - 최근 버전부터는 실거래 공통 신호 계산, 레짐 정책, 노이즈 비율, 진입 상태 머신을 더 많이 반영합니다.
-- 다만 체결 품질은 여전히 `완전 체결(fill_ratio=1.0) 가정`이라 실거래 `slippage`, `partial fill`, `API 지연`은 재현하지 않습니다.
+- 기본값은 여전히 단순 체결 가정이지만, 옵션으로 `slippage`, `partial fill`, `latency` 를 보수적으로 근사할 수 있습니다.
+- 다만 `100~300ms` 지연은 틱 데이터가 아니라 캔들 데이터 기준이므로 `다음 캔들 시가 체결`로 단순화합니다.
 - 포트폴리오 배분과 복수 심볼 동시 운용은 여전히 단순화되어 있습니다.
 - 입력 데이터 품질이 낮으면 결과도 그대로 왜곡됩니다.
 - 현재 실전 `.env` 값이 보수적이면 거래가 0건으로 나올 수 있습니다.

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-23: 확인 타임프레임 bullish 는 slope 하한까지 충족할 때만 유효하게 보고, 거래량 보너스는 ATR 동반 시에만 반영하도록 BTC 진입 품질을 더 보수화
 - 고거래량 BTC 진입에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용해 급등 추격 손실을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 BTC 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
 - 2026-04-10: BTC 손절 후 일정 시간과 높은 점수면 fresh cross 없이 재진입 가능한 예외 경로를 추가
@@ -401,7 +402,8 @@ def run_bot():
             atr_pct = (atr_value / last_close * 100) if last_close else 0.0
             atr_series = calc_recent_atr_series(ohlcv, settings.atr_period, sample_count=20)
             atr_percentile = calc_percentile_rank(atr_series, atr_value)
-            effective_min_atr_pct = settings.get_min_atr_pct(symbol)
+            base_min_atr_pct = settings.get_min_atr_pct(symbol)
+            effective_min_atr_pct = base_min_atr_pct
             confirm_ema_series = calc_ema_series(confirm_closes, settings.confirm_ema_period)
             confirm_ema = confirm_ema_series[-1]
             confirm_close = confirm_closes[-1]
@@ -410,7 +412,12 @@ def run_bot():
                 settings.ema_slope_lookback,
             )
             base_min_ema_spread_pct = settings.get_min_ema_spread_pct(symbol)
-            confirm_bullish = confirm_close > confirm_ema
+            confirm_bullish_raw = confirm_close > confirm_ema
+            confirm_bullish = settings.is_confirm_trend_quality_passed(
+                symbol=symbol,
+                confirm_bullish=confirm_bullish_raw,
+                confirm_ema_slope_pct=confirm_ema_slope_pct,
+            )
             rsi_value = calc_rsi(closes, settings.rsi_period)
             noise_ratio = calc_noise_ratio(
                 ohlcv,
@@ -574,7 +581,10 @@ def run_bot():
                 volume_ratio is not None
                 and volume_ratio >= effective_min_volume_ratio
             )
-            effective_min_atr_pct = effective_min_atr_pct * regime_policy.min_atr_multiplier
+            effective_min_atr_pct = max(
+                base_min_atr_pct,
+                effective_min_atr_pct * regime_policy.min_atr_multiplier,
+            )
             high_volume_ratio_threshold = settings.get_high_volume_ratio_threshold(symbol)
             if (
                 volume_ratio is not None
@@ -586,6 +596,13 @@ def run_bot():
                     effective_min_atr_pct = max(effective_min_atr_pct, high_volume_min_atr_pct)
                 regime_confirmation_loops += settings.get_high_volume_extra_confirmation_loops(symbol)
             atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
+            volume_bonus_allowed = settings.is_volume_bonus_allowed(
+                symbol=symbol,
+                volume_ratio=volume_ratio,
+                atr_pct=atr_pct,
+            )
+            scored_volume_ratio = volume_ratio if volume_bonus_allowed else None
+            scored_required_volume_ratio = effective_min_volume_ratio if volume_bonus_allowed else None
             should_alert, previous_regime = update_regime_state(
                 exchange_name="upbit",
                 symbol=symbol,
@@ -713,7 +730,12 @@ def run_bot():
             log(f"[{symbol}] 레짐 라우터 선택 전략: {strategy_key}")
             log(
                 f"[{symbol}] 확인 타임프레임 종가: {confirm_close:.0f}, "
-                f"확인 EMA: {confirm_ema:.0f}, 상승 추세={confirm_bullish}"
+                f"확인 EMA: {confirm_ema:.0f}, raw 상승 추세={confirm_bullish_raw}, "
+                f"적격 상승 추세={confirm_bullish}"
+            )
+            log(
+                f"[{symbol}] 확인 EMA 기울기: {0.0 if confirm_ema_slope_pct is None else confirm_ema_slope_pct:.4f}% "
+                f"(적격 기준 {settings.get_confirm_ema_slope_min_pct(symbol):.4f}%)"
             )
             log(
                 f"[{symbol}] EMA 정렬 상태: aligned={ema_aligned}, "
@@ -768,6 +790,11 @@ def run_bot():
                 )
             if trend_follow_entry and not bullish and not trend_follow_entry_allowed:
                 log(f"[{symbol}] 현재 레짐 {symbol_regime} 에서는 trend-follow 진입을 허용하지 않습니다.")
+            if volume_ratio is not None and not volume_bonus_allowed:
+                log(
+                    f"[{symbol}] 거래량 보너스 비활성: volume {volume_ratio:.4f}배, ATR {atr_pct:.4f}% "
+                    f"(보너스 ATR 기준 {0.0 if settings.get_volume_bonus_min_atr_pct(symbol) is None else settings.get_volume_bonus_min_atr_pct(symbol):.4f}%)"
+                )
             # 포지션 평가 helper 는 한 번만 호출하고, 이후 보유 여부에 따라 후처리만 나눈다.
             position_state = evaluate_btc_open_position(
                 has_position=has_position,
@@ -914,8 +941,8 @@ def run_bot():
             allocation_score_result = compute_allocation_score(
                 settings=portfolio_allocator.settings,
                 signal_score=signal_score,
-                volume_ratio=volume_ratio,
-                required_volume_ratio=effective_min_volume_ratio,
+                volume_ratio=scored_volume_ratio,
+                required_volume_ratio=scored_required_volume_ratio,
                 volume_ratio_percentile=volume_ratio_percentile,
                 trend_ok=confirm_bullish,
                 htf_slope_pct=confirm_ema_slope_pct,
@@ -943,7 +970,7 @@ def run_bot():
                 base_signal=entry_signal and ema_aligned and price_above_fast,
                 strong_signal=signal_score >= effective_signal_score_min,
                 require_strong_signal=False,
-                volume_ratio=volume_ratio,
+                volume_ratio=scored_volume_ratio,
                 volume_threshold=portfolio_allocator.settings.dynamic_volume_ratio_threshold,
                 trend_ok=confirm_bullish,
                 require_trend_ok=portfolio_allocator.settings.dynamic_require_trend_ok,
@@ -1019,11 +1046,14 @@ def run_bot():
                 trend_follow_entry=trend_follow_entry,
                 entry_signal=entry_signal,
                 volume_ratio=volume_ratio,
+                volume_bonus_allowed=volume_bonus_allowed,
                 effective_min_volume_ratio=effective_min_volume_ratio,
                 atr_value=atr_value,
                 atr_pct=atr_pct,
                 effective_min_atr_pct=effective_min_atr_pct,
                 confirm_bullish=confirm_bullish,
+                confirm_bullish_raw=confirm_bullish_raw,
+                confirm_ema_slope_pct=confirm_ema_slope_pct,
                 base_free=base_free,
                 quote_free=quote_free,
                 position_ratio=position_ratio,

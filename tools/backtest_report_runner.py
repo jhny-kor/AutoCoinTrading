@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-23: 배치 백테스트 요약에 Sharpe ratio, profit factor, 실행 모델 메타데이터를 포함하고 실행 모델 옵션을 전달하도록 확장했다.
 - 2026-04-10: 배치 백테스트에 override 실험 세트/추가 TOML 을 임시 적용하고 결과 요약에 세트 메타데이터를 함께 남기도록 확장했다.
 - 업비트 1분봉 배치 백테스트는 가능하면 웹소켓 수집기의 로컬 1분봉 파일을 우선 사용하도록 보강해 공개 API 의존을 줄였다.
 - since 시점 이전 실거래 포지션을 백테스트 초기 상태로 주입하는 position-aware 비교를 추가해 carry-over 포지션이 있는 구간도 더 공정하게 비교하도록 확장
@@ -31,6 +32,7 @@ from analysis_log_collector import create_okx_public_client, create_upbit_public
 from backtest_replay import (
     AltReplayInitialState,
     BtcReplayInitialState,
+    build_execution_model,
     build_output_dir,
     load_candles,
     parse_timeframe_to_minutes,
@@ -283,6 +285,10 @@ def run_single_backtest(
     since: str | None,
     until: str | None,
     risk_per_trade: float,
+    slippage_bps: float,
+    buy_fill_ratio: float,
+    sell_fill_ratio: float,
+    latency_ms: int,
 ) -> dict[str, Any]:
     """심볼 1개 기준 fetch -> run -> compare 를 수행한다."""
     strategy_type = infer_strategy_type(symbol)
@@ -397,6 +403,14 @@ def run_single_backtest(
             risk_per_trade=risk_per_trade,
             min_buy_order_value=min_buy_order_value,
             max_daily_loss_quote=max_daily_loss_quote,
+            execution_model=build_execution_model(
+                argparse.Namespace(
+                    slippage_bps=slippage_bps,
+                    buy_fill_ratio=buy_fill_ratio,
+                    sell_fill_ratio=sell_fill_ratio,
+                    latency_ms=latency_ms,
+                )
+            ),
             initial_state=alt_initial_state,
             start_timestamp_ms=start_timestamp_ms,
         )
@@ -411,6 +425,14 @@ def run_single_backtest(
             risk_per_trade=risk_per_trade,
             min_buy_order_value=min_buy_order_value,
             max_daily_loss_quote=max_daily_loss_quote,
+            execution_model=build_execution_model(
+                argparse.Namespace(
+                    slippage_bps=slippage_bps,
+                    buy_fill_ratio=buy_fill_ratio,
+                    sell_fill_ratio=sell_fill_ratio,
+                    latency_ms=latency_ms,
+                )
+            ),
             initial_state=btc_initial_state,
             start_timestamp_ms=start_timestamp_ms,
         )
@@ -472,6 +494,7 @@ def build_batch_markdown(
     limit: int,
     since: str | None,
     until: str | None,
+    execution_model: dict[str, Any],
     override_set_names: list[str],
     override_paths: list[str],
     rows: list[dict[str, Any]],
@@ -485,6 +508,7 @@ def build_batch_markdown(
         f"- fetch limit: `{limit}`",
         f"- 실거래 비교 시작: `{since or '-'}`",
         f"- 실거래 비교 종료: `{until or '-'}`",
+        f"- 실행 모델: `slippage {execution_model.get('slippage_bps', 0.0)}bps / buy_fill {execution_model.get('buy_fill_ratio', 1.0):.2f} / sell_fill {execution_model.get('sell_fill_ratio', 1.0):.2f} / latency {execution_model.get('latency_ms', 0)}ms`",
         f"- override 세트: `{', '.join(override_set_names) if override_set_names else '-'}`",
         f"- override 경로: `{', '.join(override_paths) if override_paths else '-'}`",
         "",
@@ -504,6 +528,8 @@ def build_batch_markdown(
                 f"- 데이터 커버: `{row['covered_days']:.2f}일` (목표 `{row['expected_days']:.2f}일`)",
                 f"- 백테스트 수익률: `{float(summary.get('net_return_pct', 0.0) or 0.0):.2f}%`",
                 f"- 백테스트 거래 수: `{summary.get('trade_count', 0)}`",
+                f"- 백테스트 Sharpe: `{float(summary.get('sharpe_ratio', 0.0) or 0.0):.3f}`",
+                f"- 백테스트 Profit Factor: `{float(summary.get('profit_factor', 0.0) or 0.0):.3f}`",
                 f"- 백테스트 최대 낙폭: `{float(summary.get('max_drawdown_pct', 0.0) or 0.0):.2f}%`",
                 f"- 실거래 매도 수: `{live.get('sell_count', 0)}`",
                 f"- 상태 플래그: `{', '.join(row['flags']) if row['flags'] else '-'}`",
@@ -570,6 +596,10 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
                 since=since,
                 until=until,
                 risk_per_trade=args.risk_per_trade,
+                slippage_bps=args.slippage_bps,
+                buy_fill_ratio=args.buy_fill_ratio,
+                sell_fill_ratio=args.sell_fill_ratio,
+                latency_ms=args.latency_ms,
             )
             row["override_set_names"] = override_set_names
             row["override_paths"] = [str(path) for path in override_paths]
@@ -582,6 +612,12 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
         "limit": effective_limit,
         "since": since,
         "until": until,
+        "execution_model": {
+            "slippage_bps": args.slippage_bps,
+            "buy_fill_ratio": args.buy_fill_ratio,
+            "sell_fill_ratio": args.sell_fill_ratio,
+            "latency_ms": args.latency_ms,
+        },
         "override_set_names": override_set_names,
         "override_paths": [str(path) for path in override_paths],
         "rows": rows,
@@ -594,6 +630,7 @@ def run_batch(args: argparse.Namespace, *, label: str, since: str | None, until:
             limit=effective_limit,
             since=since,
             until=until,
+            execution_model=batch_summary["execution_model"],
             override_set_names=override_set_names,
             override_paths=[str(path) for path in override_paths],
             rows=rows,
@@ -625,6 +662,10 @@ def run_diff(args: argparse.Namespace) -> int:
                 - float(before.get("net_return_pct", 0.0) or 0.0),
                 "before_trade_count": int(before.get("trade_count", 0) or 0),
                 "after_trade_count": int(after.get("trade_count", 0) or 0),
+                "before_sharpe_ratio": float(before.get("sharpe_ratio", 0.0) or 0.0),
+                "after_sharpe_ratio": float(after.get("sharpe_ratio", 0.0) or 0.0),
+                "before_profit_factor": float(before.get("profit_factor", 0.0) or 0.0),
+                "after_profit_factor": float(after.get("profit_factor", 0.0) or 0.0),
                 "before_max_drawdown_pct": float(before.get("max_drawdown_pct", 0.0) or 0.0),
                 "after_max_drawdown_pct": float(after.get("max_drawdown_pct", 0.0) or 0.0),
             }
@@ -643,6 +684,8 @@ def run_diff(args: argparse.Namespace) -> int:
         markdown_lines.append(
             f"- {row['key']} | 수익률 {row['before_return_pct']:.2f}% -> {row['after_return_pct']:.2f}% "
             f"({row['return_diff_pct']:+.2f}%p) | 거래 수 {row['before_trade_count']} -> {row['after_trade_count']} | "
+            f"Sharpe {row['before_sharpe_ratio']:.3f} -> {row['after_sharpe_ratio']:.3f} | "
+            f"PF {row['before_profit_factor']:.3f} -> {row['after_profit_factor']:.3f} | "
             f"MDD {row['before_max_drawdown_pct']:.2f}% -> {row['after_max_drawdown_pct']:.2f}%"
         )
     (output_dir / "diff_summary.md").write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
@@ -663,6 +706,10 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--symbols", help="쉼표 구분 심볼 목록, 비우면 관리 심볼 전체")
     common.add_argument("--exchanges", default="okx,upbit", help="쉼표 구분 거래소 목록")
     common.add_argument("--output-dir", default="reports/backtest_batches")
+    common.add_argument("--slippage-bps", type=float, default=0.0, help="매수/매도에 불리하게 적용할 슬리피지 bps")
+    common.add_argument("--buy-fill-ratio", type=float, default=1.0, help="매수 체결 비율 0~1")
+    common.add_argument("--sell-fill-ratio", type=float, default=1.0, help="매도 체결 비율 0~1")
+    common.add_argument("--latency-ms", type=int, default=0, help="0보다 크면 다음 캔들 시가 체결로 근사")
     common.add_argument("--override-set", action="append", default=[], help="config/sets 아래 실험 세트 이름 또는 경로")
     common.add_argument("--override-toml", action="append", default=[], help="추가 TOML override 경로")
 

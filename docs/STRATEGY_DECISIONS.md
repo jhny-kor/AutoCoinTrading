@@ -843,6 +843,40 @@
   - `py_compile` 통과
   - OKX/업비트 알트 봇 재기동 및 healthcheck 정상
 
+### 37. BTC 손절 억제용 확인 추세/거래량 보너스 보수화 (2026-04-23)
+
+- 변경 내용:
+  - BTC 최소 ATR 하한 상향
+    - `BTC/USDT`: `0.14 -> 0.16`
+    - `BTC/KRW`: `0.125 -> 0.14`
+  - 확인 타임프레임 bullish 를 `종가 > 확인 EMA` 단독이 아니라 `확인 EMA slope 하한`까지 함께 충족할 때만 유효 처리
+    - `BTC/USDT`: `confirm_ema_slope_pct >= 0.02`
+    - `BTC/KRW`: `confirm_ema_slope_pct >= 0.015`
+  - 거래량 보너스/동적 overweight 는 ATR 동반 시에만 허용
+    - `volume_ratio >= 1.5` 구간 보너스는
+      - `BTC/USDT`: `ATR >= 0.16%`
+      - `BTC/KRW`: `ATR >= 0.14%`
+    - `volume_ratio >= 3.0` 고거래량 추격 구간은 추가 ATR 하한 강화
+      - `BTC/USDT`: `ATR >= 0.18%`
+      - `BTC/KRW`: `ATR >= 0.16%`
+- 근거 로그:
+  - 최근 실거래 손절 분석에서 `confirm_bullish=True` 인 거래도 손절이 반복되어, 단순 상위 EMA 위 여부만으로는 보호력이 거의 없었음
+  - `volume_ratio` 가 높은 손절 거래가 계속 확인되어, 거래량 증가를 단독 긍정 신호로 쓰는 해석이 추격 진입을 허용하는 쪽으로 작동했음
+  - 반대로 수익 거래는 대체로 `ATR` 이 더 높고, 상위 slope 도 더 살아 있는 구간에서 발생했음
+- 해석:
+  - 손절 억제의 우선순위는 손절폭 확대가 아니라 `약한 상위 추세`와 `ATR 이 약한 거래량 급증`을 보너스 신호에서 제외하는 것
+  - 즉 확인 추세는 더 좁게, 거래량 보너스는 더 늦게 인정하는 쪽이 현재 표본과 맞다고 판단
+- 구현 범위:
+  - [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
+  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+  - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
+  - [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+  - [tests/test_btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/tests/test_btc_trend_settings.py)
+- 검증:
+  - `python -m unittest tests.test_btc_trend_settings -v`
+  - `py_compile`
+  - BTC 봇 재기동 및 healthcheck 확인
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

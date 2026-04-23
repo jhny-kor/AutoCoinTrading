@@ -55,6 +55,48 @@ class BtcTrendSettingsTests(unittest.TestCase):
         self.assertEqual(1, settings.get_high_volume_extra_confirmation_loops("BTC/KRW"))
         self.assertEqual(0, settings.get_high_volume_extra_confirmation_loops("BTC/USDT"))
 
+    def test_loads_confirm_slope_and_volume_bonus_guards(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BTC_TREND_CONFIRM_EMA_SLOPE_MIN_PCT_MAP": "BTC/USDT:0.02,BTC/KRW:0.015",
+                "BTC_TREND_VOLUME_BONUS_RATIO_THRESHOLD_MAP": "BTC/USDT:1.5,BTC/KRW:1.5",
+                "BTC_TREND_VOLUME_BONUS_MIN_ATR_PCT_MAP": "BTC/USDT:0.16,BTC/KRW:0.14",
+            },
+            clear=False,
+        ):
+            settings = load_btc_trend_settings()
+
+        self.assertEqual(0.02, settings.get_confirm_ema_slope_min_pct("BTC/USDT"))
+        self.assertTrue(
+            settings.is_confirm_trend_quality_passed(
+                symbol="BTC/USDT",
+                confirm_bullish=True,
+                confirm_ema_slope_pct=0.021,
+            )
+        )
+        self.assertFalse(
+            settings.is_confirm_trend_quality_passed(
+                symbol="BTC/KRW",
+                confirm_bullish=True,
+                confirm_ema_slope_pct=0.014,
+            )
+        )
+        self.assertTrue(
+            settings.is_volume_bonus_allowed(
+                symbol="BTC/USDT",
+                volume_ratio=1.8,
+                atr_pct=0.17,
+            )
+        )
+        self.assertFalse(
+            settings.is_volume_bonus_allowed(
+                symbol="BTC/KRW",
+                volume_ratio=1.8,
+                atr_pct=0.13,
+            )
+        )
+
     def test_loads_okx_funding_rate_guard_settings(self):
         with patch.dict(
             os.environ,

@@ -94,7 +94,9 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 ### BTC
 
 - 5분봉 EMA + 15분봉 확인
+- 상위 추세는 `confirm_close > confirm_ema` 와 확인 EMA slope 하한을 함께 충족할 때만 유효 처리
 - ATR 기반 손절/익절
+- 거래량 보너스와 동적 오버웨이트는 ATR 동반 시에만 허용
 - 부분익절 + 트레일링
 - 순익 보호 익절
 - 피라미딩 1회 제한
@@ -228,6 +230,12 @@ live 설정을 건드리지 않고 백테스트에만 추가 override TOML 을 �
 - 단일: `reports/backtests/...`
 - 배치: `reports/backtest_batches/...`
 - 인덱스: `reports/backtest_registry.json`
+- 요약 지표: `win_rate_pct`, `max_drawdown_pct`, `sharpe_ratio`, `profit_factor`
+- 실행 모델 옵션:
+  - `--slippage-bps`
+  - `--buy-fill-ratio`
+  - `--sell-fill-ratio`
+  - `--latency-ms`
 
 상세 사용법은 [docs/BACKTEST_REPLAY_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/BACKTEST_REPLAY_GUIDE.md) 를 봅니다.
 
