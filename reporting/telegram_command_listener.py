@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-24: 튜닝 비교 리포트가 오래된 diff 파일에 머무르지 않도록 최신 batch_summary 2개 비교 fallback 과 Sharpe/PF 표시를 추가
 - 시간대 리포트, 최근 체결, 레짐/시장 요약, 최근 로그의 심볼 라벨 앞에 초록 원 배지를 붙여 텔레그램 가독성을 높임
 - /analysis 와 /weekly 에 최신 튜닝 세트 diff 요약을 붙여 보수형 대비 혼합형 개선 여부를 바로 보이도록 확장
 - /status, /positions, /analysis, 일일/주간 리포트에 복구 포지션 상태와 일일 손실 제한 상태를 함께 보여주도록 확장
@@ -575,31 +576,118 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
 def build_latest_tuning_diff_text(limit: int = 6) -> str:
     """가장 최근 튜닝 세트 diff 요약을 만든다."""
     diff_paths = sorted(iter_files("reports/backtest_batches", "diff_summary.json"))
-    if not diff_paths:
-        return "최근 튜닝 세트 비교\n- 아직 생성된 diff_summary.json 이 없습니다."
+    batch_paths = sorted(iter_files("reports/backtest_batches", "batch_summary.json"))
 
-    latest_path = max(diff_paths, key=lambda path: path.stat().st_mtime)
-    try:
-        rows = json.loads(latest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        return "최근 튜닝 세트 비교\n- 최신 diff_summary.json 을 읽지 못했습니다."
+    latest_diff_path = max(diff_paths, key=lambda path: path.stat().st_mtime) if diff_paths else None
+    latest_batch_path = max(batch_paths, key=lambda path: path.stat().st_mtime) if batch_paths else None
 
-    if not isinstance(rows, list) or not rows:
-        return "최근 튜닝 세트 비교\n- 최신 diff_summary.json 에 비교 행이 없습니다."
+    rows: list[dict[str, object]] = []
+    source_label = ""
+
+    if latest_diff_path is not None and (
+        latest_batch_path is None
+        or latest_diff_path.stat().st_mtime >= latest_batch_path.stat().st_mtime
+    ):
+        try:
+            payload = json.loads(latest_diff_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            payload = []
+        if isinstance(payload, list):
+            rows = [row for row in payload if isinstance(row, dict)]
+            source_label = latest_diff_path.parent.name
+
+    if not rows and len(batch_paths) >= 2:
+        latest_two = sorted(batch_paths, key=lambda path: path.stat().st_mtime)[-2:]
+        try:
+            before_payload = json.loads(latest_two[0].read_text(encoding="utf-8"))
+            after_payload = json.loads(latest_two[1].read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            before_payload = {}
+            after_payload = {}
+        rows = build_tuning_diff_rows_from_batch_summaries(before_payload, after_payload)
+        source_label = f"{latest_two[0].parent.name} -> {latest_two[1].parent.name}"
+
+    if not rows:
+        return "최근 튜닝 세트 비교\n- 최신 diff_summary.json 또는 비교 가능한 batch_summary.json 이 없습니다."
 
     lines = ["최근 튜닝 세트 비교"]
-    lines.append(f"- 기준 파일: {latest_path.parent.name}")
+    lines.append(f"- 기준 파일: {source_label}")
     for row in rows[:limit]:
-        if not isinstance(row, dict):
-            continue
-        lines.append(
-            f"- {row.get('key', '-')} | "
-            f"수익률 {float(row.get('before_return_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_return_pct', 0.0) or 0.0):.2f}% "
-            f"({float(row.get('return_diff_pct', 0.0) or 0.0):+,.2f}%p) | "
-            f"거래 수 {int(row.get('before_trade_count', 0) or 0)} -> {int(row.get('after_trade_count', 0) or 0)} | "
-            f"MDD {float(row.get('before_max_drawdown_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_max_drawdown_pct', 0.0) or 0.0):.2f}%"
-        )
+        lines.append(format_tuning_diff_row(row))
     return "\n".join(lines)
+
+
+def build_tuning_diff_rows_from_batch_summaries(
+    before_payload: dict[str, object],
+    after_payload: dict[str, object],
+) -> list[dict[str, object]]:
+    """두 batch_summary payload 에서 공통 심볼 기준 비교 행을 만든다."""
+    before_rows = before_payload.get("rows", []) if isinstance(before_payload, dict) else []
+    after_rows = after_payload.get("rows", []) if isinstance(after_payload, dict) else []
+    if not isinstance(before_rows, list) or not isinstance(after_rows, list):
+        return []
+
+    def _to_map(rows: list[object]) -> dict[str, dict[str, object]]:
+        mapped: dict[str, dict[str, object]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            exchange_name = str(row.get("exchange_name", "")).strip()
+            symbol = str(row.get("symbol", "")).strip()
+            if not exchange_name or not symbol:
+                continue
+            mapped[f"{exchange_name}::{symbol}"] = row
+        return mapped
+
+    before_map = _to_map(before_rows)
+    after_map = _to_map(after_rows)
+    common_keys = sorted(set(before_map) & set(after_map))
+    rows: list[dict[str, object]] = []
+    for key in common_keys:
+        before_summary = before_map[key].get("summary", {}) if isinstance(before_map[key].get("summary"), dict) else {}
+        after_summary = after_map[key].get("summary", {}) if isinstance(after_map[key].get("summary"), dict) else {}
+        rows.append(
+            {
+                "key": key,
+                "before_return_pct": float(before_summary.get("net_return_pct", 0.0) or 0.0),
+                "after_return_pct": float(after_summary.get("net_return_pct", 0.0) or 0.0),
+                "return_diff_pct": float(after_summary.get("net_return_pct", 0.0) or 0.0)
+                - float(before_summary.get("net_return_pct", 0.0) or 0.0),
+                "before_trade_count": int(before_summary.get("trade_count", 0) or 0),
+                "after_trade_count": int(after_summary.get("trade_count", 0) or 0),
+                "before_max_drawdown_pct": float(before_summary.get("max_drawdown_pct", 0.0) or 0.0),
+                "after_max_drawdown_pct": float(after_summary.get("max_drawdown_pct", 0.0) or 0.0),
+                "before_sharpe_ratio": before_summary.get("sharpe_ratio"),
+                "after_sharpe_ratio": after_summary.get("sharpe_ratio"),
+                "before_profit_factor": before_summary.get("profit_factor"),
+                "after_profit_factor": after_summary.get("profit_factor"),
+            }
+        )
+    return rows
+
+
+def format_tuning_diff_row(row: dict[str, object]) -> str:
+    """튜닝 비교 1행을 텔레그램용 문자열로 포맷한다."""
+    line = (
+        f"- {row.get('key', '-')} | "
+        f"수익률 {float(row.get('before_return_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_return_pct', 0.0) or 0.0):.2f}% "
+        f"({float(row.get('return_diff_pct', 0.0) or 0.0):+,.2f}%p) | "
+        f"거래 수 {int(row.get('before_trade_count', 0) or 0)} -> {int(row.get('after_trade_count', 0) or 0)} | "
+        f"MDD {float(row.get('before_max_drawdown_pct', 0.0) or 0.0):.2f}% -> {float(row.get('after_max_drawdown_pct', 0.0) or 0.0):.2f}%"
+    )
+    before_sharpe = row.get("before_sharpe_ratio")
+    after_sharpe = row.get("after_sharpe_ratio")
+    if before_sharpe is not None or after_sharpe is not None:
+        line += (
+            f" | Sharpe {float(before_sharpe or 0.0):.3f} -> {float(after_sharpe or 0.0):.3f}"
+        )
+    before_profit_factor = row.get("before_profit_factor")
+    after_profit_factor = row.get("after_profit_factor")
+    if before_profit_factor is not None or after_profit_factor is not None:
+        line += (
+            f" | PF {float(before_profit_factor or 0.0):.3f} -> {float(after_profit_factor or 0.0):.3f}"
+        )
+    return line
 
 
 def build_pnl_text() -> str:
