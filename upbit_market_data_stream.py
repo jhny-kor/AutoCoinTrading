@@ -1,5 +1,6 @@
 """
 수정 요약
+- 스냅샷 파일 저장 오류가 웹소켓 연결 루프를 끊지 않도록 storage_error health 기록과 제한적 로그를 추가했다.
 - heartbeat health 기록과 max idle 기반 재연결 설정을 추가해 수집기 정상 여부를 운영에서 판단할 수 있게 개선
 - 업비트 private 웹소켓을 추가해 myOrder / myAsset 이벤트를 실시간 수집하고 로컬 latest/jsonl 파일로 저장하도록 확장했다.
 - 업비트 공개 웹소켓에서 trade, orderbook, candle.1m 스트림을 공용으로 수집해 로컬 스냅샷으로 저장하는 1단계 수집기를 추가했다.
@@ -86,14 +87,31 @@ def main() -> int:
         "captured_at_local": datetime.now().astimezone().isoformat(),
         "managed_symbols": symbols,
     }
+    last_storage_error_log_at = 0.0
 
     def handle_payload(payload: dict) -> None:
+        nonlocal last_storage_error_log_at
         state = state_store.apply_payload(payload)
         if state is None:
             return
         snapshot = state.to_snapshot()
-        snapshot_store.write_latest(snapshot)
-        snapshot_store.append_candle_1m(snapshot)
+        try:
+            snapshot_store.write_latest(snapshot)
+            snapshot_store.append_candle_1m(snapshot)
+        except OSError as error:
+            now_ts = time.time()
+            health_state["captured_at_local"] = datetime.now().astimezone().isoformat()
+            health_state["storage_error"] = repr(error)
+            health_state["storage_error_symbol"] = snapshot.get("symbol")
+            try:
+                snapshot_store.write_health(health_state)
+            except OSError:
+                pass
+            if now_ts - last_storage_error_log_at >= 30.0:
+                last_storage_error_log_at = now_ts
+                log(
+                    f"업비트 웹소켓 스냅샷 저장 오류: {snapshot.get('symbol')} {error!r}"
+                )
 
     def handle_state(payload: dict) -> None:
         health_state["captured_at_local"] = datetime.now().astimezone().isoformat()

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-25: 업비트만 아주 살짝 완화할 수 있도록 거래소별 low-energy override 기준을 추가
 - CHOPPY 알트 레짐에서 mean_reversion 전략이 실제로 동작하도록 신규 진입 일시정지와 fresh-cross 요구를 완화
 - 2026-04-10: 보수형 조정으로 BTC `TRENDING_EARLY` 진입을 더 엄격하게 하고 `TRENDING_MATURE` 를 상대적으로 우대하도록 정책을 조정
 - 2026-04-08: 레짐을 8단계 보수형으로 세분화하고 BTC 는 레짐별 진입 확인 루프, trend-follow, 피라미딩 허용 여부를 다르게 적용할 수 있게 확장
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from settings.config_access import config_bool, config_float, config_int
+from settings.config_access import config_bool, config_float, config_int, config_value
 from settings.env import load_project_env
 from log_path_utils import current_date_str
 
@@ -64,8 +65,22 @@ class LowEnergyGuardSettings:
     enabled: bool
     avg_volume_ratio_threshold: float
     avg_abs_change_pct_threshold: float
+    upbit_avg_volume_ratio_threshold: float | None
+    upbit_avg_abs_change_pct_threshold: float | None
     require_ready_count_zero: bool
     max_record_age_sec: int
+
+    def get_avg_volume_ratio_threshold(self, exchange_name: str | None = None) -> float:
+        """거래소별 평균 거래량 배수 기준을 반환한다."""
+        if str(exchange_name or "").strip().lower() == "upbit" and self.upbit_avg_volume_ratio_threshold is not None:
+            return self.upbit_avg_volume_ratio_threshold
+        return self.avg_volume_ratio_threshold
+
+    def get_avg_abs_change_pct_threshold(self, exchange_name: str | None = None) -> float:
+        """거래소별 평균 절대 변화율 기준을 반환한다."""
+        if str(exchange_name or "").strip().lower() == "upbit" and self.upbit_avg_abs_change_pct_threshold is not None:
+            return self.upbit_avg_abs_change_pct_threshold
+        return self.avg_abs_change_pct_threshold
 
 
 @dataclass(frozen=True)
@@ -491,6 +506,8 @@ def load_low_energy_guard_settings() -> LowEnergyGuardSettings:
         enabled=config_bool("market_guard", "enable_low_energy", True, env_key="MARKET_GUARD_ENABLE_LOW_ENERGY"),
         avg_volume_ratio_threshold=config_float("market_guard", "low_energy_avg_volume_ratio", 0.80, env_key="MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO"),
         avg_abs_change_pct_threshold=config_float("market_guard", "low_energy_avg_abs_change_pct", 0.05, env_key="MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT"),
+        upbit_avg_volume_ratio_threshold=safe_float(config_value("market_guard", "low_energy_avg_volume_ratio_upbit", None, env_key="MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO_UPBIT")),
+        upbit_avg_abs_change_pct_threshold=safe_float(config_value("market_guard", "low_energy_avg_abs_change_pct_upbit", None, env_key="MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT_UPBIT")),
         require_ready_count_zero=config_bool("market_guard", "low_energy_require_ready_count_zero", True, env_key="MARKET_GUARD_LOW_ENERGY_REQUIRE_READY_COUNT_ZERO"),
         max_record_age_sec=config_int("market_guard", "low_energy_max_record_age_sec", 180, env_key="MARKET_GUARD_LOW_ENERGY_MAX_RECORD_AGE_SEC"),
     )
@@ -504,6 +521,8 @@ def load_low_energy_snapshot(
 ) -> LowEnergySnapshot:
     """거래소별 최신 분석 로그를 읽어 저에너지 장 여부를 계산한다."""
     settings = load_low_energy_guard_settings()
+    avg_volume_ratio_threshold = settings.get_avg_volume_ratio_threshold(exchange_name)
+    avg_abs_change_pct_threshold = settings.get_avg_abs_change_pct_threshold(exchange_name)
     if not settings.enabled:
         return LowEnergySnapshot(
             active=False,
@@ -594,8 +613,8 @@ def load_low_energy_snapshot(
     )
 
     active = (
-        avg_volume_ratio < settings.avg_volume_ratio_threshold
-        and avg_abs_change_pct < settings.avg_abs_change_pct_threshold
+        avg_volume_ratio < avg_volume_ratio_threshold
+        and avg_abs_change_pct < avg_abs_change_pct_threshold
         and (
             not settings.require_ready_count_zero
             or ready_count == 0
@@ -673,8 +692,8 @@ def classify_symbol_regime(record: dict | None) -> SymbolRegimeSnapshot:
     if (
         volume_ratio is not None
         and avg_abs_change_pct is not None
-        and volume_ratio < float(load_low_energy_guard_settings().avg_volume_ratio_threshold)
-        and avg_abs_change_pct < float(load_low_energy_guard_settings().avg_abs_change_pct_threshold)
+        and volume_ratio < float(load_low_energy_guard_settings().get_avg_volume_ratio_threshold())
+        and avg_abs_change_pct < float(load_low_energy_guard_settings().get_avg_abs_change_pct_threshold())
         and not public_buy_ready
     ):
         regime = "LOW_ENERGY"

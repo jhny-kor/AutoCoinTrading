@@ -1,5 +1,6 @@
 """
 수정 요약
+- 1분 캔들 JSONL append 가 EPERM/EACCES 로 실패하면 기존 파일을 격리하고 새 파일로 자동 복구하도록 보강했다.
 - latest/health/private latest JSON 저장 시 임시 파일명을 고유하게 만들어 동시 저장 충돌 가능성을 줄였다.
 - 업비트 private 웹소켓의 내 주문/내 자산 이벤트를 latest/jsonl 로 저장하는 helper 를 추가했다.
 - 업비트 웹소켓 수집기가 최신 시세/호가/캔들 상태를 로컬 JSON/JSONL 파일로 저장하는 스냅샷 저장소를 추가했다.
@@ -8,6 +9,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import time
@@ -32,6 +34,8 @@ class UpbitSnapshotStore:
         self.root_dir = Path(root_dir)
         self.latest_dir = self.root_dir / "latest"
         self.candle_dir = self.root_dir / "candles_1m"
+        self.candle_quarantine_dir = self.root_dir / "candles_1m_quarantine"
+        self.candle_recovery_dir = self.root_dir / "candles_1m_recovery"
         self.private_dir = self.root_dir / "private"
         self.health_path = self.root_dir / "health.json"
         self.latest_write_interval_sec = latest_write_interval_sec
@@ -64,8 +68,8 @@ class UpbitSnapshotStore:
         if last_key == candle_time:
             return
         path = self.candle_dir / f"{sanitize_symbol_for_filename(symbol)}.jsonl"
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(candle, ensure_ascii=False, separators=(",", ":")) + "\n")
+        line = json.dumps(candle, ensure_ascii=False, separators=(",", ":")) + "\n"
+        self._append_jsonl_resilient(path, line)
         self._last_candle_key[symbol] = candle_time
 
     def write_health(self, payload: dict[str, Any]) -> None:
@@ -80,13 +84,57 @@ class UpbitSnapshotStore:
         """private 이벤트를 JSONL 로 append 한다."""
         path = self.private_dir / f"{name}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        self._append_jsonl(
+            path,
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
+        )
 
     def _ensure_dirs(self) -> None:
         self.latest_dir.mkdir(parents=True, exist_ok=True)
         self.candle_dir.mkdir(parents=True, exist_ok=True)
+        self.candle_quarantine_dir.mkdir(parents=True, exist_ok=True)
+        self.candle_recovery_dir.mkdir(parents=True, exist_ok=True)
         self.private_dir.mkdir(parents=True, exist_ok=True)
+
+    def _append_jsonl(self, path: Path, line: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+
+    def _append_jsonl_resilient(self, path: Path, line: str) -> None:
+        try:
+            self._append_jsonl(path, line)
+            return
+        except OSError as exc:
+            if not self._is_recoverable_append_error(exc):
+                raise
+
+        if self._quarantine_append_blocked_file(path):
+            try:
+                self._append_jsonl(path, line)
+                return
+            except OSError as exc:
+                if not self._is_recoverable_append_error(exc):
+                    raise
+
+        # 원본 경로 복구도 실패하면 수집 루프는 살리고 별도 recovery 파일에 보존한다.
+        self._append_jsonl(self.candle_recovery_dir / path.name, line)
+
+    @staticmethod
+    def _is_recoverable_append_error(exc: OSError) -> bool:
+        return exc.errno in {errno.EACCES, errno.EPERM}
+
+    def _quarantine_append_blocked_file(self, path: Path) -> bool:
+        if not path.exists():
+            return False
+        quarantine_path = self.candle_quarantine_dir / (
+            f"{path.name}.{os.getpid()}.{time.time_ns()}.blocked"
+        )
+        try:
+            path.replace(quarantine_path)
+            return True
+        except OSError:
+            return False
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

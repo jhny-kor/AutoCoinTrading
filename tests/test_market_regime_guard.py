@@ -1,8 +1,14 @@
 """8단계 보수형 레짐 분류와 BTC 레짐 정책에 대한 개발 테스트."""
 
+import os
 import unittest
+from unittest.mock import patch
 
-from market_regime_guard import classify_symbol_regime, get_btc_regime_policy
+from market_regime_guard import (
+    classify_symbol_regime,
+    get_btc_regime_policy,
+    load_low_energy_guard_settings,
+)
 
 
 class MarketRegimeGuardTests(unittest.TestCase):
@@ -77,6 +83,24 @@ class MarketRegimeGuardTests(unittest.TestCase):
         self.assertEqual(4, policy.required_confirmation_loops)
         self.assertFalse(policy.allow_trend_follow_entry)
         self.assertFalse(policy.allow_pyramiding)
+
+    def test_loads_upbit_specific_low_energy_thresholds(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO": "0.80",
+                "MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT": "0.05",
+                "MARKET_GUARD_LOW_ENERGY_AVG_VOLUME_RATIO_UPBIT": "0.40",
+                "MARKET_GUARD_LOW_ENERGY_AVG_ABS_CHANGE_PCT_UPBIT": "0.018",
+            },
+            clear=False,
+        ):
+            settings = load_low_energy_guard_settings()
+
+        self.assertEqual(0.80, settings.get_avg_volume_ratio_threshold("okx"))
+        self.assertEqual(0.40, settings.get_avg_volume_ratio_threshold("upbit"))
+        self.assertEqual(0.05, settings.get_avg_abs_change_pct_threshold("okx"))
+        self.assertEqual(0.018, settings.get_avg_abs_change_pct_threshold("upbit"))
 
 
 if __name__ == "__main__":

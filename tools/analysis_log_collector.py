@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX 공개 캔들/호가 수집도 공통 재시도 helper 를 사용해 일시적 NetworkError 로 errors.jsonl 이 늘어나는 빈도를 줄였다.
 - 업비트 공개 조회 전에 심볼별 최소 market metadata 를 채워 `market/all` 호출 없이 REST fallback 이 동작하도록 보강
 - 업비트 공개 OHLCV/호가 조회도 RequestTimeout 재시도와 20초 타임아웃을 사용하도록 보강
 - 2026-04-12: htf slope, volume percentile/z-score, ATR percentile, 호가 압력 점수를 함께 저장해 이후 지표 분석 정확도를 높이도록 확장
@@ -39,6 +40,7 @@ from typing import Iterable
 
 import ccxt
 
+from core.execution.okx import call_okx_with_retry
 from core.execution.upbit import call_upbit_with_retry, ensure_upbit_market_cached
 from core.execution.upbit import create_upbit_market_data_provider
 from core.market_data.upbit_provider import UpbitMarketDataProvider
@@ -178,9 +180,12 @@ def create_okx_public_client() -> ccxt.okx:
     return ccxt.okx(
         {
             "enableRateLimit": True,
+            "timeout": 20000,
             "options": {
                 "defaultType": "spot",
                 "fetchMarkets": ["spot"],
+                "okx_request_retry_count": 3,
+                "okx_request_retry_delay_sec": 1.2,
             },
         }
     )
@@ -218,12 +223,14 @@ def fetch_okx_ohlcv(
     }
     bar = timeframe_map.get(timeframe, "1m")
 
-    response = exchange.publicGetMarketCandles(
+    response = call_okx_with_retry(
+        exchange,
+        exchange.publicGetMarketCandles,
         {
             "instId": inst_id,
             "bar": bar,
             "limit": limit,
-        }
+        },
     )
 
     data = response.get("data", []) if isinstance(response, dict) else response
@@ -286,7 +293,11 @@ def fetch_okx_order_book(exchange: ccxt.okx, symbol: str) -> dict[str, float | N
     """OKX 공개 호가창에서 상위 호가 정보를 가져온다."""
     try:
         inst_id = symbol.replace("/", "-")
-        response = exchange.publicGetMarketBooks({"instId": inst_id, "sz": "5"})
+        response = call_okx_with_retry(
+            exchange,
+            exchange.publicGetMarketBooks,
+            {"instId": inst_id, "sz": "5"},
+        )
         data = response.get("data", []) if isinstance(response, dict) else response
         if not data:
             return {}

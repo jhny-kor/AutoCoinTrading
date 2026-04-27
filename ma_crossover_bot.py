@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-28: OKX 알트 매도 체결 후 손절 쿨다운 갱신에서 잘못된 exit_reason 변수 참조를 exit_reason_key 로 수정했다.
 - OKX 현물 알트 신규 진입 전에 swap funding rate 과열을 확인해 롱 과열 구간 신규 진입을 차단
 - ETH/KRW 같은 약한 알트는 심볼별 signal_score 최소 기준 오버라이드를 적용해 저품질 진입을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
@@ -1849,7 +1850,7 @@ def run_bot():
                             continue
                         order_response_received_at = time.time()
                         last_trade_at[symbol] = time.time()
-                        if exit_reason in {"stop_loss", "partial_stop_loss"}:
+                        if exit_reason_key in {"stop_loss", "partial_stop_loss"}:
                             last_stop_loss_at[symbol] = time.time()
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.0001:
