@@ -98,7 +98,7 @@ class StrategySettingsTests(unittest.TestCase):
             )
             with patch("settings.strategy_settings.Path.rglob", return_value=[trade_path]):
                 adjustments = _build_symbol_auto_tune_adjustment_map(
-                    window_days=7,
+                    window_days=30,
                     min_trades=2,
                     positive_win_rate=0.6,
                     positive_profit_factor=1.3,

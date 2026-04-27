@@ -1,6 +1,7 @@
 """
 체결 결과 구조화 로거
 
+- 2026-04-28: 체결마다 decision journal 에 risk review 와 reflection 을 함께 남기도록 확장했다.
 - 업비트 private 웹소켓 myOrder 이벤트를 raw_order 보강 데이터로 함께 읽어 체결 품질 추출 후보에 포함하도록 확장했다.
 - 텔레그램 체결 알림에 실제 체결가, 체결 수량, 체결 금액을 함께 표시할 수 있도록 주문 요약 helper 를 추가
 - 체결 시 왕복 수수료 추정치를 이용한 순손익 계산 helper 를 함께 제공해 로그 기록 기준을 통일
@@ -429,3 +430,10 @@ class TradeHistoryLogger:
         structured_path.parent.mkdir(parents=True, exist_ok=True)
         with structured_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+        try:
+            from reporting.decision_journal import append_decision_journal_entry
+
+            append_decision_journal_entry(record)
+        except Exception:
+            pass

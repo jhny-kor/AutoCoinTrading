@@ -11,6 +11,7 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 전략
   - 알트: 1분봉 기반 진입 + 상위 타임프레임 확인 + 부분익절/부분손절/순익 보호
   - BTC: 5분봉/15분봉 EMA 추세추종 + ATR 기반 손절/익절 + 부분익절 + 트레일링
+  - 공통: 체결마다 decision journal 을 남겨 risk review 와 reflection 을 누적
 - 설정 기준
   - canonical 설정: [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
   - 로컬 override: [config/runtime.local.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.toml)
@@ -152,6 +153,7 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 운영 로그: `logs/YYYY-MM-DD/*.log`
 - 분석 로그: `analysis_logs/YYYY-MM-DD/*.jsonl`
 - 체결 로그: `trade_logs/YYYY-MM-DD/trade_history.jsonl`
+- 의사결정 저널: `reports/decision_journal/YYYY-MM-DD/decision_journal.jsonl`
 - 전략 로그: `structured_logs/live/YYYY-MM-DD/*/strategy.jsonl`
 - 시스템 로그: `structured_logs/live/YYYY-MM-DD/*/system.jsonl`
 - 체결 구조화 로그: `structured_logs/live/YYYY-MM-DD/*/trade.jsonl`
@@ -180,6 +182,9 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - `/last`
 - `/help`
 
+`/analysis` 와 `/weekly` 에는 최근 decision journal 기반 의사결정 리뷰가 포함됩니다.  
+체결별 risk posture, 반복 우려 항목, 최근 reflection 을 함께 보여주며, journal 이 아직 없으면 최근 `trade_history` 를 같은 방식으로 임시 평가합니다.
+
 ## 테스트와 헬스체크
 
 - 전체 테스트: `.venv/bin/python -m unittest discover -s tests -v`
@@ -202,6 +207,7 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 진입 상태 머신
 - 체결률 기반 실행 품질 가드
 - 포트폴리오 배분
+- decision journal / risk review
 - 운영 헬스체크
 
 ## 백테스트

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-04-28: /analysis 와 /weekly 에 decision journal 기반 의사결정 리뷰와 reflection 요약을 추가했다.
 - 2026-04-24: 튜닝 비교 리포트가 오래된 diff 파일에 머무르지 않도록 최신 batch_summary 2개 비교 fallback 과 Sharpe/PF 표시를 추가
 - 시간대 리포트, 최근 체결, 레짐/시장 요약, 최근 로그의 심볼 라벨 앞에 초록 원 배지를 붙여 텔레그램 가독성을 높임
 - /analysis 와 /weekly 에 최신 튜닝 세트 diff 요약을 붙여 보수형 대비 혼합형 개선 여부를 바로 보이도록 확장
@@ -100,6 +101,7 @@ from reporting.position_snapshot import (
     build_upbit_positions_text,
     format_exchange_error_text,
 )
+from reporting.decision_journal import build_recent_reflection_summary
 from market_regime_guard import classify_symbol_regime
 from state_recovery import (
     load_program_daily_realized_pnl_quote,
@@ -1069,6 +1071,7 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_recovered_position_state_text(settings),
         build_backtest_comparison_text(settings),
         build_latest_tuning_diff_text(),
+        build_recent_reflection_summary(days=7),
         build_strategy_funnel_text(),
         build_trade_quality_text(settings),
         build_profit_protect_text(),
@@ -1377,6 +1380,7 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
             build_current_market_strategy_text(settings),
             build_backtest_comparison_text(settings),
             build_latest_tuning_diff_text(),
+            build_recent_reflection_summary(days=7),
             build_weekly_trade_quality_text(7),
             build_weekly_profit_protect_text(7),
             build_weekly_funnel_text(7),

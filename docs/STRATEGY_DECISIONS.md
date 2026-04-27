@@ -877,6 +877,35 @@
   - `py_compile`
   - BTC 봇 재기동 및 healthcheck 확인
 
+### 38. TradingAgents 참고형 의사결정 감사 레이어 도입 (2026-04-28)
+
+- 변경 배경:
+  - TradingAgents 는 LLM multi-agent 프레임워크로 analyst / researcher / trader / risk manager / portfolio manager 역할을 나눠 의사결정을 기록하고 검토한다.
+  - 실거래 자동매매에서 LLM 이 직접 주문을 결정하는 방식은 비결정성과 지연이 커서 채택하지 않았다.
+  - 대신 안전하게 흡수 가능한 decision log, risk review, reflection 개념을 기존 deterministic 전략 위에 감사 레이어로 적용했다.
+- 변경 내용:
+  - [core/risk/review.py](/Users/plo/Documents/auto_coin_bot/core/risk/review.py)
+    - 체결 레코드의 `signal_score`, volume/volatility filter, HTF, PnL, MFE, 보유시간을 기반으로 `allow_candidate / reduce_candidate / block_candidate` 성격의 사후 risk review 를 생성
+    - 주문 gate 를 직접 바꾸지 않고 체결 품질 분석과 다음 튜닝 후보 식별에 사용
+  - [reporting/decision_journal.py](/Users/plo/Documents/auto_coin_bot/reporting/decision_journal.py)
+    - 체결마다 `reports/decision_journal/YYYY-MM-DD/decision_journal.jsonl` 에 risk review 와 reflection 을 누적
+    - journal 이 비어 있으면 최근 `trade_history` 에서 같은 review 를 임시 생성해 리포트 공백을 줄임
+  - [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
+    - OKX/업비트, BTC/알트 공통 체결 로깅 경로에서 decision journal 을 함께 기록
+  - [reporting/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/reporting/telegram_command_listener.py)
+    - `/analysis`, `/weekly` 에 최근 의사결정 리뷰와 reflection 요약을 추가
+- 채택하지 않은 것:
+  - LLM multi-agent 가 실시간 `buy/sell` 을 직접 결정하는 구조는 미채택
+  - 뉴스/감성 분석 기반 즉시 주문 gate 도 미채택
+- 기대 효과:
+  - 체결 후 반복 손절 패턴을 `trade_history` 보다 더 직접적인 review 형태로 확인
+  - 손절 거래의 공통 우려 항목을 텔레그램 리포트에서 바로 확인
+  - 앞으로 튜닝 시 "왜 이 진입이 위험했는지" 를 기록 기반으로 재검토 가능
+- 검증:
+  - `python -m unittest tests.test_decision_journal -v`
+  - `py_compile`
+  - 텔레그램 리포트 문자열 생성 확인
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
