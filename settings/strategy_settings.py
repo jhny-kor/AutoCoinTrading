@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-02: 손절 방지를 위해 BTC 레짐+상관+ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드 설정을 추가
+- 2026-05-01: 단독 지표 오탐을 줄이기 위해 거래량+ATR+RSI 과열 가드와 과열거리 추가확인 설정을 추가
 - mean_reversion 전용 RSI 범위와 MACD 회복 조건 설정을 추가
 - 알트 자체 ATR 퍼센트 기반 포지션 사이징 설정을 추가
 - OKX 현물 알트 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 공통 설정을 추가
@@ -106,6 +108,26 @@ class StrategySettings:
     mean_reversion_allow_negative_macd: bool
     mean_reversion_require_macd_recovering: bool
     mean_reversion_macd_recovery_epsilon: float
+    mean_reversion_max_atr_percentile: float
+    mean_reversion_max_range_position_pct: float
+    overheat_guard_volume_ratio: float
+    overheat_guard_atr_percentile: float
+    overheat_guard_rsi: float
+    overheat_extra_confirmation_range_position_pct: float
+    overheat_extra_confirmation_distance_from_high_pct: float
+    overheat_extra_confirmation_loops: int
+    enable_combined_stop_loss_guards: bool
+    btc_correlation_volatility_risky_regimes: tuple[str, ...]
+    btc_correlation_volatility_min_corr: float
+    btc_correlation_volatility_min_atr_percentile: float
+    volume_atr_execution_guard_volume_ratio: float
+    volume_atr_execution_guard_atr_percentile: float
+    volume_atr_execution_min_fill_ratio: float
+    volume_atr_execution_min_fill_samples: int
+    volume_atr_execution_min_orderbook_pressure_score: float
+    stop_loss_context_reentry_cooldown_sec: int
+    stop_loss_context_min_similarity_count: int
+    stop_loss_context_extra_confirmation_loops: int
     enable_noise_ratio_adaptation: bool
     noise_ratio_lookback: int
     noise_ratio_baseline: float
@@ -686,6 +708,35 @@ def load_strategy_settings(
         mean_reversion_allow_negative_macd=config_bool("strategy", "mean_reversion_allow_negative_macd", True, env_key="STRATEGY_MEAN_REVERSION_ALLOW_NEGATIVE_MACD"),
         mean_reversion_require_macd_recovering=config_bool("strategy", "mean_reversion_require_macd_recovering", True, env_key="STRATEGY_MEAN_REVERSION_REQUIRE_MACD_RECOVERING"),
         mean_reversion_macd_recovery_epsilon=config_float("strategy", "mean_reversion_macd_recovery_epsilon", 0.0, env_key="STRATEGY_MEAN_REVERSION_MACD_RECOVERY_EPSILON"),
+        mean_reversion_max_atr_percentile=config_float("strategy", "mean_reversion_max_atr_percentile", 80.0, env_key="STRATEGY_MEAN_REVERSION_MAX_ATR_PERCENTILE"),
+        mean_reversion_max_range_position_pct=config_float("strategy", "mean_reversion_max_range_position_pct", 35.0, env_key="STRATEGY_MEAN_REVERSION_MAX_RANGE_POSITION_PCT"),
+        overheat_guard_volume_ratio=config_float("strategy", "overheat_guard_volume_ratio", 2.0, env_key="STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO"),
+        overheat_guard_atr_percentile=config_float("strategy", "overheat_guard_atr_percentile", 85.0, env_key="STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE"),
+        overheat_guard_rsi=config_float("strategy", "overheat_guard_rsi", 68.0, env_key="STRATEGY_OVERHEAT_GUARD_RSI"),
+        overheat_extra_confirmation_range_position_pct=config_float("strategy", "overheat_extra_confirmation_range_position_pct", 70.0, env_key="STRATEGY_OVERHEAT_EXTRA_CONFIRMATION_RANGE_POSITION_PCT"),
+        overheat_extra_confirmation_distance_from_high_pct=config_float("strategy", "overheat_extra_confirmation_distance_from_high_pct", 0.20, env_key="STRATEGY_OVERHEAT_EXTRA_CONFIRMATION_DISTANCE_FROM_HIGH_PCT"),
+        overheat_extra_confirmation_loops=config_int("strategy", "overheat_extra_confirmation_loops", 1, env_key="STRATEGY_OVERHEAT_EXTRA_CONFIRMATION_LOOPS"),
+        enable_combined_stop_loss_guards=config_bool("strategy", "enable_combined_stop_loss_guards", True, env_key="STRATEGY_ENABLE_COMBINED_STOP_LOSS_GUARDS"),
+        btc_correlation_volatility_risky_regimes=tuple(
+            parse_symbol_list(
+                config_str(
+                    "strategy",
+                    "btc_correlation_volatility_risky_regimes",
+                    "LOW_ENERGY,OVERHEATED,EXHAUSTION_RISK,CHOPPY_HIGH_VOL",
+                    env_key="STRATEGY_BTC_CORRELATION_VOLATILITY_RISKY_REGIMES",
+                )
+            )
+        ),
+        btc_correlation_volatility_min_corr=config_float("strategy", "btc_correlation_volatility_min_corr", 0.75, env_key="STRATEGY_BTC_CORRELATION_VOLATILITY_MIN_CORR"),
+        btc_correlation_volatility_min_atr_percentile=config_float("strategy", "btc_correlation_volatility_min_atr_percentile", 70.0, env_key="STRATEGY_BTC_CORRELATION_VOLATILITY_MIN_ATR_PERCENTILE"),
+        volume_atr_execution_guard_volume_ratio=config_float("strategy", "volume_atr_execution_guard_volume_ratio", 2.0, env_key="STRATEGY_VOLUME_ATR_EXECUTION_GUARD_VOLUME_RATIO"),
+        volume_atr_execution_guard_atr_percentile=config_float("strategy", "volume_atr_execution_guard_atr_percentile", 80.0, env_key="STRATEGY_VOLUME_ATR_EXECUTION_GUARD_ATR_PERCENTILE"),
+        volume_atr_execution_min_fill_ratio=config_float("strategy", "volume_atr_execution_min_fill_ratio", 0.98, env_key="STRATEGY_VOLUME_ATR_EXECUTION_MIN_FILL_RATIO"),
+        volume_atr_execution_min_fill_samples=config_int("strategy", "volume_atr_execution_min_fill_samples", 1, env_key="STRATEGY_VOLUME_ATR_EXECUTION_MIN_FILL_SAMPLES"),
+        volume_atr_execution_min_orderbook_pressure_score=config_float("strategy", "volume_atr_execution_min_orderbook_pressure_score", 45.0, env_key="STRATEGY_VOLUME_ATR_EXECUTION_MIN_ORDERBOOK_PRESSURE_SCORE"),
+        stop_loss_context_reentry_cooldown_sec=config_int("strategy", "stop_loss_context_reentry_cooldown_sec", 3600, env_key="STRATEGY_STOP_LOSS_CONTEXT_REENTRY_COOLDOWN_SEC"),
+        stop_loss_context_min_similarity_count=config_int("strategy", "stop_loss_context_min_similarity_count", 3, env_key="STRATEGY_STOP_LOSS_CONTEXT_MIN_SIMILARITY_COUNT"),
+        stop_loss_context_extra_confirmation_loops=config_int("strategy", "stop_loss_context_extra_confirmation_loops", 2, env_key="STRATEGY_STOP_LOSS_CONTEXT_EXTRA_CONFIRMATION_LOOPS"),
         enable_noise_ratio_adaptation=config_bool("strategy", "enable_noise_ratio_adaptation", True, env_key="STRATEGY_ENABLE_NOISE_RATIO_ADAPTATION"),
         noise_ratio_lookback=config_int("strategy", "noise_ratio_lookback", 20, env_key="STRATEGY_NOISE_RATIO_LOOKBACK"),
         noise_ratio_baseline=config_float("strategy", "noise_ratio_baseline", 0.50, env_key="STRATEGY_NOISE_RATIO_BASELINE"),

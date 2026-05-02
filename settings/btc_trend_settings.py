@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-01: 고거래량+고ATR+RSI 과열 추격 진입 차단과 최근 range 상단 추가확인 설정을 추가
 - 2026-04-23: BTC 손절 억제를 위해 확인 타임프레임 slope 하한과 거래량 보너스용 ATR 동반 조건을 추가
 - OKX 현물 BTC 진입 전에 perpetual swap funding rate 과열을 차단할 수 있는 설정을 추가
 - 고거래량 구간에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용할 수 있는 설정 map 을 추가
@@ -106,6 +107,12 @@ class BtcTrendSettings:
     high_volume_ratio_threshold_map: dict[str, float]
     high_volume_min_atr_pct_map: dict[str, float]
     high_volume_extra_confirmation_loops_map: dict[str, int]
+    overheat_guard_volume_ratio: float
+    overheat_guard_atr_percentile: float
+    overheat_guard_rsi: float
+    overheat_extra_confirmation_range_position_pct: float
+    overheat_extra_confirmation_distance_from_high_pct: float
+    overheat_extra_confirmation_loops: int
     enable_okx_funding_rate_guard: bool
     okx_funding_rate_max_long_bias: float
     okx_funding_rate_cache_ttl_sec: float
@@ -329,6 +336,12 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         high_volume_ratio_threshold_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_ratio_threshold_map", {}, env_key="BTC_TREND_HIGH_VOLUME_RATIO_THRESHOLD_MAP")),
         high_volume_min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_min_atr_pct_map", {}, env_key="BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP")),
         high_volume_extra_confirmation_loops_map=parse_symbol_int_map(config_value("btc_trend", "high_volume_extra_confirmation_loops_map", {}, env_key="BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP")),
+        overheat_guard_volume_ratio=config_float("btc_trend", "overheat_guard_volume_ratio", 2.0, env_key="BTC_TREND_OVERHEAT_GUARD_VOLUME_RATIO"),
+        overheat_guard_atr_percentile=config_float("btc_trend", "overheat_guard_atr_percentile", 85.0, env_key="BTC_TREND_OVERHEAT_GUARD_ATR_PERCENTILE"),
+        overheat_guard_rsi=config_float("btc_trend", "overheat_guard_rsi", 68.0, env_key="BTC_TREND_OVERHEAT_GUARD_RSI"),
+        overheat_extra_confirmation_range_position_pct=config_float("btc_trend", "overheat_extra_confirmation_range_position_pct", 70.0, env_key="BTC_TREND_OVERHEAT_EXTRA_CONFIRMATION_RANGE_POSITION_PCT"),
+        overheat_extra_confirmation_distance_from_high_pct=config_float("btc_trend", "overheat_extra_confirmation_distance_from_high_pct", 0.20, env_key="BTC_TREND_OVERHEAT_EXTRA_CONFIRMATION_DISTANCE_FROM_HIGH_PCT"),
+        overheat_extra_confirmation_loops=config_int("btc_trend", "overheat_extra_confirmation_loops", 1, env_key="BTC_TREND_OVERHEAT_EXTRA_CONFIRMATION_LOOPS"),
         enable_okx_funding_rate_guard=config_bool("btc_trend", "enable_okx_funding_rate_guard", True, env_key="BTC_TREND_ENABLE_OKX_FUNDING_RATE_GUARD"),
         okx_funding_rate_max_long_bias=config_float("btc_trend", "okx_funding_rate_max_long_bias", 0.0005, env_key="BTC_TREND_OKX_FUNDING_RATE_MAX_LONG_BIAS"),
         okx_funding_rate_cache_ttl_sec=config_float("btc_trend", "okx_funding_rate_cache_ttl_sec", 300.0, env_key="BTC_TREND_OKX_FUNDING_RATE_CACHE_TTL_SEC"),

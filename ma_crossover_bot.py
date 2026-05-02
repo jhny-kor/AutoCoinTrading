@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-02: 손절 방지를 위해 BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드를 추가
+- 2026-05-01: 거래량+ATR+RSI 과열 조합은 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
 - 2026-04-28: OKX 알트 매도 체결 후 손절 쿨다운 갱신에서 잘못된 exit_reason 변수 참조를 exit_reason_key 로 수정했다.
 - OKX 현물 알트 신규 진입 전에 swap funding rate 과열을 확인해 롱 과열 구간 신규 진입을 차단
 - ETH/KRW 같은 약한 알트는 심볼별 signal_score 최소 기준 오버라이드를 적용해 저품질 진입을 더 줄이도록 보강
@@ -88,6 +90,15 @@ from core.strategy.alt import (
     compute_alt_signal_state,
     compute_can_average_down,
     compute_alt_stop_loss_reentry_gate,
+)
+from core.strategy.combined_filters import (
+    calc_recent_range_context,
+    is_btc_regime_correlation_volatility_risk,
+    is_overheated_entry_risk,
+    is_stop_loss_context_reentry_risk,
+    is_volume_atr_execution_weak_risk,
+    requires_overheat_confirmation,
+    safe_optional_float,
 )
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from core.strategy.mean_reversion import compute_bollinger_mean_reversion_state
@@ -328,6 +339,7 @@ def run_bot():
         daily_realized_pnl_quote <= -config["max_daily_loss_quote"]
     )
     entry_timing_state: dict[str, dict[str, int | str]] = {}
+    last_stop_loss_context: dict[str, dict[str, object]] = {}
 
     timeframe = "1m"
     ma_period = 20
@@ -532,6 +544,11 @@ def run_bot():
                 atr_pct = (atr_value / last_close * 100) if atr_value is not None and last_close else None
                 atr_series = calc_recent_atr_series(ohlcv, 14, sample_count=20)
                 atr_percentile = calc_percentile_rank(atr_series, atr_value)
+                recent_range_context = calc_recent_range_context(
+                    ohlcv,
+                    last_close=last_close,
+                    lookback=strategy.volatility_lookback,
+                )
                 volatility_filter_passed = True
                 if strategy.enable_volatility_filter and avg_abs_change_pct is not None:
                     volatility_filter_passed = (
@@ -594,8 +611,12 @@ def run_bot():
                     managed_symbols=load_managed_symbols("okx"),
                 )
                 low_energy_guard_active = low_energy_snapshot.active and not has_position
-                symbol_regime_snapshot = classify_symbol_regime(
-                    load_latest_symbol_record(exchange_name="okx", symbol=symbol)
+                latest_symbol_record = load_latest_symbol_record(exchange_name="okx", symbol=symbol)
+                symbol_regime_snapshot = classify_symbol_regime(latest_symbol_record)
+                orderbook_pressure_score = safe_optional_float(
+                    latest_symbol_record.get("orderbook_pressure_score")
+                    if latest_symbol_record
+                    else None
                 )
                 symbol_regime = symbol_regime_snapshot.regime
                 regime_route = route_alt_strategy(symbol_regime)
@@ -791,6 +812,10 @@ def run_bot():
                         allow_negative_macd=strategy.mean_reversion_allow_negative_macd,
                         require_macd_recovering=strategy.mean_reversion_require_macd_recovering,
                         macd_recovery_epsilon=strategy.mean_reversion_macd_recovery_epsilon,
+                        atr_percentile=atr_percentile,
+                        max_atr_percentile=strategy.mean_reversion_max_atr_percentile,
+                        range_position_pct=recent_range_context["range_position_pct"],
+                        max_range_position_pct=strategy.mean_reversion_max_range_position_pct,
                     )
                 bullish = bool(signal_state["bullish"])
                 bearish = bool(signal_state["bearish"])
@@ -802,6 +827,21 @@ def run_bot():
                 macd_filter_passed = bool(signal_state["macd_filter_passed"])
                 trend_follow_entry = bool(signal_state["trend_follow_entry"])
                 entry_signal = bool(signal_state["entry_signal"])
+                overheated_entry_blocked = is_overheated_entry_risk(
+                    volume_ratio=volume_ratio,
+                    atr_percentile=atr_percentile,
+                    rsi_value=rsi_value,
+                    volume_ratio_threshold=strategy.overheat_guard_volume_ratio,
+                    atr_percentile_threshold=strategy.overheat_guard_atr_percentile,
+                    rsi_threshold=strategy.overheat_guard_rsi,
+                )
+                overheat_extra_confirmation_required = requires_overheat_confirmation(
+                    signal_is_strong=signal_is_strong,
+                    range_position_pct=recent_range_context["range_position_pct"],
+                    distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                    range_position_threshold=strategy.overheat_extra_confirmation_range_position_pct,
+                    distance_from_high_threshold_pct=strategy.overheat_extra_confirmation_distance_from_high_pct,
+                )
                 # 알트가 BTC와 너무 같은 방향으로 움직이는 구간은 포트폴리오 중복 노출을 줄이기 위해 진입을 막는다.
                 correlation_with_btc = (
                     calc_return_correlation(
@@ -841,6 +881,54 @@ def run_bot():
                 fill_quality_entry_blocked = (
                     entry_signal and not has_position and fill_quality_snapshot.active
                 )
+                btc_correlation_volatility_blocked = (
+                    entry_signal
+                    and not has_position
+                    and strategy.enable_combined_stop_loss_guards
+                    and is_btc_regime_correlation_volatility_risk(
+                        btc_regime=btc_reference_regime,
+                        correlation_with_btc=correlation_with_btc,
+                        alt_atr_percentile=atr_percentile,
+                        risky_btc_regimes=strategy.btc_correlation_volatility_risky_regimes,
+                        min_correlation=strategy.btc_correlation_volatility_min_corr,
+                        min_alt_atr_percentile=strategy.btc_correlation_volatility_min_atr_percentile,
+                    )
+                )
+                volume_atr_execution_blocked = (
+                    entry_signal
+                    and not has_position
+                    and strategy.enable_combined_stop_loss_guards
+                    and is_volume_atr_execution_weak_risk(
+                        volume_ratio=volume_ratio,
+                        atr_percentile=atr_percentile,
+                        fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
+                        fill_quality_sample_count=fill_quality_snapshot.sample_count,
+                        orderbook_pressure_score=orderbook_pressure_score,
+                        volume_ratio_threshold=strategy.volume_atr_execution_guard_volume_ratio,
+                        atr_percentile_threshold=strategy.volume_atr_execution_guard_atr_percentile,
+                        min_fill_ratio=strategy.volume_atr_execution_min_fill_ratio,
+                        min_fill_sample_count=strategy.volume_atr_execution_min_fill_samples,
+                        min_orderbook_pressure_score=strategy.volume_atr_execution_min_orderbook_pressure_score,
+                    )
+                )
+                current_entry_risk_context = {
+                    "strategy_key": strategy_key,
+                    "symbol_regime": symbol_regime,
+                    "btc_reference_regime": btc_reference_regime,
+                    "high_atr": (
+                        atr_percentile is not None
+                        and atr_percentile >= strategy.volume_atr_execution_guard_atr_percentile
+                    ),
+                    "high_volume": (
+                        volume_ratio is not None
+                        and volume_ratio >= strategy.volume_atr_execution_guard_volume_ratio
+                    ),
+                    "range_top_risk": overheat_extra_confirmation_required,
+                    "high_btc_correlation": (
+                        correlation_with_btc is not None
+                        and correlation_with_btc >= strategy.btc_correlation_volatility_min_corr
+                    ),
+                }
                 stop_loss_pattern_gate = compute_alt_stop_loss_reentry_gate(
                     enabled=(
                         strategy.enable_stop_loss_pattern_reentry
@@ -864,6 +952,18 @@ def run_bot():
                     stop_loss_pattern_gate["enabled"]
                     and not stop_loss_pattern_gate["pattern_ready"]
                 )
+                stop_loss_context_reentry_blocked = (
+                    entry_signal
+                    and not has_position
+                    and strategy.enable_combined_stop_loss_guards
+                    and is_stop_loss_context_reentry_risk(
+                        elapsed_since_stop_loss_sec=seconds_since_last_stop_loss,
+                        cooldown_sec=strategy.stop_loss_context_reentry_cooldown_sec,
+                        current_context=current_entry_risk_context,
+                        previous_context=last_stop_loss_context.get(symbol),
+                        min_similarity_count=strategy.stop_loss_context_min_similarity_count,
+                    )
+                )
                 allocation_score_result = compute_allocation_score(
                     settings=portfolio_allocator.settings,
                     signal_score=signal_score,
@@ -876,7 +976,7 @@ def run_bot():
                     symbol_regime=symbol_regime,
                     atr_pct=atr_pct,
                     atr_percentile=atr_percentile,
-                    orderbook_pressure_score=None,
+                    orderbook_pressure_score=orderbook_pressure_score,
                     fill_quality_avg_fill_ratio=fill_quality_snapshot.avg_fill_ratio,
                     fill_quality_entry_blocked=fill_quality_entry_blocked,
                     correlation_with_btc=correlation_with_btc,
@@ -899,6 +999,10 @@ def run_bot():
                         and not fill_quality_entry_blocked
                         and funding_rate_filter_passed
                         and not stop_loss_pattern_blocked
+                        and not stop_loss_context_reentry_blocked
+                        and not overheated_entry_blocked
+                        and not btc_correlation_volatility_blocked
+                        and not volume_atr_execution_blocked
                         and gap_within_upper_bound
                         and volume_within_upper_bound
                         and (not symbol_regime_requires_fresh_cross or bullish)
@@ -912,6 +1016,10 @@ def run_bot():
                         and not fill_quality_entry_blocked
                         and funding_rate_filter_passed
                         and not stop_loss_pattern_blocked
+                        and not stop_loss_context_reentry_blocked
+                        and not overheated_entry_blocked
+                        and not btc_correlation_volatility_blocked
+                        and not volume_atr_execution_blocked
                         and gap_within_upper_bound
                         and volume_within_upper_bound
                         and (not symbol_regime_requires_fresh_cross or bullish)
@@ -922,7 +1030,19 @@ def run_bot():
                     symbol=symbol,
                     has_position=has_position,
                     candidate_active=raw_entry_candidate,
-                    required_confirmations=strategy.entry_confirmation_loops,
+                    required_confirmations=(
+                        strategy.entry_confirmation_loops
+                        + (
+                            strategy.overheat_extra_confirmation_loops
+                            if overheat_extra_confirmation_required
+                            else 0
+                        )
+                        + (
+                            strategy.stop_loss_context_extra_confirmation_loops
+                            if stop_loss_context_reentry_blocked
+                            else 0
+                        )
+                    ),
                 )
                 dynamic_bonus_eligible = is_dynamic_bonus_eligible(
                     has_position=has_position,
@@ -985,6 +1105,43 @@ def run_bot():
                     f"가격 기울기: {0.0 if price_slope_pct is None else price_slope_pct:.4f}% | "
                     f"신호 스코어: {signal_score:.1f}"
                 )
+                log(
+                    f"[{symbol}] 최근 range 위치: "
+                    f"{0.0 if recent_range_context['range_position_pct'] is None else recent_range_context['range_position_pct']:.2f}% | "
+                    f"고점 거리: {0.0 if recent_range_context['distance_from_recent_high_pct'] is None else recent_range_context['distance_from_recent_high_pct']:.4f}% | "
+                    f"ATR percentile: {0.0 if atr_percentile is None else atr_percentile:.1f}"
+                )
+                if overheated_entry_blocked:
+                    log(
+                        f"[{symbol}] 고거래량+고ATR+RSI 과열 조합으로 신규 진입을 차단합니다 "
+                        f"(volume {0.0 if volume_ratio is None else volume_ratio:.2f}, "
+                        f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}, "
+                        f"RSI {0.0 if rsi_value is None else rsi_value:.2f})."
+                    )
+                if overheat_extra_confirmation_required:
+                    log(
+                        f"[{symbol}] 강한 신호지만 최근 range 상단 추격 위험이 있어 "
+                        f"confirmation {strategy.overheat_extra_confirmation_loops}회를 추가합니다."
+                    )
+                if btc_correlation_volatility_blocked:
+                    log(
+                        f"[{symbol}] BTC 위험 레짐({btc_reference_regime})에서 BTC 상관계수 "
+                        f"{0.0 if correlation_with_btc is None else correlation_with_btc:.3f}, "
+                        f"ALT ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f} 조합으로 신규 진입을 차단합니다."
+                    )
+                if volume_atr_execution_blocked:
+                    log(
+                        f"[{symbol}] 거래량+ATR 확장 중 체결/호가 우위가 약해 신규 진입을 차단합니다 "
+                        f"(volume {0.0 if volume_ratio is None else volume_ratio:.2f}, "
+                        f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}, "
+                        f"fill {0.0 if fill_quality_snapshot.avg_fill_ratio is None else fill_quality_snapshot.avg_fill_ratio * 100:.1f}%, "
+                        f"orderbook pressure {0.0 if orderbook_pressure_score is None else orderbook_pressure_score:.1f})."
+                    )
+                if stop_loss_context_reentry_blocked:
+                    log(
+                        f"[{symbol}] 최근 손절과 유사한 조건이 {strategy.stop_loss_context_reentry_cooldown_sec}초 "
+                        f"쿨다운 안에 반복되어 재진입을 차단합니다."
+                    )
                 bb_width_text = "N/A" if bb_width_pct is None else f"{bb_width_pct:.2f}%"
                 log(
                     f"[{symbol}] 진입 모드: {strategy.entry_mode.upper()} "
@@ -1321,7 +1478,20 @@ def run_bot():
                     fill_quality_entry_blocked=fill_quality_entry_blocked,
                     trend_follow_entry=trend_follow_entry,
                     volume_ratio=volume_ratio,
+                    volume_ratio_percentile=volume_ratio_percentile,
                     avg_abs_change_pct=avg_abs_change_pct,
+                    atr_percentile=atr_percentile,
+                    recent_high=recent_range_context["recent_high"],
+                    recent_low=recent_range_context["recent_low"],
+                    range_position_pct=recent_range_context["range_position_pct"],
+                    distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                    distance_from_recent_low_pct=recent_range_context["distance_from_recent_low_pct"],
+                    overheated_entry_blocked=overheated_entry_blocked,
+                    overheat_extra_confirmation_required=overheat_extra_confirmation_required,
+                    btc_correlation_volatility_blocked=btc_correlation_volatility_blocked,
+                    volume_atr_execution_blocked=volume_atr_execution_blocked,
+                    stop_loss_context_reentry_blocked=stop_loss_context_reentry_blocked,
+                    orderbook_pressure_score=orderbook_pressure_score,
                     htf_bullish=htf_bullish,
                     htf_bearish=htf_bearish,
                     htf_bearish_entry_blocked=htf_bearish_entry_blocked,
@@ -1387,6 +1557,7 @@ def run_bot():
                     in_cooldown
                     or partial_take_profit_cooldown_active
                     or stop_loss_pattern_blocked
+                    or stop_loss_context_reentry_blocked
                 )
 
                 entry_steps = build_alt_entry_steps(
@@ -1482,6 +1653,53 @@ def run_bot():
                                 "btc_reference_above_ma": btc_reference_above_ma,
                             },
                             required={"max_correlation_with_btc": strategy.max_correlation_with_btc},
+                        ),
+                        FunnelStep(
+                            stage="btc_regime_correlation_volatility_guard",
+                            passed=not btc_correlation_volatility_blocked,
+                            reason="btc_risky_regime_high_corr_high_alt_atr",
+                            actual={
+                                "btc_reference_regime": btc_reference_regime,
+                                "correlation_with_btc": correlation_with_btc,
+                                "atr_percentile": atr_percentile,
+                            },
+                            required={
+                                "risky_btc_regimes": strategy.btc_correlation_volatility_risky_regimes,
+                                "min_correlation": strategy.btc_correlation_volatility_min_corr,
+                                "min_alt_atr_percentile": strategy.btc_correlation_volatility_min_atr_percentile,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="volume_atr_execution_guard",
+                            passed=not volume_atr_execution_blocked,
+                            reason="high_volume_high_atr_weak_execution",
+                            actual={
+                                "volume_ratio": volume_ratio,
+                                "atr_percentile": atr_percentile,
+                                "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
+                                "fill_sample_count": fill_quality_snapshot.sample_count,
+                                "orderbook_pressure_score": orderbook_pressure_score,
+                            },
+                            required={
+                                "volume_ratio_threshold": strategy.volume_atr_execution_guard_volume_ratio,
+                                "atr_percentile_threshold": strategy.volume_atr_execution_guard_atr_percentile,
+                                "min_fill_ratio": strategy.volume_atr_execution_min_fill_ratio,
+                                "min_orderbook_pressure_score": strategy.volume_atr_execution_min_orderbook_pressure_score,
+                            },
+                        ),
+                        FunnelStep(
+                            stage="stop_loss_context_reentry_guard",
+                            passed=not stop_loss_context_reentry_blocked,
+                            reason="similar_stop_loss_context_active",
+                            actual={
+                                "elapsed_since_stop_loss_sec": seconds_since_last_stop_loss if last_stop_loss_ts > 0 else None,
+                                "current_context": current_entry_risk_context,
+                                "previous_context": last_stop_loss_context.get(symbol),
+                            },
+                            required={
+                                "cooldown_sec": strategy.stop_loss_context_reentry_cooldown_sec,
+                                "min_similarity_count": strategy.stop_loss_context_min_similarity_count,
+                            },
                         ),
                         FunnelStep(
                             stage="fill_quality_guard",
@@ -1747,6 +1965,15 @@ def run_bot():
                                 "min_volume_ratio": effective_min_volume_ratio,
                                 "volume_filter_passed": volume_filter_passed,
                                 "volatility_filter_passed": volatility_filter_passed,
+                                "atr_percentile": atr_percentile,
+                                "range_position_pct": recent_range_context["range_position_pct"],
+                                "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
+                                "overheated_entry_blocked": overheated_entry_blocked,
+                                "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
+                                "btc_correlation_volatility_blocked": btc_correlation_volatility_blocked,
+                                "volume_atr_execution_blocked": volume_atr_execution_blocked,
+                                "stop_loss_context_reentry_blocked": stop_loss_context_reentry_blocked,
+                                "orderbook_pressure_score": orderbook_pressure_score,
                                 "htf_bullish": htf_bullish,
                             },
                         )
@@ -1852,6 +2079,7 @@ def run_bot():
                         last_trade_at[symbol] = time.time()
                         if exit_reason_key in {"stop_loss", "partial_stop_loss"}:
                             last_stop_loss_at[symbol] = time.time()
+                            last_stop_loss_context[symbol] = dict(current_entry_risk_context)
                         remaining_base = max(base_free - amount, 0.0)
                         if remaining_base <= 0.0001:
                             entry_count[symbol] = 0

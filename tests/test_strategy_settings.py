@@ -151,6 +151,24 @@ class StrategySettingsTests(unittest.TestCase):
                 "STRATEGY_MEAN_REVERSION_ALLOW_NEGATIVE_MACD": "true",
                 "STRATEGY_MEAN_REVERSION_REQUIRE_MACD_RECOVERING": "true",
                 "STRATEGY_MEAN_REVERSION_MACD_RECOVERY_EPSILON": "0.001",
+                "STRATEGY_MEAN_REVERSION_MAX_ATR_PERCENTILE": "80",
+                "STRATEGY_MEAN_REVERSION_MAX_RANGE_POSITION_PCT": "35",
+                "STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO": "2.0",
+                "STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE": "85",
+                "STRATEGY_OVERHEAT_GUARD_RSI": "68",
+                "STRATEGY_OVERHEAT_EXTRA_CONFIRMATION_LOOPS": "1",
+                "STRATEGY_ENABLE_COMBINED_STOP_LOSS_GUARDS": "true",
+                "STRATEGY_BTC_CORRELATION_VOLATILITY_RISKY_REGIMES": "LOW_ENERGY,OVERHEATED",
+                "STRATEGY_BTC_CORRELATION_VOLATILITY_MIN_CORR": "0.75",
+                "STRATEGY_BTC_CORRELATION_VOLATILITY_MIN_ATR_PERCENTILE": "70",
+                "STRATEGY_VOLUME_ATR_EXECUTION_GUARD_VOLUME_RATIO": "2.0",
+                "STRATEGY_VOLUME_ATR_EXECUTION_GUARD_ATR_PERCENTILE": "80",
+                "STRATEGY_VOLUME_ATR_EXECUTION_MIN_FILL_RATIO": "0.98",
+                "STRATEGY_VOLUME_ATR_EXECUTION_MIN_FILL_SAMPLES": "1",
+                "STRATEGY_VOLUME_ATR_EXECUTION_MIN_ORDERBOOK_PRESSURE_SCORE": "45",
+                "STRATEGY_STOP_LOSS_CONTEXT_REENTRY_COOLDOWN_SEC": "3600",
+                "STRATEGY_STOP_LOSS_CONTEXT_MIN_SIMILARITY_COUNT": "3",
+                "STRATEGY_STOP_LOSS_CONTEXT_EXTRA_CONFIRMATION_LOOPS": "2",
             },
             clear=False,
         ):
@@ -161,6 +179,24 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertTrue(settings.mean_reversion_allow_negative_macd)
         self.assertTrue(settings.mean_reversion_require_macd_recovering)
         self.assertEqual(0.001, settings.mean_reversion_macd_recovery_epsilon)
+        self.assertEqual(80, settings.mean_reversion_max_atr_percentile)
+        self.assertEqual(35, settings.mean_reversion_max_range_position_pct)
+        self.assertEqual(2.0, settings.overheat_guard_volume_ratio)
+        self.assertEqual(85, settings.overheat_guard_atr_percentile)
+        self.assertEqual(68, settings.overheat_guard_rsi)
+        self.assertEqual(1, settings.overheat_extra_confirmation_loops)
+        self.assertTrue(settings.enable_combined_stop_loss_guards)
+        self.assertEqual(("LOW_ENERGY", "OVERHEATED"), settings.btc_correlation_volatility_risky_regimes)
+        self.assertEqual(0.75, settings.btc_correlation_volatility_min_corr)
+        self.assertEqual(70, settings.btc_correlation_volatility_min_atr_percentile)
+        self.assertEqual(2.0, settings.volume_atr_execution_guard_volume_ratio)
+        self.assertEqual(80, settings.volume_atr_execution_guard_atr_percentile)
+        self.assertEqual(0.98, settings.volume_atr_execution_min_fill_ratio)
+        self.assertEqual(1, settings.volume_atr_execution_min_fill_samples)
+        self.assertEqual(45, settings.volume_atr_execution_min_orderbook_pressure_score)
+        self.assertEqual(3600, settings.stop_loss_context_reentry_cooldown_sec)
+        self.assertEqual(3, settings.stop_loss_context_min_similarity_count)
+        self.assertEqual(2, settings.stop_loss_context_extra_confirmation_loops)
 
 
 if __name__ == "__main__":

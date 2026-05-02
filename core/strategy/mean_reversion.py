@@ -1,5 +1,6 @@
 """
 작업 요약
+- ATR percentile 과 최근 range 위치를 함께 확인해 횡보장 반등 진입이 고변동/상단 추격으로 바뀌지 않도록 보강
 - mean_reversion 전용 RSI 범위와 MACD 회복 조건을 적용해 추세형 hard filter 를 보수적으로 완화
 - 횡보/혼조 구간에서 Bollinger 하단 복귀 기반 mean reversion 진입 신호를 계산하는 모듈을 추가
 """
@@ -27,6 +28,10 @@ def compute_bollinger_mean_reversion_state(
     allow_negative_macd: bool,
     require_macd_recovering: bool,
     macd_recovery_epsilon: float,
+    atr_percentile: float | None = None,
+    max_atr_percentile: float = 80.0,
+    range_position_pct: float | None = None,
+    max_range_position_pct: float = 35.0,
 ) -> dict[str, float | bool]:
     """볼린저 하단 복귀와 중단 회귀 여지를 기반으로 mean reversion 신호를 계산한다."""
     if bb_lower is None or bb_mid is None:
@@ -80,6 +85,14 @@ def compute_bollinger_mean_reversion_state(
         macd_direction_ok
         and ((not require_macd_recovering) or macd_recovering)
     )
+    atr_context_passed = (
+        atr_percentile is None
+        or atr_percentile <= max_atr_percentile
+    )
+    range_context_passed = (
+        range_position_pct is None
+        or range_position_pct <= max_range_position_pct
+    )
 
     signal_score = calc_weighted_signal_score(
         {
@@ -102,6 +115,8 @@ def compute_bollinger_mean_reversion_state(
         and signal_is_strong
         and rsi_filter_passed
         and macd_filter_passed
+        and atr_context_passed
+        and range_context_passed
     )
     return {
         "bullish": lower_reclaim,
@@ -113,4 +128,6 @@ def compute_bollinger_mean_reversion_state(
         "trend_follow_entry": False,
         "rsi_filter_passed": rsi_filter_passed,
         "macd_filter_passed": macd_filter_passed,
+        "atr_context_passed": atr_context_passed,
+        "range_context_passed": range_context_passed,
     }

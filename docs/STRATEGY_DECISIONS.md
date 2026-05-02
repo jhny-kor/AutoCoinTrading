@@ -906,6 +906,70 @@
   - `py_compile`
   - 텔레그램 리포트 문자열 생성 확인
 
+### 39. 단독 지표 오탐 방지용 결합 필터 도입 (2026-05-01)
+
+- 변경 배경:
+  - 최근 7일 실거래 분석에서 `volume_ratio`, `signal_score`, `RSI/MACD`, `HTF bullish` 는 단독으로 손절을 충분히 구분하지 못했다.
+  - 특히 BTC 손절 거래는 거래량과 신호가 강했지만 `ATR percentile 100`, `RSI 73`, range 상단 추격 성격이 겹쳤다.
+- 변경 내용:
+  - [core/strategy/combined_filters.py](/Users/plo/Documents/auto_coin_bot/core/strategy/combined_filters.py)
+    - 최근 range 위치, 최근 고점/저점 거리 계산 helper 추가
+    - `volume_ratio + ATR percentile + RSI` 가 동시에 과열이면 신규 진입 리스크로 판정
+    - 신호가 강해도 range 상단 또는 최근 고점 근접이면 entry confirmation 을 추가 요구
+  - [core/strategy/mean_reversion.py](/Users/plo/Documents/auto_coin_bot/core/strategy/mean_reversion.py)
+    - mean reversion 완화 경로에 `ATR percentile <= 80`, `range position <= 35` 조건을 결합
+    - RSI/MACD 완화가 고변동 추격 진입으로 변질되지 않게 제한
+  - OKX/업비트 알트, OKX/업비트 BTC 봇
+    - 고거래량+고ATR+RSI 과열 조합은 신규 진입 후보에서 제외
+    - 강한 신호라도 최근 range 상단 추격이면 confirmation loop 를 1회 추가
+  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+    - 결합 필터 임계값을 canonical 설정으로 추가
+- 현재 적용 기준:
+  - `overheat_guard_volume_ratio = 2.0`
+  - `overheat_guard_atr_percentile = 85.0`
+  - `overheat_guard_rsi = 68.0`
+  - `overheat_extra_confirmation_range_position_pct = 70.0`
+  - `overheat_extra_confirmation_distance_from_high_pct = 0.20`
+  - `overheat_extra_confirmation_loops = 1`
+  - mean reversion 은 `mean_reversion_max_atr_percentile = 80.0`, `mean_reversion_max_range_position_pct = 35.0`
+- 향후 플랜:
+  - `signal_score` 는 ATR/RSI/range 위치가 과열일 때 점수 자체를 감점하는 방식으로 고도화
+  - `correlation_with_btc` 는 BTC 레짐이 과열/손절 직후일 때만 알트 비중 축소에 더 강하게 반영
+  - `orderbook_pressure_score` 는 진입 허용 조건이 아니라 체결 품질과 주문 비중 보정용으로만 사용
+  - `HTF bullish` 는 필수 배경 조건으로 유지하되, range 상단 추격/ATR 과열과 충돌하면 추가 확인을 더 요구
+  - 체결 로그의 `position_id` 를 알트까지 완전히 일관화해 진입 지표와 최종 청산을 더 정확히 연결
+- 검증:
+  - `tests/test_combined_filters.py`
+  - `tests/test_mean_reversion.py`
+  - 설정 로더 테스트에 결합 필터 설정값 확인 추가
+
+### 40. 손절 방지 목표 결합 가드 1차 반영 (2026-05-02)
+
+- 변경 배경:
+  - 최근 손절 분석에서 단순 거래량 증가, 높은 신호 점수, HTF 상승 여부만으로는 손절을 충분히 막지 못했다.
+  - 손절 방지에는 단독 지표보다 `BTC 상태`, `알트 변동성`, `체결/호가 우위`, `직전 손절 조건 반복 여부`를 함께 보는 쪽이 더 직접적이라고 판단했다.
+- 변경 내용:
+  - [core/strategy/combined_filters.py](/Users/plo/Documents/auto_coin_bot/core/strategy/combined_filters.py)
+    - `BTC 위험 레짐 + BTC 상관계수 + 알트 ATR percentile` 조합 가드 추가
+    - `거래량 급증 + 고ATR + 약한 체결비율/호가 압력` 조합 가드 추가
+    - 손절 직후 이전 손절과 유사한 조건이면 재진입을 막는 context similarity 가드 추가
+  - OKX/업비트 알트 봇
+    - 세 조합이 켜지면 신규 진입 후보에서 제외
+    - 구조화 로그와 entry funnel 에 `btc_regime_correlation_volatility_guard`, `volume_atr_execution_guard`, `stop_loss_context_reentry_guard` 단계 기록
+    - 손절 체결 시점의 위험 context 를 런타임에 저장해 이후 재진입 조건과 비교
+  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+    - 손절 방지 결합 가드 임계값을 canonical 설정으로 추가
+- 현재 적용 기준:
+  - BTC 위험 레짐: `LOW_ENERGY, OVERHEATED, EXHAUSTION_RISK, CHOPPY_HIGH_VOL`
+  - BTC 상관계수 기준: `0.75`
+  - 알트 ATR percentile 기준: `70.0`
+  - 거래량+체결 가드: `volume_ratio >= 2.0`, `ATR percentile >= 80.0`, `fill_ratio < 0.98` 또는 `orderbook_pressure_score < 45.0`
+  - 손절 후 유사 조건 재진입 차단: `3600초` 안에 위험 context 3개 이상 일치
+- 향후 플랜:
+  - 손절 context 를 런타임 메모리뿐 아니라 trade history/decision journal 에도 저장해 재기동 후에도 비교 가능하게 확장
+  - OKX/업비트 모두 실시간 호가 압력 값을 봇 루프에서 직접 읽도록 연결해 `orderbook_pressure_score` 공백을 줄임
+  - 차단된 후보와 실제 이후 가격 흐름을 백테스트 리플레이에서 비교해 기준값을 심볼별로 분리
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

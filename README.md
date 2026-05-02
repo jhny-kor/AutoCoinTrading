@@ -11,6 +11,8 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 전략
   - 알트: 1분봉 기반 진입 + 상위 타임프레임 확인 + 부분익절/부분손절/순익 보호
   - BTC: 5분봉/15분봉 EMA 추세추종 + ATR 기반 손절/익절 + 부분익절 + 트레일링
+  - 공통: 거래량, ATR percentile, RSI, 최근 range 위치를 결합해 과열 추격 진입을 줄임
+  - 알트: BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+약한 체결/호가, 손절 후 유사 조건 재진입을 추가 차단
   - 공통: 체결마다 decision journal 을 남겨 risk review 와 reflection 을 누적
 - 설정 기준
   - canonical 설정: [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)

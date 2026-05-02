@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-01: 거래량+ATR+RSI 과열 조합은 BTC 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
 - 2026-04-23: 확인 타임프레임 bullish 는 slope 하한까지 충족할 때만 유효하게 보고, 거래량 보너스는 ATR 동반 시에만 반영하도록 BTC 진입 품질을 더 보수화
 - 고거래량 BTC 진입에서는 심볼별 추가 ATR 하한과 추가 confirmation loop 를 적용해 급등 추격 손실을 더 줄이도록 보강
 - 2026-04-12: 텔레그램 BTC 매수 체결 알림에 기본 비중, 최종 비중, 실제 실행 비중을 함께 표시하도록 보강
@@ -99,6 +100,11 @@ from core.strategy.btc import (
     compute_btc_entry_state,
     compute_btc_exit_flags,
     compute_btc_stop_loss_reentry_gate,
+)
+from core.strategy.combined_filters import (
+    calc_recent_range_context,
+    is_overheated_entry_risk,
+    requires_overheat_confirmation,
 )
 from core.strategy.indicators import (
     calc_bollinger_band_width_pct,
@@ -402,6 +408,11 @@ def run_bot():
             atr_pct = (atr_value / last_close * 100) if last_close else 0.0
             atr_series = calc_recent_atr_series(ohlcv, settings.atr_period, sample_count=20)
             atr_percentile = calc_percentile_rank(atr_series, atr_value)
+            recent_range_context = calc_recent_range_context(
+                ohlcv,
+                last_close=last_close,
+                lookback=settings.volume_lookback,
+            )
             base_min_atr_pct = settings.get_min_atr_pct(symbol)
             effective_min_atr_pct = base_min_atr_pct
             confirm_ema_series = calc_ema_series(confirm_closes, settings.confirm_ema_period)
@@ -498,6 +509,21 @@ def run_bot():
             signal_is_strong = bool(btc_entry_state["signal_is_strong"])
             trend_follow_entry = bool(btc_entry_state["trend_follow_entry"])
             entry_signal = bool(btc_entry_state["entry_signal"])
+            overheated_entry_blocked = is_overheated_entry_risk(
+                volume_ratio=volume_ratio,
+                atr_percentile=atr_percentile,
+                rsi_value=rsi_value,
+                volume_ratio_threshold=settings.overheat_guard_volume_ratio,
+                atr_percentile_threshold=settings.overheat_guard_atr_percentile,
+                rsi_threshold=settings.overheat_guard_rsi,
+            )
+            overheat_extra_confirmation_required = requires_overheat_confirmation(
+                signal_is_strong=signal_is_strong,
+                range_position_pct=recent_range_context["range_position_pct"],
+                distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                range_position_threshold=settings.overheat_extra_confirmation_range_position_pct,
+                distance_from_high_threshold_pct=settings.overheat_extra_confirmation_distance_from_high_pct,
+            )
             recent_swing_low = get_recent_swing_low(ohlcv[:-1], settings.swing_lookback)
             recent_swing_high = get_recent_swing_high(ohlcv[:-1], settings.swing_lookback)
 
@@ -573,6 +599,8 @@ def run_bot():
                 regime_policy.required_confirmation_loops,
                 settings.get_entry_confirmation_loops(symbol),
             )
+            if overheat_extra_confirmation_required:
+                regime_confirmation_loops += settings.overheat_extra_confirmation_loops
             effective_min_volume_ratio = settings.get_effective_min_volume_ratio(
                 symbol,
                 symbol_regime,
@@ -678,6 +706,7 @@ def run_bot():
                     and not symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
                     and not stop_loss_pattern_blocked
+                    and not overheated_entry_blocked
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
             else:
@@ -687,6 +716,7 @@ def run_bot():
                     and not symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
                     and not stop_loss_pattern_blocked
+                    and not overheated_entry_blocked
                     and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
@@ -720,6 +750,24 @@ def run_bot():
                 f"[{symbol}] ATR: {atr_value:.0f}, ATR 비율: {atr_pct:.4f}% "
                 f"(허용 {effective_min_atr_pct:.4f}% ~ {settings.max_atr_pct:.4f}%)"
             )
+            log(
+                f"[{symbol}] 최근 range 위치: "
+                f"{0.0 if recent_range_context['range_position_pct'] is None else recent_range_context['range_position_pct']:.2f}% | "
+                f"고점 거리: {0.0 if recent_range_context['distance_from_recent_high_pct'] is None else recent_range_context['distance_from_recent_high_pct']:.4f}% | "
+                f"ATR percentile: {0.0 if atr_percentile is None else atr_percentile:.1f}"
+            )
+            if overheated_entry_blocked:
+                log(
+                    f"[{symbol}] 고거래량+고ATR+RSI 과열 조합으로 신규 진입을 차단합니다 "
+                    f"(volume {0.0 if volume_ratio is None else volume_ratio:.2f}, "
+                    f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}, "
+                    f"RSI {0.0 if rsi_value is None else rsi_value:.2f})."
+                )
+            if overheat_extra_confirmation_required:
+                log(
+                    f"[{symbol}] 강한 신호지만 최근 range 상단 추격 위험이 있어 "
+                    f"confirmation {settings.overheat_extra_confirmation_loops}회를 추가합니다."
+                )
             if low_energy_guard_active:
                 log(
                     f"[{symbol}] 저에너지 장 감지: 평균 거래량 배수 {low_energy_snapshot.avg_volume_ratio:.3f}, "
@@ -1046,10 +1094,19 @@ def run_bot():
                 trend_follow_entry=trend_follow_entry,
                 entry_signal=entry_signal,
                 volume_ratio=volume_ratio,
+                volume_ratio_percentile=volume_ratio_percentile,
                 volume_bonus_allowed=volume_bonus_allowed,
                 effective_min_volume_ratio=effective_min_volume_ratio,
                 atr_value=atr_value,
                 atr_pct=atr_pct,
+                atr_percentile=atr_percentile,
+                recent_high=recent_range_context["recent_high"],
+                recent_low=recent_range_context["recent_low"],
+                range_position_pct=recent_range_context["range_position_pct"],
+                distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                distance_from_recent_low_pct=recent_range_context["distance_from_recent_low_pct"],
+                overheated_entry_blocked=overheated_entry_blocked,
+                overheat_extra_confirmation_required=overheat_extra_confirmation_required,
                 effective_min_atr_pct=effective_min_atr_pct,
                 confirm_bullish=confirm_bullish,
                 confirm_bullish_raw=confirm_bullish_raw,
@@ -1465,6 +1522,11 @@ def run_bot():
                             "volume_ratio": volume_ratio,
                             "atr_value": atr_value,
                             "atr_pct": atr_pct,
+                            "atr_percentile": atr_percentile,
+                            "range_position_pct": recent_range_context["range_position_pct"],
+                            "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
+                            "overheated_entry_blocked": overheated_entry_blocked,
+                            "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
                             "confirm_bullish": confirm_bullish,
                         },
                     )
@@ -1641,6 +1703,11 @@ def run_bot():
                         "volume_ratio": volume_ratio,
                         "atr_value": atr_value,
                         "atr_pct": atr_pct,
+                        "atr_percentile": atr_percentile,
+                        "range_position_pct": recent_range_context["range_position_pct"],
+                        "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
+                        "overheated_entry_blocked": overheated_entry_blocked,
+                        "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
                         "confirm_bullish": confirm_bullish,
                     },
                 )

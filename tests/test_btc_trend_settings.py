@@ -45,6 +45,10 @@ class BtcTrendSettingsTests(unittest.TestCase):
                 "BTC_TREND_HIGH_VOLUME_RATIO_THRESHOLD_MAP": "BTC/USDT:3.0,BTC/KRW:3.0",
                 "BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP": "BTC/USDT:0.16,BTC/KRW:0.14",
                 "BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP": "BTC/KRW:1",
+                "BTC_TREND_OVERHEAT_GUARD_VOLUME_RATIO": "2.0",
+                "BTC_TREND_OVERHEAT_GUARD_ATR_PERCENTILE": "85",
+                "BTC_TREND_OVERHEAT_GUARD_RSI": "68",
+                "BTC_TREND_OVERHEAT_EXTRA_CONFIRMATION_LOOPS": "1",
             },
             clear=False,
         ):
@@ -54,6 +58,10 @@ class BtcTrendSettingsTests(unittest.TestCase):
         self.assertEqual(0.14, settings.get_high_volume_min_atr_pct("BTC/KRW"))
         self.assertEqual(1, settings.get_high_volume_extra_confirmation_loops("BTC/KRW"))
         self.assertEqual(0, settings.get_high_volume_extra_confirmation_loops("BTC/USDT"))
+        self.assertEqual(2.0, settings.overheat_guard_volume_ratio)
+        self.assertEqual(85, settings.overheat_guard_atr_percentile)
+        self.assertEqual(68, settings.overheat_guard_rsi)
+        self.assertEqual(1, settings.overheat_extra_confirmation_loops)
 
     def test_loads_confirm_slope_and_volume_bonus_guards(self):
         with patch.dict(
