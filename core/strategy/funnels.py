@@ -1,5 +1,6 @@
 """
 작업 요약
+- 거래량 상한 초과 신호를 소액/추가확인 후보로 낮춘 경우 volume_cap 단계를 통과하도록 확장
 - OKX funding rate 과열 차단 단계를 알트/BTC 진입 퍼널에 추가
 - 2026-04-10: 알트 보수형 튜닝용 최대 이격도와 최대 거래량 상한 단계를 퍼널에 추가했다.
 - 2026-04-09: 손절 후 패턴 기반 재진입 차단 단계를 퍼널에 추가해 reason 코드로 추적할 수 있게 확장
@@ -33,6 +34,9 @@ def build_alt_entry_steps(
     effective_min_volume_ratio: float,
     max_volume_ratio: float,
     volume_within_upper_bound: bool,
+    volume_cap_downgrade_allowed: bool,
+    volume_cap_downgrade_reason: str | None,
+    volume_cap_hard_max_ratio: float | None,
     volatility_filter_passed: bool,
     avg_abs_change_pct: float | None,
     min_volatility_pct: float,
@@ -112,10 +116,17 @@ def build_alt_entry_steps(
         ),
         FunnelStep(
             stage="volume_cap",
-            passed=volume_within_upper_bound,
+            passed=(volume_within_upper_bound or volume_cap_downgrade_allowed),
             reason="volume_spike_too_high",
-            actual={"volume_ratio": volume_ratio},
-            required={"max_volume_ratio": max_volume_ratio},
+            actual={
+                "volume_ratio": volume_ratio,
+                "downgrade_allowed": volume_cap_downgrade_allowed,
+                "downgrade_reason": volume_cap_downgrade_reason,
+            },
+            required={
+                "max_volume_ratio": max_volume_ratio,
+                "hard_max_volume_ratio": volume_cap_hard_max_ratio,
+            },
         ),
         FunnelStep(
             stage="funding_rate",

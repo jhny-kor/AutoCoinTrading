@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-02: 거래량 급등 신호가 손절방지 조건을 만족하면 소액/추가확인 후보로 낮추도록 반영
 - 2026-05-02: BTC 상관계수 단독 차단은 결합 손절방지 가드가 꺼진 fallback 으로 낮춰 좋은 거래 차단을 줄임
 - 2026-05-02: 손절 방지를 위해 BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드를 추가
 - 2026-05-01: 거래량+ATR+RSI 과열 조합은 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
@@ -104,6 +105,7 @@ from core.strategy.combined_filters import (
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from core.strategy.mean_reversion import compute_bollinger_mean_reversion_state
 from core.strategy.regime_router import route_alt_strategy
+from core.strategy.volume_spike_entry import evaluate_volume_spike_entry_downgrade
 from core.strategy.indicators import (
     calc_atr,
     calc_bollinger_bands,
@@ -988,6 +990,32 @@ def run_bot():
                     base_position_ratio=pre_score_position_ratio,
                     regime_scale=allocation_score_result.score_scale,
                 )
+                volume_spike_entry_downgrade = evaluate_volume_spike_entry_downgrade(
+                    enabled=strategy.enable_volume_spike_entry_downgrade,
+                    symbol=symbol,
+                    eligible_symbols=strategy.volume_spike_entry_downgrade_symbols,
+                    volume_ratio=volume_ratio,
+                    max_volume_ratio=effective_max_volume_ratio,
+                    hard_max_volume_ratio=strategy.volume_spike_entry_hard_max_volume_ratio,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.volume_spike_entry_min_signal_score,
+                    htf_bullish=htf_bullish,
+                    require_htf_bullish=strategy.volume_spike_entry_require_htf_bullish,
+                    orderbook_pressure_score=orderbook_pressure_score,
+                    min_orderbook_pressure_score=strategy.volume_spike_entry_min_orderbook_pressure_score,
+                    atr_percentile=atr_percentile,
+                    max_atr_percentile=strategy.volume_spike_entry_max_atr_percentile,
+                    position_scale=strategy.volume_spike_entry_position_scale,
+                    extra_confirmation_loops=strategy.volume_spike_entry_extra_confirmation_loops,
+                )
+                volume_cap_allows_entry = (
+                    volume_within_upper_bound or volume_spike_entry_downgrade.allowed
+                )
+                if volume_spike_entry_downgrade.allowed:
+                    position_ratio = apply_regime_position_scale(
+                        base_position_ratio=position_ratio,
+                        regime_scale=volume_spike_entry_downgrade.position_scale,
+                    )
                 raw_entry_candidate = False
                 if strategy_key == "skip":
                     raw_entry_candidate = False
@@ -1006,7 +1034,7 @@ def run_bot():
                         and not btc_correlation_volatility_blocked
                         and not volume_atr_execution_blocked
                         and gap_within_upper_bound
-                        and volume_within_upper_bound
+                        and volume_cap_allows_entry
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 else:
@@ -1023,7 +1051,7 @@ def run_bot():
                         and not btc_correlation_volatility_blocked
                         and not volume_atr_execution_blocked
                         and gap_within_upper_bound
-                        and volume_within_upper_bound
+                        and volume_cap_allows_entry
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
@@ -1044,6 +1072,7 @@ def run_bot():
                             if stop_loss_context_reentry_blocked
                             else 0
                         )
+                        + volume_spike_entry_downgrade.extra_confirmation_loops
                     ),
                 )
                 dynamic_bonus_eligible = is_dynamic_bonus_eligible(
@@ -1058,6 +1087,7 @@ def run_bot():
                     enable_dynamic_overweight=(
                         portfolio_allocator.settings.enable_dynamic_overweight
                         and regime_policy.allow_dynamic_overweight
+                        and not volume_spike_entry_downgrade.allowed
                     ),
                 )
                 requested_order_value, allocation_decision = build_alt_allocation(
@@ -1124,6 +1154,15 @@ def run_bot():
                     log(
                         f"[{symbol}] 강한 신호지만 최근 range 상단 추격 위험이 있어 "
                         f"confirmation {strategy.overheat_extra_confirmation_loops}회를 추가합니다."
+                    )
+                if volume_spike_entry_downgrade.allowed:
+                    log(
+                        f"[{symbol}] 거래량 상한 초과지만 손절방지 조건을 충족해 소액 진입 후보로 낮춥니다 "
+                        f"(volume {0.0 if volume_ratio is None else volume_ratio:.2f}, "
+                        f"score {signal_score:.1f}, ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}, "
+                        f"orderbook pressure {0.0 if orderbook_pressure_score is None else orderbook_pressure_score:.1f}, "
+                        f"비중 {volume_spike_entry_downgrade.position_scale:.2f}x, "
+                        f"추가 confirmation {volume_spike_entry_downgrade.extra_confirmation_loops}회)."
                     )
                 if btc_correlation_volatility_blocked:
                     log(
@@ -1240,7 +1279,12 @@ def run_bot():
                     log(
                         f"[{symbol}] 거래량이 부족하여 신규 매수를 보류합니다."
                     )
-                if entry_signal and strategy.enable_volume_filter and not volume_within_upper_bound:
+                if (
+                    entry_signal
+                    and strategy.enable_volume_filter
+                    and not volume_within_upper_bound
+                    and not volume_spike_entry_downgrade.allowed
+                ):
                     log(
                         f"[{symbol}] 거래량이 과도하게 급증해 추격 위험이 커 신규 매수를 보류합니다."
                     )
@@ -1481,6 +1525,13 @@ def run_bot():
                     trend_follow_entry=trend_follow_entry,
                     volume_ratio=volume_ratio,
                     volume_ratio_percentile=volume_ratio_percentile,
+                    volume_cap_allows_entry=volume_cap_allows_entry,
+                    volume_spike_entry_downgrade_allowed=volume_spike_entry_downgrade.allowed,
+                    volume_spike_entry_downgrade_reason=volume_spike_entry_downgrade.reason,
+                    volume_spike_entry_position_scale=volume_spike_entry_downgrade.position_scale,
+                    volume_spike_entry_extra_confirmation_loops=(
+                        volume_spike_entry_downgrade.extra_confirmation_loops
+                    ),
                     avg_abs_change_pct=avg_abs_change_pct,
                     atr_percentile=atr_percentile,
                     recent_high=recent_range_context["recent_high"],
@@ -1581,6 +1632,9 @@ def run_bot():
                     effective_min_volume_ratio=effective_min_volume_ratio,
                     max_volume_ratio=effective_max_volume_ratio,
                     volume_within_upper_bound=volume_within_upper_bound,
+                    volume_cap_downgrade_allowed=volume_spike_entry_downgrade.allowed,
+                    volume_cap_downgrade_reason=volume_spike_entry_downgrade.reason,
+                    volume_cap_hard_max_ratio=strategy.volume_spike_entry_hard_max_volume_ratio,
                     funding_rate_filter_passed=funding_rate_filter_passed,
                     funding_rate=funding_rate,
                     max_funding_rate=strategy.okx_funding_rate_max_long_bias if strategy.enable_okx_funding_rate_guard else None,

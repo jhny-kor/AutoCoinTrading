@@ -29,6 +29,36 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(0.15, settings.get_max_entry_gap_pct("XRP/KRW"))
         self.assertEqual(0.25, settings.get_max_entry_gap_pct("UNKNOWN"))
 
+    def test_loads_volume_spike_entry_downgrade_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_ENABLE_VOLUME_SPIKE_ENTRY_DOWNGRADE": "true",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_DOWNGRADE_SYMBOLS": "ETH/KRW,XRP/KRW",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_MIN_SIGNAL_SCORE": "85",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_MIN_ORDERBOOK_PRESSURE_SCORE": "65",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_MAX_ATR_PERCENTILE": "60",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_HARD_MAX_VOLUME_RATIO": "30",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_POSITION_SCALE": "0.25",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_EXTRA_CONFIRMATION_LOOPS": "2",
+                "STRATEGY_VOLUME_SPIKE_ENTRY_REQUIRE_HTF_BULLISH": "true",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertTrue(settings.enable_volume_spike_entry_downgrade)
+        self.assertTrue(settings.allows_volume_spike_entry_downgrade("ETH/KRW"))
+        self.assertTrue(settings.allows_volume_spike_entry_downgrade("XRP/KRW"))
+        self.assertFalse(settings.allows_volume_spike_entry_downgrade("SOL/KRW"))
+        self.assertEqual(85, settings.volume_spike_entry_min_signal_score)
+        self.assertEqual(65, settings.volume_spike_entry_min_orderbook_pressure_score)
+        self.assertEqual(60, settings.volume_spike_entry_max_atr_percentile)
+        self.assertEqual(30, settings.volume_spike_entry_hard_max_volume_ratio)
+        self.assertEqual(0.25, settings.volume_spike_entry_position_scale)
+        self.assertEqual(2, settings.volume_spike_entry_extra_confirmation_loops)
+        self.assertTrue(settings.volume_spike_entry_require_htf_bullish)
+
     def test_loads_btc_regime_position_scale_map(self):
         with patch.dict(
             os.environ,

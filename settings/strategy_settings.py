@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-02: 거래량 급등 진입을 손절방지 조건 충족 시 소액/추가확인 후보로 낮추는 설정을 추가
 - 2026-05-02: 손절 방지를 위해 BTC 레짐+상관+ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드 설정을 추가
 - 2026-05-01: 단독 지표 오탐을 줄이기 위해 거래량+ATR+RSI 과열 가드와 과열거리 추가확인 설정을 추가
 - mean_reversion 전용 RSI 범위와 MACD 회복 조건 설정을 추가
@@ -139,6 +140,15 @@ class StrategySettings:
     min_volume_ratio_map: dict[str, float]
     max_volume_ratio: float
     max_volume_ratio_map: dict[str, float]
+    enable_volume_spike_entry_downgrade: bool
+    volume_spike_entry_downgrade_symbols: tuple[str, ...]
+    volume_spike_entry_min_signal_score: float
+    volume_spike_entry_min_orderbook_pressure_score: float
+    volume_spike_entry_max_atr_percentile: float
+    volume_spike_entry_hard_max_volume_ratio: float
+    volume_spike_entry_position_scale: float
+    volume_spike_entry_extra_confirmation_loops: int
+    volume_spike_entry_require_htf_bullish: bool
     enable_okx_funding_rate_guard: bool
     okx_funding_rate_max_long_bias: float
     okx_funding_rate_cache_ttl_sec: float
@@ -232,6 +242,10 @@ class StrategySettings:
     def get_max_volume_ratio(self, symbol: str) -> float:
         """심볼별 최대 거래량 상한 오버라이드가 있으면 그 값을, 없으면 기본값을 반환한다."""
         return self.max_volume_ratio_map.get(symbol, self.max_volume_ratio)
+
+    def allows_volume_spike_entry_downgrade(self, symbol: str) -> bool:
+        """거래량 급등 소액/추가확인 후보 전환 대상 심볼인지 반환한다."""
+        return symbol in self.volume_spike_entry_downgrade_symbols
 
     def get_min_order_amount(self, symbol: str) -> float:
         """심볼별 최소 주문 수량 오버라이드가 있으면 그 값을, 없으면 0을 반환한다."""
@@ -748,6 +762,20 @@ def load_strategy_settings(
         min_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "min_volume_ratio_map", {}, env_key="STRATEGY_MIN_VOLUME_RATIO_MAP")),
         max_volume_ratio=config_float("strategy", "max_volume_ratio", 2.5, env_key="STRATEGY_MAX_VOLUME_RATIO"),
         max_volume_ratio_map=parse_symbol_float_map(config_value("strategy", "max_volume_ratio_map", {}, env_key="STRATEGY_MAX_VOLUME_RATIO_MAP")),
+        enable_volume_spike_entry_downgrade=config_bool("strategy", "enable_volume_spike_entry_downgrade", False, env_key="STRATEGY_ENABLE_VOLUME_SPIKE_ENTRY_DOWNGRADE"),
+        volume_spike_entry_downgrade_symbols=tuple(
+            parse_symbol_list(
+                config_str("strategy", "volume_spike_entry_downgrade_symbols", "", env_key="STRATEGY_VOLUME_SPIKE_ENTRY_DOWNGRADE_SYMBOLS"),
+                [],
+            )
+        ),
+        volume_spike_entry_min_signal_score=config_float("strategy", "volume_spike_entry_min_signal_score", 85.0, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_MIN_SIGNAL_SCORE"),
+        volume_spike_entry_min_orderbook_pressure_score=config_float("strategy", "volume_spike_entry_min_orderbook_pressure_score", 65.0, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_MIN_ORDERBOOK_PRESSURE_SCORE"),
+        volume_spike_entry_max_atr_percentile=config_float("strategy", "volume_spike_entry_max_atr_percentile", 60.0, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_MAX_ATR_PERCENTILE"),
+        volume_spike_entry_hard_max_volume_ratio=config_float("strategy", "volume_spike_entry_hard_max_volume_ratio", 30.0, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_HARD_MAX_VOLUME_RATIO"),
+        volume_spike_entry_position_scale=config_float("strategy", "volume_spike_entry_position_scale", 0.25, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_POSITION_SCALE"),
+        volume_spike_entry_extra_confirmation_loops=config_int("strategy", "volume_spike_entry_extra_confirmation_loops", 2, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_EXTRA_CONFIRMATION_LOOPS"),
+        volume_spike_entry_require_htf_bullish=config_bool("strategy", "volume_spike_entry_require_htf_bullish", True, env_key="STRATEGY_VOLUME_SPIKE_ENTRY_REQUIRE_HTF_BULLISH"),
         enable_okx_funding_rate_guard=config_bool("strategy", "enable_okx_funding_rate_guard", True, env_key="STRATEGY_ENABLE_OKX_FUNDING_RATE_GUARD"),
         okx_funding_rate_max_long_bias=config_float("strategy", "okx_funding_rate_max_long_bias", 0.0005, env_key="STRATEGY_OKX_FUNDING_RATE_MAX_LONG_BIAS"),
         okx_funding_rate_cache_ttl_sec=config_float("strategy", "okx_funding_rate_cache_ttl_sec", 300.0, env_key="STRATEGY_OKX_FUNDING_RATE_CACHE_TTL_SEC"),
