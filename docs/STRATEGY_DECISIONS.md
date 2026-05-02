@@ -970,6 +970,28 @@
   - OKX/업비트 모두 실시간 호가 압력 값을 봇 루프에서 직접 읽도록 연결해 `orderbook_pressure_score` 공백을 줄임
   - 차단된 후보와 실제 이후 가격 흐름을 백테스트 리플레이에서 비교해 기준값을 심볼별로 분리
 
+### 41. 손절 방지에 약한 단독 지표 가중치 축소 (2026-05-02)
+
+- 변경 배경:
+  - 최근 실거래와 `public_buy_ready` 후보 분석에서 `HTF bullish`, `signal_is_strong`, `volume_ratio`, `gap_pct`, `range_position_pct`, `correlation_with_btc` 는 단독으로 손절을 잘 구분하지 못했다.
+  - 특히 BTC 손절은 `confirm_bullish=True` 와 매우 높은 `volume_ratio` 상태에서도 발생했고, 후보 로그에서는 `htf_bullish=True` 전체 후보 중 불리한 흐름이 절반 이상이었다.
+- 변경 내용:
+  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
+    - 알트 신호 점수에서 `volume` 과 `gap` 단독 가중치를 낮춤
+    - `slope`, `MACD`, `RSI`, `squeeze` 같이 후속 탄력/회복을 설명하는 지표 비중을 상대적으로 높임
+  - [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+    - 거래량 단독 가산을 축소
+    - `volume_ratio >= 2.0` 이면서 `ATR percentile >= 70`이면 allocation market score 감점
+    - `orderbook_pressure_score < 50`이면 execution score 추가 감점
+    - BTC 상관계수 단독 페널티를 완화하고, 위험 조합은 별도 결합 가드가 맡도록 분리
+  - OKX/업비트 알트 봇
+    - `correlation_with_btc` 단독 차단은 결합 손절방지 가드가 꺼진 경우의 fallback 으로만 사용
+  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+    - allocation score 가중치를 `signal 0.30 / market 0.30 / execution 0.25 / diversification 0.15` 로 조정
+- 판단:
+  - 단독 지표를 삭제하지는 않는다.
+  - 다만 단독 긍정 신호로 매수 비중이 커지는 구조는 줄이고, 위험 조합일 때 차단/감점되도록 유지한다.
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

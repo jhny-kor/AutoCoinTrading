@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-02: BTC 상관계수 단독 차단은 결합 손절방지 가드가 꺼진 fallback 으로 낮춰 좋은 거래 차단을 줄임
 - 2026-05-02: 손절 방지를 위해 BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드를 추가
 - 2026-05-01: 거래량+ATR+RSI 과열 조합은 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
 - CHOPPY 레짐에서는 Bollinger 하단 복귀 기반 mean_reversion 전략 경로를 사용하도록 확장
@@ -946,6 +947,7 @@ def run_bot():
                 correlation_entry_blocked = (
                     entry_signal
                     and strategy.enable_correlation_filter
+                    and not strategy.enable_combined_stop_loss_guards
                     and not has_position
                     and btc_reference_above_ma
                     and correlation_with_btc is not None

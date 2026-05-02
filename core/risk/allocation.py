@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-02: 손절 방지를 위해 signal/volume/correlation 단독 가산을 줄이고 고ATR·약한 호가 조합은 allocation score 에서 감점하도록 조정
 - 2026-04-12: volume percentile, ATR percentile, HTF slope, 호가 압력 점수를 결합해 약한 단일 지표 의존도를 줄이도록 allocation score 를 확장
 - 2026-04-10: allocation reason_top 을 최고 점수 축이 아니라 최저 점수 축 기준으로 바꿔 실제 약점 설명에 가깝게 조정
 - 2026-04-09: signal/market/execution/diversification 기반 score_scale 계산 helper 를 추가
@@ -87,23 +88,33 @@ def compute_allocation_score(
 
     if volume_ratio is not None and required_volume_ratio not in (None, 0):
         market_component = _clamp_score(
-            market_component + min(20.0, (volume_ratio / required_volume_ratio) * 10.0)
+            market_component + min(6.0, (volume_ratio / required_volume_ratio) * 3.0)
         )
     if volume_ratio_percentile is not None:
         if volume_ratio_percentile < 35:
             market_component = _clamp_score(market_component - 10.0)
         elif 55 <= volume_ratio_percentile <= 85:
-            market_component = _clamp_score(market_component + 6.0)
+            market_component = _clamp_score(market_component + 3.0)
         elif volume_ratio_percentile > 95:
-            market_component = _clamp_score(market_component - 6.0)
+            market_component = _clamp_score(market_component - 8.0)
 
     if atr_percentile is not None:
         if atr_percentile < 30:
             market_component = _clamp_score(market_component - 8.0)
-        elif 50 <= atr_percentile <= 85:
-            market_component = _clamp_score(market_component + 5.0)
-        elif atr_percentile > 95:
-            market_component = _clamp_score(market_component - 4.0)
+        elif 40 <= atr_percentile <= 65:
+            market_component = _clamp_score(market_component + 3.0)
+        elif 70 <= atr_percentile <= 90:
+            market_component = _clamp_score(market_component - 6.0)
+        elif atr_percentile > 90:
+            market_component = _clamp_score(market_component - 12.0)
+
+    if (
+        volume_ratio is not None
+        and atr_percentile is not None
+        and volume_ratio >= 2.0
+        and atr_percentile >= 70.0
+    ):
+        market_component = _clamp_score(market_component - 10.0)
 
     if htf_slope_pct is not None:
         market_component = _clamp_score(
@@ -122,11 +133,15 @@ def compute_allocation_score(
         execution_component = _clamp_score(
             execution_component * 0.7 + float(orderbook_pressure_score) * 0.3
         )
+        if orderbook_pressure_score < 50.0:
+            execution_component = _clamp_score(execution_component - 10.0)
 
     diversification_component = 65.0
     if correlation_with_btc is not None and max_correlation_with_btc > 0:
-        if correlation_with_btc >= max_correlation_with_btc:
-            diversification_component = 20.0
+        if correlation_with_btc >= 0.90:
+            diversification_component = 35.0
+        elif correlation_with_btc >= max_correlation_with_btc:
+            diversification_component = 50.0
         else:
             headroom = max(1e-9, max_correlation_with_btc)
             diversification_component = _clamp_score(

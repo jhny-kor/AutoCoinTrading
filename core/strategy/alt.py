@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-05-02: 손절 방지를 위해 volume/gap 단독 가중치를 낮추고 slope/MACD/RSI 결합 비중을 높였다.
 - regime별 동적 가중치를 적용하는 알트 신호 점수 계산으로 EMA slope / Bollinger Squeeze 비중을 장 상태에 맞게 조정
 - 2026-04-09: 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 gate helper 를 추가
 - 2026-04-06: Bollinger Squeeze + 거래량 확장 돌파 기반 병렬 진입 모드 구성
@@ -23,49 +24,49 @@ def _get_alt_signal_weights(symbol_regime: str | None, entry_mode: str) -> dict[
     if entry_mode == "squeeze":
         return {
             "squeeze": 0.5,
-            "volume": 0.2,
-            "trend": 0.1,
-            "slope": 0.1,
+            "trend": 0.15,
+            "slope": 0.15,
+            "volume": 0.1,
             "macd": 0.05,
             "rsi": 0.05,
         }
 
     if symbol_regime in {"TRENDING", "TRENDING_EARLY", "TRENDING_MATURE"}:
         return {
-            "slope": 0.4,
-            "trend": 0.2,
-            "gap": 0.15,
-            "volume": 0.1,
-            "macd": 0.1,
+            "slope": 0.45,
+            "trend": 0.25,
+            "macd": 0.12,
+            "gap": 0.08,
+            "volume": 0.05,
             "rsi": 0.05,
         }
     if symbol_regime == "BREAKOUT_ATTEMPT":
         return {
-            "gap": 0.25,
-            "volume": 0.2,
-            "trend": 0.15,
-            "slope": 0.15,
-            "squeeze": 0.15,
-            "macd": 0.05,
+            "squeeze": 0.2,
+            "slope": 0.2,
+            "trend": 0.2,
+            "gap": 0.15,
+            "volume": 0.12,
+            "macd": 0.08,
             "rsi": 0.05,
         }
     if symbol_regime in {"CHOPPY", "CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL"}:
         return {
-            "squeeze": 0.5,
-            "rsi": 0.15,
-            "macd": 0.15,
-            "gap": 0.1,
-            "volume": 0.05,
-            "slope": 0.05,
+            "squeeze": 0.45,
+            "rsi": 0.2,
+            "macd": 0.2,
+            "slope": 0.07,
+            "gap": 0.05,
+            "volume": 0.03,
         }
     return {
-        "gap": 0.2,
-        "volume": 0.15,
-        "rsi": 0.15,
-        "macd": 0.15,
-        "slope": 0.15,
-        "trend": 0.1,
-        "squeeze": 0.1,
+        "slope": 0.22,
+        "rsi": 0.2,
+        "macd": 0.2,
+        "trend": 0.12,
+        "gap": 0.1,
+        "volume": 0.08,
+        "squeeze": 0.08,
     }
 
 

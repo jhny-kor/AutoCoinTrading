@@ -13,6 +13,7 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
   - BTC: 5분봉/15분봉 EMA 추세추종 + ATR 기반 손절/익절 + 부분익절 + 트레일링
   - 공통: 거래량, ATR percentile, RSI, 최근 range 위치를 결합해 과열 추격 진입을 줄임
   - 알트: BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+약한 체결/호가, 손절 후 유사 조건 재진입을 추가 차단
+  - 알트: `volume`, `gap`, `HTF bullish`, `correlation` 은 단독 매수 근거가 아니라 감점/결합 필터로 사용
   - 공통: 체결마다 decision journal 을 남겨 risk review 와 reflection 을 누적
 - 설정 기준
   - canonical 설정: [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
@@ -90,9 +91,17 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 1분봉 기반
 - 상위 타임프레임 필터
 - 거래량/변동성/신호 점수 필터
+- 레짐별 전략 라우터
+  - `CHOPPY` 계열: Bollinger mean reversion
+  - `BREAKOUT_ATTEMPT`: breakout
+  - `TRENDING` 계열: trend-follow/MA 경로
 - 부분익절/부분손절
 - 브레이크이븐/순익 보호
-- 레짐 기반 전략 라우터
+- 손절 방지 결합 가드
+  - BTC 위험 레짐 + BTC 상관계수 + 알트 ATR percentile
+  - 거래량 급증 + 고ATR + 약한 체결비율/호가 압력
+  - 손절 후 1시간 안에 유사 조건 재진입 차단
+- 알트 신호 점수는 `volume`/`gap` 단독 가중치를 낮추고 `slope`/`MACD`/`RSI`/`squeeze` 결합을 더 크게 봅니다.
 
 ### BTC
 
@@ -138,9 +147,10 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 현재 포트폴리오 배분은 강제 리밸런싱이 아니라 `신규 매수 허용 금액 제한` 방식입니다.
 
 - 기본 목표 비중
-  - BTC `60%`
+  - BTC `45%`
   - ETH `30%`
-  - XRP `10%`
+  - XRP `15%`
+  - SOL `10%`
 - 계산 기준
   - 현재 가용 현금
   - 코인별 남아 있는 누적 투입 원가
@@ -149,6 +159,21 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
   - 부족한 코인만 목표 비중 안에서 추가 진입 허용
 
 동적 오버웨이트는 거래량/추세 품질이 매우 좋을 때만 보수적으로 `+5%`까지 허용합니다.
+
+### Allocation Score
+
+신규 진입 비중은 신호 점수만으로 키우지 않고 `signal / market / execution / diversification` 네 축을 합산해 보정합니다.
+
+- 현재 가중치
+  - signal `0.30`
+  - market `0.30`
+  - execution `0.25`
+  - diversification `0.15`
+- 손절 방지 반영
+  - `volume_ratio >= 2.0` 이면서 `ATR percentile >= 70`이면 market score 감점
+  - `orderbook_pressure_score < 50`이면 execution score 감점
+  - BTC 상관계수 단독 페널티는 완화하고, 위험 레짐+고상관+알트 고ATR 조합에서 강하게 차단
+  - `HTF bullish`, `signal_is_strong`, `volume_ratio`, `gap_pct`, `range_position_pct` 는 단독 긍정 신호로 쓰지 않고 결합 판단에만 사용
 
 ## 로그 구조
 

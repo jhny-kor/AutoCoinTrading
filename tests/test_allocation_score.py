@@ -57,6 +57,46 @@ class AllocationScoreTests(unittest.TestCase):
         self.assertLess(result.allocation_score, 55.0)
         self.assertEqual(result.reason_top, "market")
 
+    def test_high_volume_high_atr_and_weak_orderbook_reduce_score(self):
+        result = compute_allocation_score(
+            settings=self.settings,
+            signal_score=90.0,
+            volume_ratio=3.0,
+            required_volume_ratio=1.0,
+            volume_ratio_percentile=98.0,
+            trend_ok=True,
+            low_energy_guard_active=False,
+            symbol_regime="TRENDING",
+            atr_percentile=85.0,
+            orderbook_pressure_score=40.0,
+            fill_quality_avg_fill_ratio=1.0,
+            fill_quality_entry_blocked=False,
+            correlation_with_btc=0.2,
+            max_correlation_with_btc=0.7,
+        )
+
+        self.assertLess(result.market_score_component, 80.0)
+        self.assertLess(result.execution_score_component, 90.0)
+        self.assertLess(result.allocation_score, 85.0)
+
+    def test_correlation_alone_is_not_max_penalty(self):
+        result = compute_allocation_score(
+            settings=self.settings,
+            signal_score=80.0,
+            volume_ratio=1.2,
+            required_volume_ratio=1.0,
+            trend_ok=True,
+            low_energy_guard_active=False,
+            symbol_regime="TRENDING",
+            fill_quality_avg_fill_ratio=1.0,
+            fill_quality_entry_blocked=False,
+            correlation_with_btc=0.75,
+            max_correlation_with_btc=0.7,
+        )
+
+        self.assertEqual(result.diversification_score_component, 50.0)
+        self.assertGreater(result.allocation_score, 70.0)
+
 
 if __name__ == "__main__":
     unittest.main()
