@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-05: mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합을 신규 진입 차단 조건으로 연결
 - 2026-05-02: 거래량 급등 신호가 손절방지 조건을 만족하면 소액/추가확인 후보로 낮추도록 반영
 - 2026-05-02: BTC 상관계수 단독 차단은 결합 손절방지 가드가 꺼진 fallback 으로 낮춰 좋은 거래 차단을 줄임
 - 2026-05-02: 손절 방지를 위해 BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드를 추가
@@ -819,6 +820,15 @@ def run_bot():
                         max_atr_percentile=strategy.mean_reversion_max_atr_percentile,
                         range_position_pct=recent_range_context["range_position_pct"],
                         max_range_position_pct=strategy.mean_reversion_max_range_position_pct,
+                        ma_slope_pct=ma_slope_pct,
+                        price_slope_pct=price_slope_pct,
+                        volume_ratio=volume_ratio,
+                        distance_from_recent_low_pct=recent_range_context["distance_from_recent_low_pct"],
+                        block_negative_slope_high_volume_atr=strategy.mean_reversion_block_negative_slope_high_volume_atr,
+                        negative_slope_threshold_pct=strategy.mean_reversion_negative_slope_threshold_pct,
+                        high_volume_ratio=strategy.mean_reversion_high_volume_ratio,
+                        mid_atr_percentile=strategy.mean_reversion_mid_atr_percentile,
+                        min_distance_from_low_pct=strategy.mean_reversion_min_distance_from_low_pct,
                     )
                 bullish = bool(signal_state["bullish"])
                 bearish = bool(signal_state["bearish"])
@@ -830,6 +840,9 @@ def run_bot():
                 macd_filter_passed = bool(signal_state["macd_filter_passed"])
                 trend_follow_entry = bool(signal_state["trend_follow_entry"])
                 entry_signal = bool(signal_state["entry_signal"])
+                mean_reversion_falling_knife_blocked = bool(
+                    signal_state.get("falling_knife_blocked", False)
+                )
                 overheated_entry_blocked = is_overheated_entry_risk(
                     volume_ratio=volume_ratio,
                     atr_percentile=atr_percentile,
@@ -1143,6 +1156,15 @@ def run_bot():
                     f"고점 거리: {0.0 if recent_range_context['distance_from_recent_high_pct'] is None else recent_range_context['distance_from_recent_high_pct']:.4f}% | "
                     f"ATR percentile: {0.0 if atr_percentile is None else atr_percentile:.1f}"
                 )
+                if mean_reversion_falling_knife_blocked:
+                    log(
+                        f"[{symbol}] mean_reversion 하단 복귀가 나왔지만 음수 slope+고거래량+중고ATR+저점 근접 조합이라 신규 진입을 차단합니다 "
+                        f"(MA slope {0.0 if ma_slope_pct is None else ma_slope_pct:.4f}%, "
+                        f"price slope {0.0 if price_slope_pct is None else price_slope_pct:.4f}%, "
+                        f"volume {0.0 if volume_ratio is None else volume_ratio:.2f}, "
+                        f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}, "
+                        f"저점 거리 {0.0 if recent_range_context['distance_from_recent_low_pct'] is None else recent_range_context['distance_from_recent_low_pct']:.4f}%)."
+                    )
                 if overheated_entry_blocked:
                     log(
                         f"[{symbol}] 고거래량+고ATR+RSI 과열 조합으로 신규 진입을 차단합니다 "

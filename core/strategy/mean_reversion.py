@@ -1,5 +1,6 @@
 """
 작업 요약
+- 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합에서는 mean_reversion 진입을 차단하도록 보강
 - ATR percentile 과 최근 range 위치를 함께 확인해 횡보장 반등 진입이 고변동/상단 추격으로 바뀌지 않도록 보강
 - mean_reversion 전용 RSI 범위와 MACD 회복 조건을 적용해 추세형 hard filter 를 보수적으로 완화
 - 횡보/혼조 구간에서 Bollinger 하단 복귀 기반 mean reversion 진입 신호를 계산하는 모듈을 추가
@@ -32,6 +33,15 @@ def compute_bollinger_mean_reversion_state(
     max_atr_percentile: float = 80.0,
     range_position_pct: float | None = None,
     max_range_position_pct: float = 35.0,
+    ma_slope_pct: float | None = None,
+    price_slope_pct: float | None = None,
+    volume_ratio: float | None = None,
+    distance_from_recent_low_pct: float | None = None,
+    block_negative_slope_high_volume_atr: bool = True,
+    negative_slope_threshold_pct: float = 0.0,
+    high_volume_ratio: float = 2.0,
+    mid_atr_percentile: float = 60.0,
+    min_distance_from_low_pct: float = 0.10,
 ) -> dict[str, float | bool]:
     """볼린저 하단 복귀와 중단 회귀 여지를 기반으로 mean reversion 신호를 계산한다."""
     if bb_lower is None or bb_mid is None:
@@ -45,6 +55,13 @@ def compute_bollinger_mean_reversion_state(
             "trend_follow_entry": False,
             "rsi_filter_passed": False,
             "macd_filter_passed": False,
+            "atr_context_passed": False,
+            "range_context_passed": False,
+            "falling_knife_blocked": False,
+            "negative_slope_context": False,
+            "high_volume_context": False,
+            "mid_atr_context": False,
+            "low_reclaim_unconfirmed": False,
         }
 
     lower_reclaim = prev_close <= bb_lower and last_close > bb_lower
@@ -93,6 +110,31 @@ def compute_bollinger_mean_reversion_state(
         range_position_pct is None
         or range_position_pct <= max_range_position_pct
     )
+    negative_slope_context = (
+        ma_slope_pct is not None
+        and price_slope_pct is not None
+        and ma_slope_pct < negative_slope_threshold_pct
+        and price_slope_pct < negative_slope_threshold_pct
+    )
+    high_volume_context = (
+        volume_ratio is not None
+        and volume_ratio >= high_volume_ratio
+    )
+    mid_atr_context = (
+        atr_percentile is not None
+        and atr_percentile >= mid_atr_percentile
+    )
+    low_reclaim_unconfirmed = (
+        distance_from_recent_low_pct is not None
+        and distance_from_recent_low_pct <= min_distance_from_low_pct
+    )
+    falling_knife_blocked = (
+        block_negative_slope_high_volume_atr
+        and negative_slope_context
+        and high_volume_context
+        and mid_atr_context
+        and low_reclaim_unconfirmed
+    )
 
     signal_score = calc_weighted_signal_score(
         {
@@ -117,6 +159,7 @@ def compute_bollinger_mean_reversion_state(
         and macd_filter_passed
         and atr_context_passed
         and range_context_passed
+        and not falling_knife_blocked
     )
     return {
         "bullish": lower_reclaim,
@@ -130,4 +173,9 @@ def compute_bollinger_mean_reversion_state(
         "macd_filter_passed": macd_filter_passed,
         "atr_context_passed": atr_context_passed,
         "range_context_passed": range_context_passed,
+        "falling_knife_blocked": falling_knife_blocked,
+        "negative_slope_context": negative_slope_context,
+        "high_volume_context": high_volume_context,
+        "mid_atr_context": mid_atr_context,
+        "low_reclaim_unconfirmed": low_reclaim_unconfirmed,
     }

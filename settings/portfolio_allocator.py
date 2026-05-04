@@ -1,5 +1,6 @@
 """
 수정 요약
+- OKX/업비트 포트폴리오 배분 잔고 조회에도 거래소 재시도 설정을 적용해 일시적 balance timeout loop_error 를 줄이도록 보강
 - 2026-04-09: signal/market/execution/diversification 점수를 합산하는 score 기반 동적 배분 설정을 추가
 - 2026-04-03: 포트폴리오 배분 설정을 canonical runtime TOML 과 typed access helper 기준으로 읽도록 정리
 - 목표 자산은 기존 분할 진입 주문금액이 아니라 남아 있는 목표 예산 자체를 주문금액으로 쓰도록 조정
@@ -98,6 +99,47 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _is_retryable_exchange_error(exc: Exception) -> bool:
+    """거래소 일시 지연으로 재시도 가능한 예외인지 문자열 기반으로 판별한다."""
+    lowered = str(exc).lower()
+    return (
+        "timeout" in lowered
+        or "networkerror" in lowered
+        or "connection reset" in lowered
+        or "too many requests" in lowered
+        or "ratelimitexceeded" in lowered
+    )
+
+
+def _call_exchange_with_retry(exchange, func, *args, **kwargs):
+    """클라이언트 options 에 들어 있는 거래소별 재시도 정책으로 호출한다."""
+    options = getattr(exchange, "options", {}) or {}
+    exchange_id = str(getattr(exchange, "id", "") or "").lower()
+    prefix = "upbit" if exchange_id == "upbit" else "okx"
+    default_retry_count = 3 if prefix == "upbit" else 2
+    default_retry_delay_sec = 1.2 if prefix == "upbit" else 1.0
+    retry_count = int(
+        options.get(f"{prefix}_request_retry_count", default_retry_count)
+        or default_retry_count
+    )
+    retry_delay_sec = float(
+        options.get(f"{prefix}_request_retry_delay_sec", default_retry_delay_sec)
+        or default_retry_delay_sec
+    )
+    last_error: Exception | None = None
+    for attempt in range(retry_count + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if not _is_retryable_exchange_error(exc) or attempt >= retry_count:
+                raise
+            time.sleep(retry_delay_sec * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("거래소 재시도 호출이 비정상 종료되었습니다.")
+
+
 def _normalize_targets(targets: dict[str, float]) -> dict[str, float]:
     """양수 비중만 합이 1이 되도록 정규화한다."""
     filtered = {asset: weight for asset, weight in targets.items() if weight > 0}
@@ -135,7 +177,7 @@ def _apply_dynamic_bonus(
 
 def _fetch_okx_balance_map(exchange, assets: list[str]) -> dict[str, float]:
     """OKX 계정 원시 API 로 여러 자산 잔고를 읽는다."""
-    res = exchange.privateGetAccountBalance({})
+    res = _call_exchange_with_retry(exchange, exchange.privateGetAccountBalance, {})
     data = res.get("data", []) if isinstance(res, dict) else res
     if not data:
         return {asset: 0.0 for asset in assets}
@@ -152,7 +194,7 @@ def _fetch_okx_balance_map(exchange, assets: list[str]) -> dict[str, float]:
 
 def _fetch_upbit_balance_map(exchange, assets: list[str]) -> dict[str, float]:
     """업비트 잔고를 여러 자산 기준으로 읽는다."""
-    balance = exchange.fetch_balance()
+    balance = _call_exchange_with_retry(exchange, exchange.fetch_balance)
     balances = {asset: 0.0 for asset in assets}
     for asset in assets:
         balances[asset] = float(balance.get(asset, {}).get("free", 0.0))

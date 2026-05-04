@@ -1,5 +1,6 @@
 """
 수정 요약
+- mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합 차단 설정을 추가
 - 2026-05-02: 거래량 급등 진입을 손절방지 조건 충족 시 소액/추가확인 후보로 낮추는 설정을 추가
 - 2026-05-02: 손절 방지를 위해 BTC 레짐+상관+ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드 설정을 추가
 - 2026-05-01: 단독 지표 오탐을 줄이기 위해 거래량+ATR+RSI 과열 가드와 과열거리 추가확인 설정을 추가
@@ -111,6 +112,11 @@ class StrategySettings:
     mean_reversion_macd_recovery_epsilon: float
     mean_reversion_max_atr_percentile: float
     mean_reversion_max_range_position_pct: float
+    mean_reversion_block_negative_slope_high_volume_atr: bool
+    mean_reversion_negative_slope_threshold_pct: float
+    mean_reversion_high_volume_ratio: float
+    mean_reversion_mid_atr_percentile: float
+    mean_reversion_min_distance_from_low_pct: float
     overheat_guard_volume_ratio: float
     overheat_guard_atr_percentile: float
     overheat_guard_rsi: float
@@ -724,6 +730,11 @@ def load_strategy_settings(
         mean_reversion_macd_recovery_epsilon=config_float("strategy", "mean_reversion_macd_recovery_epsilon", 0.0, env_key="STRATEGY_MEAN_REVERSION_MACD_RECOVERY_EPSILON"),
         mean_reversion_max_atr_percentile=config_float("strategy", "mean_reversion_max_atr_percentile", 80.0, env_key="STRATEGY_MEAN_REVERSION_MAX_ATR_PERCENTILE"),
         mean_reversion_max_range_position_pct=config_float("strategy", "mean_reversion_max_range_position_pct", 35.0, env_key="STRATEGY_MEAN_REVERSION_MAX_RANGE_POSITION_PCT"),
+        mean_reversion_block_negative_slope_high_volume_atr=config_bool("strategy", "mean_reversion_block_negative_slope_high_volume_atr", True, env_key="STRATEGY_MEAN_REVERSION_BLOCK_NEGATIVE_SLOPE_HIGH_VOLUME_ATR"),
+        mean_reversion_negative_slope_threshold_pct=config_float("strategy", "mean_reversion_negative_slope_threshold_pct", 0.0, env_key="STRATEGY_MEAN_REVERSION_NEGATIVE_SLOPE_THRESHOLD_PCT"),
+        mean_reversion_high_volume_ratio=config_float("strategy", "mean_reversion_high_volume_ratio", 2.0, env_key="STRATEGY_MEAN_REVERSION_HIGH_VOLUME_RATIO"),
+        mean_reversion_mid_atr_percentile=config_float("strategy", "mean_reversion_mid_atr_percentile", 60.0, env_key="STRATEGY_MEAN_REVERSION_MID_ATR_PERCENTILE"),
+        mean_reversion_min_distance_from_low_pct=config_float("strategy", "mean_reversion_min_distance_from_low_pct", 0.10, env_key="STRATEGY_MEAN_REVERSION_MIN_DISTANCE_FROM_LOW_PCT"),
         overheat_guard_volume_ratio=config_float("strategy", "overheat_guard_volume_ratio", 2.0, env_key="STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO"),
         overheat_guard_atr_percentile=config_float("strategy", "overheat_guard_atr_percentile", 85.0, env_key="STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE"),
         overheat_guard_rsi=config_float("strategy", "overheat_guard_rsi", 68.0, env_key="STRATEGY_OVERHEAT_GUARD_RSI"),
