@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-05: 업비트 알트 고품질 후보가 최소주문금액에만 걸릴 때 예산과 손절방지 조건 확인 후 최소 주문 floor 를 적용
+- 2026-05-05: LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 업비트 주문 버퍼 후 최소금액 차단을 퍼널에 반영
 - 2026-05-05: mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합을 신규 진입 차단 조건으로 연결
 - 2026-05-02: 업비트 ETH/XRP 거래량 급등 신호가 손절방지 조건을 만족하면 소액/추가확인 후보로 낮추도록 반영
 - 2026-05-02: BTC 상관계수 단독 차단은 결합 손절방지 가드가 꺼진 fallback 으로 낮춰 좋은 거래 차단을 줄임
@@ -122,6 +124,7 @@ from core.strategy.combined_filters import (
     safe_optional_float,
 )
 from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
+from core.strategy.low_energy import evaluate_low_energy_probe
 from core.strategy.mean_reversion import compute_bollinger_mean_reversion_state
 from core.strategy.regime_router import route_alt_strategy
 from core.strategy.volume_spike_entry import evaluate_volume_spike_entry_downgrade
@@ -889,7 +892,7 @@ def run_bot():
                     bb_upper=bb_upper,
                     squeeze_min_volume_ratio=strategy.squeeze_min_volume_ratio,
                 )
-                if strategy_key == "mean_reversion":
+                if strategy_key in {"mean_reversion", "low_energy_probe"}:
                     signal_state = compute_bollinger_mean_reversion_state(
                         prev_close=prev_close,
                         last_close=last_close,
@@ -934,6 +937,36 @@ def run_bot():
                 mean_reversion_falling_knife_blocked = bool(
                     signal_state.get("falling_knife_blocked", False)
                 )
+                low_energy_probe_decision = evaluate_low_energy_probe(
+                    enabled=strategy.enable_low_energy_probe,
+                    low_energy_guard_active=low_energy_guard_active,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.low_energy_probe_min_signal_score,
+                    htf_bullish=htf_bullish,
+                    require_htf_bullish=strategy.low_energy_probe_require_htf_bullish,
+                    volume_ratio=volume_ratio,
+                    min_volume_ratio=strategy.low_energy_probe_min_volume_ratio,
+                    orderbook_pressure_score=orderbook_pressure_score,
+                    min_orderbook_pressure_score=strategy.low_energy_probe_min_orderbook_pressure_score,
+                    atr_percentile=atr_percentile,
+                    max_atr_percentile=strategy.low_energy_probe_max_atr_percentile,
+                    falling_knife_blocked=mean_reversion_falling_knife_blocked,
+                    position_scale=strategy.low_energy_probe_position_scale,
+                    extra_confirmation_loops=strategy.low_energy_probe_extra_confirmation_loops,
+                )
+                effective_low_energy_guard_active = (
+                    low_energy_guard_active and not low_energy_probe_decision.allowed
+                )
+                effective_symbol_regime_blocks_entry = (
+                    symbol_regime_blocks_entry and not low_energy_probe_decision.allowed
+                )
+                if low_energy_probe_decision.allowed:
+                    effective_max_entry_count = max(1, effective_max_entry_count)
+                    log(
+                        f"[{symbol}] LOW_ENERGY 이지만 고품질 소액 probe 후보로 전환합니다. "
+                        f"signal={signal_score:.1f}, volume={0.0 if volume_ratio is None else volume_ratio:.3f}, "
+                        f"position_scale={low_energy_probe_decision.position_scale:.2f}x"
+                    )
                 overheated_entry_blocked = is_overheated_entry_risk(
                     volume_ratio=volume_ratio,
                     atr_percentile=atr_percentile,
@@ -1100,8 +1133,8 @@ def run_bot():
                     raw_entry_candidate = (
                         entry_signal
                         and bullish
-                        and not symbol_regime_blocks_entry
-                        and not low_energy_guard_active
+                        and not effective_symbol_regime_blocks_entry
+                        and not effective_low_energy_guard_active
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
                         and not stop_loss_pattern_blocked
@@ -1116,8 +1149,8 @@ def run_bot():
                 else:
                     raw_entry_candidate = (
                         entry_signal
-                        and not symbol_regime_blocks_entry
-                        and not low_energy_guard_active
+                        and not effective_symbol_regime_blocks_entry
+                        and not effective_low_energy_guard_active
                         and not correlation_entry_blocked
                         and not fill_quality_entry_blocked
                         and not stop_loss_pattern_blocked
@@ -1148,6 +1181,7 @@ def run_bot():
                             else 0
                         )
                         + volume_spike_entry_downgrade.extra_confirmation_loops
+                        + low_energy_probe_decision.extra_confirmation_loops
                     ),
                 )
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
@@ -1544,6 +1578,18 @@ def run_bot():
                         base_position_ratio=position_ratio,
                         regime_scale=volume_spike_entry_downgrade.position_scale,
                     )
+                if low_energy_probe_decision.allowed:
+                    low_energy_probe_position_ratio = apply_regime_position_scale(
+                        base_position_ratio=base_position_ratio,
+                        regime_scale=(
+                            btc_regime_position_scale
+                            * btc_atr_position_scale
+                            * alt_atr_position_scale
+                            * low_energy_probe_decision.position_scale
+                            * allocation_score_result.score_scale
+                        ),
+                    )
+                    position_ratio = max(position_ratio, low_energy_probe_position_ratio)
                 log(
                     f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
                     f"심볼 레짐 스케일 {regime_position_scale:.2f}x | "
@@ -1586,6 +1632,58 @@ def run_bot():
                     dynamic_bonus_eligible=dynamic_bonus_eligible,
                 )
                 krw_to_use = allocation_decision.approved_order_value_quote
+                executable_krw_to_use = apply_upbit_buy_order_buffer(
+                    requested_order_value_quote=krw_to_use,
+                    quote_free=quote_free,
+                    fee_rate_pct=config["fee_rate_pct"],
+                    buffer_pct=config["krw_order_buffer_pct"],
+                    buffer_krw=config["krw_order_buffer_krw"],
+                )
+                upbit_min_order_floor_applied = False
+                upbit_min_order_floor_reason = "not_needed"
+                if executable_krw_to_use <= strategy.min_buy_order_value:
+                    floor_min_signal_score = max(
+                        effective_signal_score_min,
+                        strategy.upbit_min_order_floor_min_signal_score,
+                    )
+                    floor_requested_krw = strategy.min_buy_order_value * (
+                        1.0 + max(0.0, strategy.upbit_min_order_floor_buffer_pct)
+                    )
+                    floor_quality_ok = (
+                        strategy.enable_upbit_min_order_floor
+                        and signal_score >= floor_min_signal_score
+                        and (not strategy.upbit_min_order_floor_require_htf_bullish or htf_bullish)
+                        and not htf_bearish_entry_blocked
+                        and not mean_reversion_falling_knife_blocked
+                        and not overheated_entry_blocked
+                        and not btc_correlation_volatility_blocked
+                        and not volume_atr_execution_blocked
+                        and not stop_loss_context_reentry_blocked
+                    )
+                    budget_ok = (
+                        allocation_decision.remaining_budget_quote >= floor_requested_krw
+                        and quote_free >= floor_requested_krw
+                    )
+                    if not strategy.enable_upbit_min_order_floor:
+                        upbit_min_order_floor_reason = "disabled"
+                    elif not floor_quality_ok:
+                        upbit_min_order_floor_reason = "quality_gate_blocked"
+                    elif not budget_ok:
+                        upbit_min_order_floor_reason = "budget_or_quote_free_insufficient"
+                    else:
+                        floored_krw_to_use = apply_upbit_buy_order_buffer(
+                            requested_order_value_quote=floor_requested_krw,
+                            quote_free=quote_free,
+                            fee_rate_pct=config["fee_rate_pct"],
+                            buffer_pct=config["krw_order_buffer_pct"],
+                            buffer_krw=config["krw_order_buffer_krw"],
+                        )
+                        if floored_krw_to_use > strategy.min_buy_order_value:
+                            executable_krw_to_use = floored_krw_to_use
+                            upbit_min_order_floor_applied = True
+                            upbit_min_order_floor_reason = "applied"
+                        else:
+                            upbit_min_order_floor_reason = "buffered_floor_still_too_small"
                 log(
                     f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
                     f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
@@ -1660,6 +1758,10 @@ def run_bot():
                     htf_bearish_entry_blocked=htf_bearish_entry_blocked,
                     base_free=base_free,
                     quote_free=quote_free,
+                    requested_order_value_quote=krw_to_use,
+                    executable_order_value_quote=executable_krw_to_use,
+                    upbit_min_order_floor_applied=upbit_min_order_floor_applied,
+                    upbit_min_order_floor_reason=upbit_min_order_floor_reason,
                     position_ratio=position_ratio,
                     has_position=has_position,
                     position_quote_value=position_quote_value,
@@ -1684,6 +1786,10 @@ def run_bot():
                     break_even_guard_triggered=break_even_guard_triggered,
                     profit_retrace_from_mfe_pct=profit_retrace_from_mfe_pct,
                     low_energy_guard_active=low_energy_guard_active,
+                    effective_low_energy_guard_active=effective_low_energy_guard_active,
+                    low_energy_probe_allowed=low_energy_probe_decision.allowed,
+                    low_energy_probe_reason=low_energy_probe_decision.reason,
+                    low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
                     low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                     low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
                     low_energy_ready_count=low_energy_snapshot.ready_count,
@@ -1768,8 +1874,16 @@ def run_bot():
                     daily_loss_limit_reached=daily_loss_limit_reached,
                     daily_realized_pnl_quote=daily_realized_pnl_quote,
                     max_daily_loss_quote=config["max_daily_loss_quote"],
-                    order_value_quote=krw_to_use,
+                    order_value_quote=executable_krw_to_use,
                     min_buy_order_value=strategy.min_buy_order_value,
+                    entry_strategy_key=strategy_key,
+                    order_value_block_reason="order_value_too_small_after_upbit_buffer",
+                    squeeze_band_passed=bool(signal_state.get("squeeze_band_passed", True)),
+                    squeeze_volume_passed=bool(signal_state.get("squeeze_volume_passed", True)),
+                    squeeze_breakout_passed=bool(signal_state.get("squeeze_breakout_passed", True)),
+                    atr_context_passed=bool(signal_state.get("atr_context_passed", True)),
+                    range_context_passed=bool(signal_state.get("range_context_passed", True)),
+                    falling_knife_blocked=mean_reversion_falling_knife_blocked,
                 )
                 entry_steps.extend(
                     [
@@ -1782,18 +1896,29 @@ def run_bot():
                         ),
                         FunnelStep(
                             stage="market_regime",
-                            passed=not low_energy_guard_active,
-                            reason="low_energy_market",
+                            passed=not effective_low_energy_guard_active,
+                            reason=low_energy_probe_decision.reason if low_energy_guard_active else "low_energy_market",
                             actual={
+                                "probe_allowed": low_energy_probe_decision.allowed,
                                 "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
                                 "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
                                 "ready_count": low_energy_snapshot.ready_count,
+                                "signal_score": signal_score,
+                                "volume_ratio": volume_ratio,
+                                "orderbook_pressure_score": orderbook_pressure_score,
+                                "atr_percentile": atr_percentile,
                             },
-                            required={"low_energy_market_inactive": True},
+                            required={
+                                "low_energy_market_inactive_or_probe_allowed": True,
+                                "probe_min_signal_score": strategy.low_energy_probe_min_signal_score,
+                                "probe_min_volume_ratio": strategy.low_energy_probe_min_volume_ratio,
+                                "probe_min_orderbook_pressure_score": strategy.low_energy_probe_min_orderbook_pressure_score,
+                                "probe_max_atr_percentile": strategy.low_energy_probe_max_atr_percentile,
+                            },
                         ),
                         FunnelStep(
                             stage="symbol_regime",
-                            passed=not symbol_regime_blocks_entry,
+                            passed=not effective_symbol_regime_blocks_entry,
                             reason="symbol_regime_blocks_entry",
                             actual={"symbol_regime": symbol_regime},
                             required={"symbol_regime_allows_entry": True},
@@ -1887,6 +2012,27 @@ def run_bot():
                             required={"required_confirmations": entry_timing_snapshot.required_confirmations},
                         ),
                         FunnelStep(
+                            stage="upbit_min_order_floor",
+                            passed=(
+                                executable_krw_to_use > strategy.min_buy_order_value
+                                or upbit_min_order_floor_reason in {"not_needed", "applied"}
+                            ),
+                            reason=f"upbit_min_order_floor_{upbit_min_order_floor_reason}",
+                            actual={
+                                "floor_applied": upbit_min_order_floor_applied,
+                                "floor_reason": upbit_min_order_floor_reason,
+                                "requested_order_value_quote": krw_to_use,
+                                "executable_order_value_quote": executable_krw_to_use,
+                            },
+                            required={
+                                "min_order_value": strategy.min_buy_order_value,
+                                "min_signal_score": max(
+                                    effective_signal_score_min,
+                                    strategy.upbit_min_order_floor_min_signal_score,
+                                ),
+                            },
+                        ),
+                        FunnelStep(
                             stage="portfolio_budget",
                             passed=allocation_decision.remaining_budget_quote > 0,
                             reason="portfolio_budget_exhausted",
@@ -1968,27 +2114,15 @@ def run_bot():
 
                 # 매수 신호 발생 시, 분할 횟수/쿨다운/추가 매수 가격 조건을 만족하면 진입
                 if entry_ready:
-                    if krw_to_use <= strategy.min_buy_order_value:
+                    if executable_krw_to_use <= strategy.min_buy_order_value:
                         log(
-                            f"[{symbol}] 주문 금액이 {strategy.min_buy_order_value} {quote} 이하라 매수 주문을 생략합니다."
+                            f"[{symbol}] 주문 가능 KRW 버퍼 반영 후 금액이 "
+                            f"{strategy.min_buy_order_value:.0f} {quote} 이하라 매수 주문을 생략합니다."
                         )
                     else:
-                        buffered_order_value = apply_upbit_buy_order_buffer(
-                            requested_order_value_quote=krw_to_use,
-                            quote_free=quote_free,
-                            fee_rate_pct=config["fee_rate_pct"],
-                            buffer_pct=config["krw_order_buffer_pct"],
-                            buffer_krw=config["krw_order_buffer_krw"],
-                        )
-                        if buffered_order_value <= strategy.min_buy_order_value:
-                            log(
-                                f"[{symbol}] 주문 가능 KRW 버퍼를 반영하면 금액이 "
-                                f"{strategy.min_buy_order_value:.0f} {quote} 이하라 매수 주문을 생략합니다."
-                            )
-                            continue
-                        amount = buffered_order_value / last_close
+                        amount = executable_krw_to_use / last_close
                         amount = safe_amount_to_precision(exchange, symbol, amount)
-                        cost_to_spend = buffered_order_value
+                        cost_to_spend = executable_krw_to_use
                         structured_logger.log_strategy(
                             symbol=symbol,
                             side="entry",

@@ -1,5 +1,6 @@
 """
 작업 요약
+- no_entry_signal 포괄 차단을 raw 신호, squeeze, mean_reversion 컨텍스트, 최종 integrity 단계로 세분화
 - 거래량 상한 초과 신호를 소액/추가확인 후보로 낮춘 경우 volume_cap 단계를 통과하도록 확장
 - OKX funding rate 과열 차단 단계를 알트/BTC 진입 퍼널에 추가
 - 2026-04-10: 알트 보수형 튜닝용 최대 이격도와 최대 거래량 상한 단계를 퍼널에 추가했다.
@@ -53,6 +54,14 @@ def build_alt_entry_steps(
     max_daily_loss_quote: float,
     order_value_quote: float,
     min_buy_order_value: float,
+    entry_strategy_key: str = "ma",
+    order_value_block_reason: str = "order_value_too_small",
+    squeeze_band_passed: bool = True,
+    squeeze_volume_passed: bool = True,
+    squeeze_breakout_passed: bool = True,
+    atr_context_passed: bool = True,
+    range_context_passed: bool = True,
+    falling_knife_blocked: bool = False,
     funding_rate_filter_passed: bool = True,
     funding_rate: float | None = None,
     max_funding_rate: float | None = None,
@@ -64,13 +73,58 @@ def build_alt_entry_steps(
     stop_loss_pattern_volume_ratio: float | None = None,
     stop_loss_pattern_required_volume_ratio: float | None = None,
 ):
-    return [
+    normalized_strategy = str(entry_strategy_key or "ma").strip().lower()
+    raw_signal_passed = bullish or trend_follow_entry
+    raw_signal_reason = "trend_signal_missing"
+    raw_signal_required = {"bullish_or_trend_follow_entry": True}
+    if normalized_strategy in {"mean_reversion", "low_energy_probe"}:
+        raw_signal_passed = bullish
+        raw_signal_reason = "mean_reversion_lower_reclaim_missing"
+        raw_signal_required = {"bollinger_lower_reclaim": True}
+    elif normalized_strategy == "squeeze":
+        raw_signal_passed = squeeze_band_passed and squeeze_volume_passed and squeeze_breakout_passed
+        raw_signal_reason = "squeeze_entry_signal_missing"
+        raw_signal_required = {
+            "squeeze_band_passed": True,
+            "squeeze_volume_passed": True,
+            "squeeze_breakout_passed": True,
+        }
+
+    steps = [
         FunnelStep(
-            stage="trend",
-            passed=entry_signal,
-            reason="no_entry_signal",
-            actual={"bullish_signal": bullish, "trend_follow_entry": trend_follow_entry},
-            required={"bullish_or_trend_follow_entry": True},
+            stage="raw_entry_signal",
+            passed=raw_signal_passed,
+            reason=raw_signal_reason,
+            actual={
+                "strategy_key": normalized_strategy,
+                "bullish_signal": bullish,
+                "trend_follow_entry": trend_follow_entry,
+                "squeeze_band_passed": squeeze_band_passed,
+                "squeeze_volume_passed": squeeze_volume_passed,
+                "squeeze_breakout_passed": squeeze_breakout_passed,
+            },
+            required=raw_signal_required,
+        ),
+        FunnelStep(
+            stage="squeeze_band",
+            passed=(normalized_strategy != "squeeze" or squeeze_band_passed),
+            reason="squeeze_band_not_tight",
+            actual={"squeeze_band_passed": squeeze_band_passed},
+            required={"squeeze_band_passed": True},
+        ),
+        FunnelStep(
+            stage="squeeze_volume",
+            passed=(normalized_strategy != "squeeze" or squeeze_volume_passed),
+            reason="squeeze_volume_not_expanded",
+            actual={"squeeze_volume_passed": squeeze_volume_passed},
+            required={"squeeze_volume_passed": True},
+        ),
+        FunnelStep(
+            stage="squeeze_breakout",
+            passed=(normalized_strategy != "squeeze" or squeeze_breakout_passed),
+            reason="squeeze_breakout_missing",
+            actual={"squeeze_breakout_passed": squeeze_breakout_passed},
+            required={"squeeze_breakout_passed": True},
         ),
         FunnelStep(
             stage="distance",
@@ -99,6 +153,34 @@ def build_alt_entry_steps(
             reason="macd_filter_blocked",
             actual={"macd_filter_passed": macd_filter_passed},
             required={"macd_histogram_positive": True},
+        ),
+        FunnelStep(
+            stage="mean_reversion_atr_context",
+            passed=(normalized_strategy not in {"mean_reversion", "low_energy_probe"} or atr_context_passed),
+            reason="mean_reversion_atr_context_blocked",
+            actual={"atr_context_passed": atr_context_passed},
+            required={"atr_context_passed": True},
+        ),
+        FunnelStep(
+            stage="mean_reversion_range_context",
+            passed=(normalized_strategy not in {"mean_reversion", "low_energy_probe"} or range_context_passed),
+            reason="mean_reversion_range_context_blocked",
+            actual={"range_context_passed": range_context_passed},
+            required={"range_context_passed": True},
+        ),
+        FunnelStep(
+            stage="mean_reversion_falling_knife",
+            passed=(normalized_strategy not in {"mean_reversion", "low_energy_probe"} or not falling_knife_blocked),
+            reason="mean_reversion_falling_knife_blocked",
+            actual={"falling_knife_blocked": falling_knife_blocked},
+            required={"falling_knife_blocked": False},
+        ),
+        FunnelStep(
+            stage="entry_signal_integrity",
+            passed=entry_signal,
+            reason="entry_signal_unclassified_block",
+            actual={"entry_signal": entry_signal, "strategy_key": normalized_strategy},
+            required={"entry_signal": True},
         ),
         FunnelStep(
             stage="higher_timeframe",
@@ -191,11 +273,12 @@ def build_alt_entry_steps(
         FunnelStep(
             stage="order_value",
             passed=order_value_quote > min_buy_order_value,
-            reason="order_value_too_small",
+            reason=order_value_block_reason,
             actual={"order_value_quote": order_value_quote},
             required={"min_buy_order_value": min_buy_order_value},
         ),
     ]
+    return steps
 
 
 def build_alt_exit_steps(
@@ -330,6 +413,12 @@ def build_btc_entry_steps(
     min_buy_order_value: float,
     estimated_entry_amount: float,
     min_order_amount: float,
+    entry_strategy_key: str = "ema",
+    low_energy_probe_allowed: bool = False,
+    low_energy_probe_reason: str | None = None,
+    low_energy_probe_min_signal_score: float | None = None,
+    low_energy_probe_min_volume_ratio: float | None = None,
+    low_energy_probe_max_atr_percentile: float | None = None,
     funding_rate_filter_passed: bool = True,
     funding_rate: float | None = None,
     max_funding_rate: float | None = None,
@@ -339,12 +428,22 @@ def build_btc_entry_steps(
     stop_loss_pattern_signal_score: float | None = None,
     stop_loss_pattern_min_signal_score: float | None = None,
 ):
+    normalized_strategy = str(entry_strategy_key or "ema").strip().lower()
+    raw_signal_passed = bullish or trend_follow_entry
+    raw_signal_reason = "trend_signal_missing"
+    raw_signal_required = {"bullish_signal_or_trend_follow_entry": True}
+    if normalized_strategy == "donchian":
+        raw_signal_passed = bullish
+        raw_signal_reason = "donchian_breakout_missing"
+        raw_signal_required = {"donchian_breakout": True}
+
     return [
         FunnelStep(
-            stage="trend",
-            passed=entry_signal,
-            reason="no_entry_signal",
+            stage="raw_entry_signal",
+            passed=raw_signal_passed,
+            reason=raw_signal_reason,
             actual={
+                "strategy_key": normalized_strategy,
                 "bullish_signal": bullish,
                 "trend_follow_entry": trend_follow_entry,
                 "ema_aligned": ema_aligned,
@@ -354,9 +453,9 @@ def build_btc_entry_steps(
                 "signal_score": signal_score,
             },
             required={
-                "bullish_signal_or_trend_follow_entry": True,
                 "min_ema_spread_pct": effective_min_ema_spread_pct,
                 "min_signal_score": min_signal_score,
+                **raw_signal_required,
             },
         ),
         FunnelStep(
@@ -375,6 +474,13 @@ def build_btc_entry_steps(
                 "min_bb_width_pct": min_bb_width_pct,
                 "max_bb_width_pct": max_bb_width_pct,
             },
+        ),
+        FunnelStep(
+            stage="entry_signal_integrity",
+            passed=entry_signal,
+            reason="entry_signal_unclassified_block",
+            actual={"entry_signal": entry_signal, "strategy_key": normalized_strategy},
+            required={"entry_signal": True},
         ),
         FunnelStep(
             stage="position",
@@ -411,13 +517,22 @@ def build_btc_entry_steps(
         FunnelStep(
             stage="market_regime",
             passed=not low_energy_guard_active,
-            reason="low_energy_market",
+            reason=low_energy_probe_reason or "low_energy_market",
             actual={
+                "probe_allowed": low_energy_probe_allowed,
                 "avg_volume_ratio": low_energy_avg_volume_ratio,
                 "avg_abs_change_pct": low_energy_avg_abs_change_pct,
                 "ready_count": low_energy_ready_count,
+                "signal_score": signal_score,
+                "volume_ratio": volume_ratio,
+                "atr_pct": atr_pct,
             },
-            required={"low_energy_market_inactive": True},
+            required={
+                "low_energy_market_inactive_or_probe_allowed": True,
+                "probe_min_signal_score": low_energy_probe_min_signal_score,
+                "probe_min_volume_ratio": low_energy_probe_min_volume_ratio,
+                "probe_max_atr_percentile": low_energy_probe_max_atr_percentile,
+            },
         ),
         FunnelStep(
             stage="symbol_regime",
@@ -568,7 +683,7 @@ def build_btc_add_on_steps(
         FunnelStep(
             stage="add_on_trend",
             passed=entry_signal,
-            reason="no_entry_signal",
+            reason="add_on_entry_signal_missing",
             actual={
                 "bullish_signal": bullish,
                 "trend_follow_entry": trend_follow_entry,

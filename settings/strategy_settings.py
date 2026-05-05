@@ -1,5 +1,7 @@
 """
 수정 요약
+- 업비트 알트 고품질 READY 후보가 최소주문금액에만 걸릴 때 보수적으로 주문 floor 를 적용하는 설정을 추가
+- LOW_ENERGY 소액 probe 진입 보정 설정을 추가해 완전 차단 대신 고품질 후보만 추가확인으로 보낼 수 있게 확장
 - mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합 차단 설정을 추가
 - 2026-05-02: 거래량 급등 진입을 손절방지 조건 충족 시 소액/추가확인 후보로 낮추는 설정을 추가
 - 2026-05-02: 손절 방지를 위해 BTC 레짐+상관+ATR, 거래량+ATR+체결 약세, 손절 후 유사 조건 재진입 가드 설정을 추가
@@ -135,6 +137,18 @@ class StrategySettings:
     stop_loss_context_reentry_cooldown_sec: int
     stop_loss_context_min_similarity_count: int
     stop_loss_context_extra_confirmation_loops: int
+    enable_low_energy_probe: bool
+    low_energy_probe_min_signal_score: float
+    low_energy_probe_min_volume_ratio: float
+    low_energy_probe_require_htf_bullish: bool
+    low_energy_probe_min_orderbook_pressure_score: float
+    low_energy_probe_max_atr_percentile: float
+    low_energy_probe_position_scale: float
+    low_energy_probe_extra_confirmation_loops: int
+    enable_upbit_min_order_floor: bool
+    upbit_min_order_floor_min_signal_score: float
+    upbit_min_order_floor_buffer_pct: float
+    upbit_min_order_floor_require_htf_bullish: bool
     enable_noise_ratio_adaptation: bool
     noise_ratio_lookback: int
     noise_ratio_baseline: float
@@ -762,6 +776,18 @@ def load_strategy_settings(
         stop_loss_context_reentry_cooldown_sec=config_int("strategy", "stop_loss_context_reentry_cooldown_sec", 3600, env_key="STRATEGY_STOP_LOSS_CONTEXT_REENTRY_COOLDOWN_SEC"),
         stop_loss_context_min_similarity_count=config_int("strategy", "stop_loss_context_min_similarity_count", 3, env_key="STRATEGY_STOP_LOSS_CONTEXT_MIN_SIMILARITY_COUNT"),
         stop_loss_context_extra_confirmation_loops=config_int("strategy", "stop_loss_context_extra_confirmation_loops", 2, env_key="STRATEGY_STOP_LOSS_CONTEXT_EXTRA_CONFIRMATION_LOOPS"),
+        enable_low_energy_probe=config_bool("strategy", "enable_low_energy_probe", True, env_key="STRATEGY_ENABLE_LOW_ENERGY_PROBE"),
+        low_energy_probe_min_signal_score=config_float("strategy", "low_energy_probe_min_signal_score", 85.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_SIGNAL_SCORE"),
+        low_energy_probe_min_volume_ratio=config_float("strategy", "low_energy_probe_min_volume_ratio", 0.85, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_VOLUME_RATIO"),
+        low_energy_probe_require_htf_bullish=config_bool("strategy", "low_energy_probe_require_htf_bullish", True, env_key="STRATEGY_LOW_ENERGY_PROBE_REQUIRE_HTF_BULLISH"),
+        low_energy_probe_min_orderbook_pressure_score=config_float("strategy", "low_energy_probe_min_orderbook_pressure_score", 55.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_ORDERBOOK_PRESSURE_SCORE"),
+        low_energy_probe_max_atr_percentile=config_float("strategy", "low_energy_probe_max_atr_percentile", 65.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MAX_ATR_PERCENTILE"),
+        low_energy_probe_position_scale=config_float("strategy", "low_energy_probe_position_scale", 0.25, env_key="STRATEGY_LOW_ENERGY_PROBE_POSITION_SCALE"),
+        low_energy_probe_extra_confirmation_loops=config_int("strategy", "low_energy_probe_extra_confirmation_loops", 2, env_key="STRATEGY_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
+        enable_upbit_min_order_floor=config_bool("strategy", "enable_upbit_min_order_floor", True, env_key="STRATEGY_ENABLE_UPBIT_MIN_ORDER_FLOOR"),
+        upbit_min_order_floor_min_signal_score=config_float("strategy", "upbit_min_order_floor_min_signal_score", 75.0, env_key="STRATEGY_UPBIT_MIN_ORDER_FLOOR_MIN_SIGNAL_SCORE"),
+        upbit_min_order_floor_buffer_pct=config_float("strategy", "upbit_min_order_floor_buffer_pct", 0.02, env_key="STRATEGY_UPBIT_MIN_ORDER_FLOOR_BUFFER_PCT"),
+        upbit_min_order_floor_require_htf_bullish=config_bool("strategy", "upbit_min_order_floor_require_htf_bullish", True, env_key="STRATEGY_UPBIT_MIN_ORDER_FLOOR_REQUIRE_HTF_BULLISH"),
         enable_noise_ratio_adaptation=config_bool("strategy", "enable_noise_ratio_adaptation", True, env_key="STRATEGY_ENABLE_NOISE_RATIO_ADAPTATION"),
         noise_ratio_lookback=config_int("strategy", "noise_ratio_lookback", 20, env_key="STRATEGY_NOISE_RATIO_LOOKBACK"),
         noise_ratio_baseline=config_float("strategy", "noise_ratio_baseline", 0.50, env_key="STRATEGY_NOISE_RATIO_BASELINE"),

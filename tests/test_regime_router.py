@@ -6,9 +6,9 @@ from core.strategy.regime_router import route_alt_strategy, route_btc_strategy
 
 
 class RegimeRouterTests(unittest.TestCase):
-    def test_btc_router_returns_skip_for_low_energy(self):
+    def test_btc_router_returns_probe_for_low_energy(self):
         route = route_btc_strategy("LOW_ENERGY")
-        self.assertEqual("skip", route.strategy_key)
+        self.assertEqual("low_energy_probe", route.strategy_key)
         self.assertTrue(route.policy.pause_new_entry)
 
     def test_btc_router_returns_breakout_for_breakout_attempt(self):
@@ -26,6 +26,7 @@ class RegimeRouterTests(unittest.TestCase):
         self.assertEqual("breakout", route_btc_strategy("CHOPPY_HIGH_VOL").strategy_key)
 
     def test_alt_router_shares_same_route_keys(self):
+        self.assertEqual("low_energy_probe", route_alt_strategy("LOW_ENERGY").strategy_key)
         self.assertEqual("mean_reversion", route_alt_strategy("CHOPPY_LOW_VOL").strategy_key)
         self.assertEqual("mean_reversion", route_alt_strategy("CHOPPY_HIGH_VOL").strategy_key)
         self.assertEqual("trend_follow", route_alt_strategy("TRENDING_MATURE").strategy_key)

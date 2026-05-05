@@ -55,9 +55,52 @@ class FunnelBuilderTests(unittest.TestCase):
             funding_rate=None,
             max_funding_rate=None,
         )
-        self.assertEqual(16, len(steps))
-        self.assertEqual("trend", steps[0].stage)
+        self.assertEqual(23, len(steps))
+        self.assertEqual("raw_entry_signal", steps[0].stage)
         self.assertEqual("order_value", steps[-1].stage)
+
+    def test_alt_entry_steps_split_mean_reversion_reason(self):
+        steps = build_alt_entry_steps(
+            entry_signal=False,
+            bullish=False,
+            trend_follow_entry=False,
+            signal_is_strong=True,
+            signal_score=80.0,
+            min_signal_score=55.0,
+            gap_pct=0.3,
+            min_gap_pct=0.2,
+            max_gap_pct=0.8,
+            gap_within_upper_bound=True,
+            rsi_filter_passed=True,
+            macd_filter_passed=True,
+            htf_bullish=True,
+            volume_filter_passed=True,
+            volume_ratio=1.4,
+            effective_min_volume_ratio=1.0,
+            max_volume_ratio=2.5,
+            volume_within_upper_bound=True,
+            volume_cap_downgrade_allowed=False,
+            volume_cap_downgrade_reason="within_normal_volume_cap",
+            volume_cap_hard_max_ratio=30.0,
+            volatility_filter_passed=True,
+            avg_abs_change_pct=0.8,
+            min_volatility_pct=0.1,
+            max_volatility_pct=5.0,
+            in_cooldown=False,
+            seconds_since_last_trade=999.0,
+            can_average_down=True,
+            last_close=101.0,
+            avg_entry_price=100.0,
+            current_entry_count=0,
+            max_entry_count=3,
+            daily_loss_limit_reached=False,
+            daily_realized_pnl_quote=0.0,
+            max_daily_loss_quote=5.0,
+            order_value_quote=50.0,
+            min_buy_order_value=1.0,
+            entry_strategy_key="mean_reversion",
+        )
+        self.assertEqual("mean_reversion_lower_reclaim_missing", steps[0].reason)
 
     def test_alt_exit_steps_trigger_reason(self):
         steps = build_alt_exit_steps(

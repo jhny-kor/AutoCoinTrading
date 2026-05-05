@@ -1,5 +1,6 @@
 """
 작업 요약
+- squeeze 진입 신호의 세부 실패 원인을 퍼널 로그에서 분리할 수 있도록 band/volume/breakout 상태를 반환
 - 2026-05-02: 손절 방지를 위해 volume/gap 단독 가중치를 낮추고 slope/MACD/RSI 결합 비중을 높였다.
 - regime별 동적 가중치를 적용하는 알트 신호 점수 계산으로 EMA slope / Bollinger Squeeze 비중을 장 상태에 맞게 조정
 - 2026-04-09: 손절 후 재진입은 최소 시간과 신호/거래량/HTF 복구를 함께 보는 패턴 기반 gate helper 를 추가
@@ -172,16 +173,19 @@ def compute_alt_signal_state(
 
     entry_signal = False
     signal_score = 0.0
+    is_squeezed = True
+    squeeze_volume_exploded = True
+    squeeze_breakout = True
 
     if entry_mode == "squeeze":
         is_squeezed = bb_width_pct is not None and bb_width_pct <= squeeze_max_bandwidth_pct
-        volume_exploded = volume_ratio is not None and volume_ratio >= squeeze_min_volume_ratio
-        breakout = bb_upper is not None and last_close > bb_upper
+        squeeze_volume_exploded = volume_ratio is not None and volume_ratio >= squeeze_min_volume_ratio
+        squeeze_breakout = bb_upper is not None and last_close > bb_upper
 
         entry_signal = (
             is_squeezed
-            and volume_exploded
-            and breakout
+            and squeeze_volume_exploded
+            and squeeze_breakout
             and rsi_filter_passed
             and macd_filter_passed
         )
@@ -189,7 +193,7 @@ def compute_alt_signal_state(
             {
                 "squeeze": squeeze_component,
                 "volume": volume_component,
-                "trend": 100.0 if breakout else 0.0,
+                "trend": 100.0 if squeeze_breakout else 0.0,
                 "slope": slope_component,
                 "macd": macd_component,
                 "rsi": rsi_component,
@@ -224,6 +228,9 @@ def compute_alt_signal_state(
         "signal_score": signal_score,
         "trend_follow_entry": trend_follow_entry,
         "entry_signal": entry_signal,
+        "squeeze_band_passed": is_squeezed,
+        "squeeze_volume_passed": squeeze_volume_exploded,
+        "squeeze_breakout_passed": squeeze_breakout,
     }
 
 

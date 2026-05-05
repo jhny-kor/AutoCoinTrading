@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-05: BTC LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 진입 실패 reason 을 세분화하도록 연결
 - 2026-05-01: 거래량+ATR+RSI 과열 조합은 BTC 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
 - 2026-04-23: 확인 타임프레임 bullish 는 slope 하한까지 충족할 때만 유효하게 보고, 거래량 보너스는 ATR 동반 시에만 반영하도록 BTC 진입 품질을 더 보수화
 - OKX 현물 BTC 신규 진입 전에 swap funding rate 과열을 확인해 롱 과열 구간 신규 진입을 차단
@@ -112,6 +113,7 @@ from core.strategy.funnels import (
     build_btc_entry_steps,
     build_btc_exit_steps,
 )
+from core.strategy.low_energy import evaluate_low_energy_probe
 from core.strategy.regime_router import route_btc_strategy
 from market_regime_guard import (
     build_regime_change_message,
@@ -669,6 +671,32 @@ def run_bot():
                 stop_loss_pattern_gate["enabled"]
                 and not stop_loss_pattern_gate["pattern_ready"]
             )
+            low_energy_probe_decision = evaluate_low_energy_probe(
+                enabled=settings.enable_low_energy_probe,
+                low_energy_guard_active=low_energy_guard_active,
+                signal_score=signal_score,
+                min_signal_score=settings.low_energy_probe_min_signal_score,
+                htf_bullish=confirm_bullish,
+                require_htf_bullish=settings.low_energy_probe_require_confirm_bullish,
+                volume_ratio=volume_ratio,
+                min_volume_ratio=settings.low_energy_probe_min_volume_ratio,
+                atr_percentile=atr_percentile,
+                max_atr_percentile=settings.low_energy_probe_max_atr_percentile,
+                position_scale=settings.low_energy_probe_position_scale,
+                extra_confirmation_loops=settings.low_energy_probe_extra_confirmation_loops,
+            )
+            effective_low_energy_guard_active = (
+                low_energy_guard_active and not low_energy_probe_decision.allowed
+            )
+            effective_symbol_regime_blocks_entry = (
+                symbol_regime_blocks_entry and not low_energy_probe_decision.allowed
+            )
+            if low_energy_probe_decision.allowed:
+                log(
+                    f"[{symbol}] LOW_ENERGY 이지만 BTC 고품질 소액 probe 후보로 전환합니다. "
+                    f"signal={signal_score:.1f}, volume={0.0 if volume_ratio is None else volume_ratio:.3f}, "
+                    f"position_scale={low_energy_probe_decision.position_scale:.2f}x"
+                )
             raw_entry_candidate = False
             if strategy_key == "skip":
                 raw_entry_candidate = False
@@ -676,8 +704,8 @@ def run_bot():
                 raw_entry_candidate = (
                     entry_signal
                     and bullish
-                    and not low_energy_guard_active
-                    and not symbol_regime_blocks_entry
+                    and not effective_low_energy_guard_active
+                    and not effective_symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
                     and funding_rate_filter_passed
                     and not stop_loss_pattern_blocked
@@ -687,8 +715,8 @@ def run_bot():
             else:
                 raw_entry_candidate = (
                     entry_signal
-                    and not low_energy_guard_active
-                    and not symbol_regime_blocks_entry
+                    and not effective_low_energy_guard_active
+                    and not effective_symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
                     and funding_rate_filter_passed
                     and not stop_loss_pattern_blocked
@@ -702,7 +730,8 @@ def run_bot():
                 symbol=symbol,
                 has_position=has_position,
                 candidate_active=raw_entry_candidate,
-                required_confirmations=regime_confirmation_loops,
+                required_confirmations=regime_confirmation_loops
+                + low_energy_probe_decision.extra_confirmation_loops,
             )
 
             log("-" * 60)
@@ -971,7 +1000,7 @@ def run_bot():
                 volume_ratio_percentile=volume_ratio_percentile,
                 trend_ok=confirm_bullish,
                 htf_slope_pct=confirm_ema_slope_pct,
-                low_energy_guard_active=low_energy_guard_active,
+                low_energy_guard_active=effective_low_energy_guard_active,
                 symbol_regime=symbol_regime,
                 atr_pct=atr_pct,
                 atr_percentile=atr_percentile,
@@ -985,6 +1014,16 @@ def run_bot():
                 base_position_ratio=pre_score_position_ratio,
                 regime_scale=allocation_score_result.score_scale,
             )
+            if low_energy_probe_decision.allowed:
+                low_energy_probe_position_ratio = apply_regime_position_scale(
+                    base_position_ratio=base_position_ratio,
+                    regime_scale=(
+                        atr_position_scale
+                        * low_energy_probe_decision.position_scale
+                        * allocation_score_result.score_scale
+                    ),
+                )
+                position_ratio = max(position_ratio, low_energy_probe_position_ratio)
             effective_partial_take_profit_ratio = min(
                 1.0,
                 settings.partial_take_profit_ratio
@@ -1145,6 +1184,10 @@ def run_bot():
                 profit_protect_triggered=profit_protect_triggered,
                 profit_exit_cooldown_remaining_sec=profit_exit_cooldown_remaining,
                 low_energy_guard_active=low_energy_guard_active,
+                effective_low_energy_guard_active=effective_low_energy_guard_active,
+                low_energy_probe_allowed=low_energy_probe_decision.allowed,
+                low_energy_probe_reason=low_energy_probe_decision.reason,
+                low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
                 low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                 low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
                 low_energy_ready_count=low_energy_snapshot.ready_count,
@@ -1214,11 +1257,16 @@ def run_bot():
                 stop_loss_pattern_min_cooldown_sec=settings.stop_loss_pattern_min_cooldown_sec,
                 stop_loss_pattern_signal_score=signal_score,
                 stop_loss_pattern_min_signal_score=settings.stop_loss_pattern_min_signal_score,
-                low_energy_guard_active=low_energy_guard_active,
+                low_energy_guard_active=effective_low_energy_guard_active,
                 low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                 low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
                 low_energy_ready_count=low_energy_snapshot.ready_count,
-                symbol_regime_blocks_entry=symbol_regime_blocks_entry,
+                low_energy_probe_allowed=low_energy_probe_decision.allowed,
+                low_energy_probe_reason=low_energy_probe_decision.reason,
+                low_energy_probe_min_signal_score=settings.low_energy_probe_min_signal_score,
+                low_energy_probe_min_volume_ratio=settings.low_energy_probe_min_volume_ratio,
+                low_energy_probe_max_atr_percentile=settings.low_energy_probe_max_atr_percentile,
+                symbol_regime_blocks_entry=effective_symbol_regime_blocks_entry,
                 symbol_regime=symbol_regime,
                 symbol_regime_requires_fresh_cross=symbol_regime_requires_fresh_cross,
                 volume_filter_passed=volume_filter_passed,
@@ -1242,6 +1290,7 @@ def run_bot():
                 min_buy_order_value=min_buy_order_value,
                 estimated_entry_amount=estimated_entry_amount,
                 min_order_amount=settings.min_order_amount,
+                entry_strategy_key=strategy_key,
             )
             entry_steps.extend(
                 [

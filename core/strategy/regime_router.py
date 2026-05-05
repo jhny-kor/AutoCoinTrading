@@ -1,5 +1,6 @@
 """
 작업 요약
+- LOW_ENERGY 는 완전 skip 대신 별도 probe 전략 키로 내려보내 고품질 소액 후보 보정이 가능하도록 분리
 - 2026-04-24: BTC 라우터는 CHOPPY 계열을 mean_reversion 으로 보내지 않도록 알트와 분리했다.
 - CHOPPY 계열 레짐에서 `mean_reversion` 전략 경로를 선택하도록 확장
 - BTC/알트가 레짐을 단순 필터가 아니라 전략 선택기로 쓰도록 공통 레짐 라우터를 추가했다.
@@ -24,7 +25,9 @@ class StrategyRoute:
 
 def _choose_alt_strategy_key(regime: str) -> str:
     """알트 레짐 이름을 전략 경로 키로 변환한다."""
-    if regime in {"LOW_ENERGY", "EXHAUSTION_RISK", "OVERHEATED"}:
+    if regime == "LOW_ENERGY":
+        return "low_energy_probe"
+    if regime in {"EXHAUSTION_RISK", "OVERHEATED"}:
         return "skip"
     if regime in {"CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL"}:
         return "mean_reversion"
@@ -37,7 +40,9 @@ def _choose_alt_strategy_key(regime: str) -> str:
 
 def _choose_btc_strategy_key(regime: str) -> str:
     """BTC 레짐 이름을 전략 경로 키로 변환한다."""
-    if regime in {"LOW_ENERGY", "EXHAUSTION_RISK", "OVERHEATED"}:
+    if regime == "LOW_ENERGY":
+        return "low_energy_probe"
+    if regime in {"EXHAUSTION_RISK", "OVERHEATED"}:
         return "skip"
     if regime in {"CHOPPY_LOW_VOL", "CHOPPY_HIGH_VOL", "BREAKOUT_ATTEMPT", "TRENDING_EARLY"}:
         return "breakout"
