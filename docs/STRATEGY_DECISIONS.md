@@ -1057,6 +1057,30 @@
   - `tests/test_auto_recovery_watchdog.py`
   - `tests/test_entry_committee.py`
 
+### 45. 장기 과거 시장 데이터 수집 기준 추가 (2026-05-06)
+
+- 변경 배경:
+  - 손절 방지 목표를 검증하려면 최근 며칠 체결 로그만으로는 표본이 부족하다.
+  - BTC/ETH 는 여러 레짐을 포함해야 하므로 3년치가 필요하고, 알트는 상장/유동성 구조가 자주 바뀌므로 최근 1년 중심이 더 실용적이다.
+- 변경 내용:
+  - [tools/historical_market_collector.py](/Users/plo/Documents/auto_coin_bot/tools/historical_market_collector.py)
+    - BTC/ETH 는 3년, 그 외 알트는 1년으로 자동 기간을 나누는 수집 도구 추가
+    - `1m` OHLCV 를 백테스트 호환 JSONL 로 저장
+    - OKX 는 spot 대응 SWAP `funding-rate-history` 도 함께 수집 가능
+    - 중복 timestamp 는 건너뛰도록 구성해 중간 중단 후 같은 명령으로 이어받을 수 있게 함
+    - 장시간 수집은 `launch/status` 로 백그라운드 실행과 PID 확인이 가능하게 함
+  - [docs/HISTORICAL_MARKET_DATA.md](/Users/plo/Documents/auto_coin_bot/docs/HISTORICAL_MARKET_DATA.md)
+    - 수집 대상, 저장 경로, OHLCV/funding 필드, 제한 사항 문서화
+- 수집 필드:
+  - 공통 OHLCV: `timestamp_ms`, `open`, `high`, `low`, `close`, `volume_base`, `quote_volume`
+  - OKX 추가: `volCcy`, `volCcyQuote`, `confirm`
+  - 업비트 추가: UTC/KST 캔들 시각, 누적 거래대금
+  - OKX funding: `funding_rate`, `realized_rate`, `method`, `formula_type`
+- 제한:
+  - 과거 호가 스냅샷은 공개 API로 장기간 소급 수집하지 않고, 앞으로 누적되는 live snapshot 을 사용한다.
+- 검증:
+  - `tests/test_historical_market_collector.py`
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

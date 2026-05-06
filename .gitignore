@@ -11,6 +11,7 @@ analysis_logs/
 structured_logs/
 trade_logs/
 reports/
+historical_data/
 
 # 파이썬 캐시 / 가상환경
 __pycache__/

@@ -26,6 +26,7 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 작업자 안내: [docs/WORKER_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/WORKER_GUIDE.md)
 - 모듈 구조: [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)
 - 전략 변경 이력: [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
+- 과거 시장 데이터 수집 기준: [docs/HISTORICAL_MARKET_DATA.md](/Users/plo/Documents/auto_coin_bot/docs/HISTORICAL_MARKET_DATA.md)
 - 계획/후보안: [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md)
 - 리팩토링 단계 기록: [docs/refactor_20260329](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329)
 - 루트 호환 래퍼 정책: [docs/refactor_20260329/ROOT_WRAPPER_POLICY.md](/Users/plo/Documents/auto_coin_bot/docs/refactor_20260329/ROOT_WRAPPER_POLICY.md)
@@ -89,6 +90,7 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - CSV 저장: `.venv/bin/python analyze_strategy_logs.py --csv reports/strategy_funnel.csv`
 - 변경 효과 자동 비교: `.venv/bin/python tools/change_effect_report.py --hours 12`
 - 미체결 후보 가상 추적: `.venv/bin/python tools/shadow_candidate_tracker.py --hours 6 --horizon-minutes 60`
+- 과거 데이터 수집 계획 확인: `.venv/bin/python tools/historical_market_collector.py plan`
 
 ## 전략 요약
 
@@ -268,6 +270,17 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 단일 리플레이: `.venv/bin/python backtest_replay.py`
 - 배치 리포트: `.venv/bin/python backtest_report_runner.py weekly`
 - 레지스트리 갱신: `.venv/bin/python tools/update_backtest_registry.py`
+- 장기 과거 데이터 수집: `.venv/bin/python tools/historical_market_collector.py launch`
+- 장기 수집 상태 확인: `.venv/bin/python tools/historical_market_collector.py status`
+
+과거 데이터 수집 기준:
+- BTC, ETH: 최근 3년
+- 그 외 알트: 최근 1년
+- 기본 원본 주기: `1m`
+- 저장 경로: `historical_data/{exchange}/{symbol}/{timeframe}/ohlcv.jsonl`
+- OKX 추가 수집: spot 대응 SWAP funding rate history
+
+상세 필드는 [docs/HISTORICAL_MARKET_DATA.md](/Users/plo/Documents/auto_coin_bot/docs/HISTORICAL_MARKET_DATA.md) 를 봅니다.
 
 ### override 실험 세트
 

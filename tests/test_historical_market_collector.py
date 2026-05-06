@@ -1,0 +1,186 @@
+"""장기 과거 시장 데이터 수집 도구 테스트.
+
+페이지 단위 장기 수집에서 중복 timestamp 를 메모리 set 으로 유지하고, launch 가 collect 인자를 안전하게 구성하는 흐름까지 검증한다.
+"""
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from tools.historical_market_collector import (
+    append_jsonl_unique,
+    build_collect_argv,
+    build_default_targets,
+    parse_okx_funding_rows,
+    parse_okx_history_candles,
+    parse_upbit_candles,
+    years_for_symbol,
+)
+
+
+class HistoricalMarketCollectorTests(unittest.TestCase):
+    def test_years_for_symbol_uses_three_years_for_btc_and_eth_only(self):
+        self.assertEqual(3, years_for_symbol("BTC/USDT", core_years=3, alt_years=1))
+        self.assertEqual(3, years_for_symbol("ETH/KRW", core_years=3, alt_years=1))
+        self.assertEqual(1, years_for_symbol("XRP/KRW", core_years=3, alt_years=1))
+
+    def test_build_default_targets_applies_years_per_symbol(self):
+        targets = build_default_targets(
+            exchanges=["okx"],
+            timeframe="1m",
+            core_years=3,
+            alt_years=1,
+            symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+        )
+
+        by_symbol = {target.symbol: target for target in targets}
+        self.assertEqual(3, by_symbol["BTC/USDT"].years)
+        self.assertEqual(3, by_symbol["ETH/USDT"].years)
+        self.assertEqual(1, by_symbol["SOL/USDT"].years)
+
+    def test_parse_okx_history_candles_keeps_backtest_volume_and_quote_volume(self):
+        rows = parse_okx_history_candles(
+            exchange_name="okx",
+            symbol="BTC/USDT",
+            timeframe="1m",
+            rows=[
+                [
+                    "1700000000000",
+                    "100.0",
+                    "101.0",
+                    "99.0",
+                    "100.5",
+                    "2.0",
+                    "201.0",
+                    "201.0",
+                    "1",
+                ]
+            ],
+            collected_at="2026-05-06T00:00:00+00:00",
+        )
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual(2.0, rows[0]["volume"])
+        self.assertEqual(2.0, rows[0]["volume_base"])
+        self.assertEqual(201.0, rows[0]["quote_volume"])
+        self.assertEqual(1, rows[0]["confirm"])
+
+    def test_parse_upbit_candles_keeps_acc_trade_price_as_quote_volume(self):
+        rows = parse_upbit_candles(
+            symbol="BTC/KRW",
+            timeframe="1m",
+            rows=[
+                {
+                    "market": "KRW-BTC",
+                    "candle_date_time_utc": "2023-11-14T22:13:20",
+                    "candle_date_time_kst": "2023-11-15T07:13:20",
+                    "opening_price": 100.0,
+                    "high_price": 101.0,
+                    "low_price": 99.0,
+                    "trade_price": 100.5,
+                    "timestamp": 1700000000000,
+                    "candle_acc_trade_price": 100500.0,
+                    "candle_acc_trade_volume": 1.0,
+                    "unit": 1,
+                }
+            ],
+            collected_at="2026-05-06T00:00:00+00:00",
+        )
+
+        self.assertEqual("KRW-BTC", rows[0]["market_id"])
+        self.assertEqual(1.0, rows[0]["volume"])
+        self.assertEqual(100500.0, rows[0]["quote_volume"])
+
+    def test_append_jsonl_unique_skips_existing_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ohlcv.jsonl"
+            path.write_text(
+                json.dumps({"timestamp_ms": 1, "close": 100}) + "\n",
+                encoding="utf-8",
+            )
+
+            written, skipped = append_jsonl_unique(
+                path,
+                [
+                    {"timestamp_ms": 1, "close": 100},
+                    {"timestamp_ms": 2, "close": 101},
+                ],
+                key="timestamp_ms",
+            )
+
+            self.assertEqual(1, written)
+            self.assertEqual(1, skipped)
+            self.assertEqual(2, len(path.read_text(encoding="utf-8").splitlines()))
+
+    def test_append_jsonl_unique_reuses_existing_key_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ohlcv.jsonl"
+            existing = {1}
+
+            written, skipped = append_jsonl_unique(
+                path,
+                [
+                    {"timestamp_ms": 1, "close": 100},
+                    {"timestamp_ms": 2, "close": 101},
+                ],
+                key="timestamp_ms",
+                existing_keys=existing,
+            )
+
+            self.assertEqual(1, written)
+            self.assertEqual(1, skipped)
+            self.assertEqual({1, 2}, existing)
+
+    def test_build_collect_argv_preserves_launch_options(self):
+        argv = build_collect_argv(
+            SimpleNamespace(
+                exchange="okx",
+                symbols="BTC/USDT,ETH/USDT",
+                timeframe="1m",
+                core_years=3,
+                alt_years=1,
+                start=None,
+                end=None,
+                output_root="historical_data",
+                max_pages=2,
+                request_delay_sec=0.2,
+                skip_funding=True,
+            )
+        )
+
+        self.assertIn("collect", argv)
+        self.assertIn("--exchange", argv)
+        self.assertIn("okx", argv)
+        self.assertIn("--symbols", argv)
+        self.assertIn("BTC/USDT,ETH/USDT", argv)
+        self.assertIn("--max-pages", argv)
+        self.assertIn("2", argv)
+        self.assertIn("--skip-funding", argv)
+
+    def test_parse_okx_funding_rows_keeps_realized_rate_and_formula(self):
+        rows = parse_okx_funding_rows(
+            symbol="BTC/USDT",
+            swap_inst_id="BTC-USDT-SWAP",
+            rows=[
+                {
+                    "formulaType": "withRate",
+                    "fundingRate": "0.0001",
+                    "fundingTime": "1700000000000",
+                    "instId": "BTC-USDT-SWAP",
+                    "instType": "SWAP",
+                    "method": "next_period",
+                    "realizedRate": "0.00009",
+                }
+            ],
+            collected_at="2026-05-06T00:00:00+00:00",
+        )
+
+        self.assertEqual(0.0001, rows[0]["funding_rate"])
+        self.assertEqual(0.00009, rows[0]["realized_rate"])
+        self.assertEqual("withRate", rows[0]["formula_type"])
+
+
+if __name__ == "__main__":
+    unittest.main()
