@@ -102,6 +102,7 @@
 - 알트: [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py), [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
 - BTC: [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py), [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
 - 공통 계산: [core/strategy](/Users/plo/Documents/auto_coin_bot/core/strategy), [core/risk](/Users/plo/Documents/auto_coin_bot/core/risk)
+- 신규 진입 비중 계산: [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
 
 세부 순서:
 1. 먼저 어느 거래소/전략 파일에서 실제 조건문을 쓰는지 찾습니다.
@@ -109,6 +110,8 @@
 3. 공통화 가능한 계산은 `core/strategy` 또는 `core/risk` 로 내릴지 먼저 판단합니다.
 4. 변경 후 `trade_history_logger.py` 와 `structured_log_manager.py` 에 남는 로그 필드가 부족하지 않은지 확인합니다.
 5. 실거래 영향을 주는 경우 최근 로그 해석과 기대 효과를 문서에 남깁니다.
+
+포지션 비중을 바꿀 때는 먼저 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)의 `build_alt_position_sizing(...)`, `build_btc_position_sizing(...)` 와 [tests/test_regime_position_scale.py](/Users/plo/Documents/auto_coin_bot/tests/test_regime_position_scale.py)를 확인합니다.
 
 ### 업비트/OKX 주문 지연 문제
 

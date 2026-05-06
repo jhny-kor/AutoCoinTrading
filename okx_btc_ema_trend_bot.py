@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-07: BTC 포지션 비중 계산과 로그 조립을 공통 allocation helper 로 옮겨 업비트/OKX 구조를 맞춤
 - 2026-05-06: BTC 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-05: BTC LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 진입 실패 reason 을 세분화하도록 연결
 - 2026-05-01: 거래량+ATR+RSI 과열 조합은 BTC 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
@@ -78,8 +79,12 @@ from core.execution.okx import (
 from core.logging.metrics import build_btc_common_metrics
 from core.positions.lifecycle import clear_btc_position_state
 from core.positions.guards import handle_unrecoverable_position
-from core.risk.allocation import build_btc_allocations
-from core.risk.allocation import apply_regime_position_scale, compute_allocation_score
+from core.risk.allocation import (
+    build_btc_allocations,
+    build_btc_position_sizing,
+    compute_allocation_score,
+    format_btc_position_sizing_log,
+)
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.runtime.bootstrap import build_btc_runtime_state
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
@@ -993,12 +998,6 @@ def run_bot():
             donchian_failure_triggered = bool(btc_exit_flags["donchian_failure_triggered"])
             trend_exit_triggered = bool(btc_exit_flags["trend_exit_triggered"])
             base_position_ratio = settings.get_position_ratio(symbol)
-            regime_position_scale = settings.get_regime_position_scale(symbol_regime)
-            atr_position_scale = settings.get_atr_position_scale(atr_pct)
-            pre_score_position_ratio = apply_regime_position_scale(
-                base_position_ratio=base_position_ratio,
-                regime_scale=(regime_position_scale * atr_position_scale),
-            )
             allocation_score_result = compute_allocation_score(
                 settings=portfolio_allocator.settings,
                 signal_score=signal_score,
@@ -1017,20 +1016,20 @@ def run_bot():
                 correlation_with_btc=None,
                 max_correlation_with_btc=1.0,
             )
-            position_ratio = apply_regime_position_scale(
-                base_position_ratio=pre_score_position_ratio,
-                regime_scale=allocation_score_result.score_scale,
+            position_sizing = build_btc_position_sizing(
+                settings=settings,
+                symbol=symbol,
+                base_position_ratio=base_position_ratio,
+                symbol_regime=symbol_regime,
+                atr_pct=atr_pct,
+                score_scale=allocation_score_result.score_scale,
+                low_energy_probe_allowed=low_energy_probe_decision.allowed,
+                low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
             )
-            if low_energy_probe_decision.allowed:
-                low_energy_probe_position_ratio = apply_regime_position_scale(
-                    base_position_ratio=base_position_ratio,
-                    regime_scale=(
-                        atr_position_scale
-                        * low_energy_probe_decision.position_scale
-                        * allocation_score_result.score_scale
-                    ),
-                )
-                position_ratio = max(position_ratio, low_energy_probe_position_ratio)
+            regime_position_scale = position_sizing.regime_position_scale
+            atr_position_scale = position_sizing.atr_position_scale
+            pre_score_position_ratio = position_sizing.pre_score_position_ratio
+            position_ratio = position_sizing.position_ratio
             effective_partial_take_profit_ratio = min(
                 1.0,
                 settings.partial_take_profit_ratio
@@ -1066,12 +1065,7 @@ def run_bot():
                 score_scale=allocation_score_result.score_scale,
                 dynamic_bonus_eligible=dynamic_bonus_eligible,
             )
-            log(
-                f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
-                f"레짐 스케일 {regime_position_scale:.2f}x | "
-                f"ATR 스케일 {atr_position_scale:.2f}x | "
-                f"score 스케일 {allocation_score_result.score_scale:.2f}x | 최종 {position_ratio:.4f}"
-            )
+            log(format_btc_position_sizing_log(symbol=symbol, sizing=position_sizing))
             log(
                 f"[{symbol}] allocation score: 총점 {allocation_score_result.allocation_score:.1f} | "
                 f"signal {allocation_score_result.signal_score_component:.1f}, "

@@ -11,6 +11,26 @@
 
 현재는 `단타/인트라데이 전용`으로 `BTC 전용 전략`과 `알트 전용 전략`을 나누어 운영합니다.
 
+### 2026-05-07 현재 리팩토링 기준
+
+- 운영 전략 동작은 유지하고, 네 개 실거래 봇에 흩어져 있던 신규 진입 비중 계산을 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py) 로 모았습니다.
+- 알트 신규 진입 비중은 공통 helper 에서 아래 순서로 계산합니다.
+  - `기본 비중`
+  - `심볼 레짐 스케일`
+  - `BTC 레짐 스케일`
+  - `BTC ATR 스케일`
+  - `ALT ATR 스케일`
+  - `allocation score 스케일`
+  - `volume spike / mean reversion / low energy probe 보정`
+- BTC 신규 진입 비중은 공통 helper 에서 아래 순서로 계산합니다.
+  - `기본 비중`
+  - `BTC 심볼 레짐 스케일`
+  - `BTC ATR 스케일`
+  - `allocation score 스케일`
+  - `low energy probe 보정`
+- OKX/업비트 봇은 같은 결과 객체와 같은 로그 formatter 를 사용하므로, 이후 포지션 비중 관련 수정은 전략 본체보다 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)를 먼저 봅니다.
+- 이 리팩토링은 계산 위치만 바꾼 것이며, 설정값과 진입/청산 조건은 바꾸지 않았습니다.
+
 ### 2026-04-18 현재 적용 핵심 강화 요약
 
 - 4차 진입 모드 전환

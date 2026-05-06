@@ -162,6 +162,13 @@
   - 누적 투입 원가 기준 포트폴리오 계산
   - 거래량 강세 시 보수적 동적 오버웨이트
 
+- [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+  - allocation score 계산
+  - 알트/BTC 신규 진입 비중 계산 결과 객체 제공
+  - 알트: 심볼 레짐, BTC 레짐, BTC ATR, ALT ATR, score, probe 보정 순서 관리
+  - BTC: 심볼 레짐, BTC ATR, score, probe 보정 순서 관리
+  - OKX/업비트 봇의 포지션 비중 로그 문구 공통화
+
 - [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
   - trade_history 기준 평균 진입가와 내부 상태 복구
   - 프로그램별 당일 실현 손익 재계산 helper 제공

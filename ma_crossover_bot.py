@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-07: 알트 포지션 비중 계산과 로그 조립을 공통 allocation helper 로 옮겨 업비트/OKX 구조를 맞춤
 - 2026-05-06: 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-06: mean_reversion 하단 근접 후보는 소액 비중과 추가 confirmation 으로만 진입 후보화
 - 2026-05-05: LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 진입 실패 reason 을 세분화하도록 연결
@@ -86,8 +87,12 @@ from core.execution.okx import (
 from core.logging.metrics import build_alt_common_metrics
 from core.positions.lifecycle import clear_alt_position_state
 from core.positions.guards import handle_unrecoverable_position
-from core.risk.allocation import build_alt_allocation
-from core.risk.allocation import apply_regime_position_scale, compute_allocation_score
+from core.risk.allocation import (
+    build_alt_allocation,
+    build_alt_position_sizing,
+    compute_allocation_score,
+    format_alt_position_sizing_log,
+)
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
@@ -754,26 +759,6 @@ def run_bot():
                     symbol,
                     config["risk_per_trade"],
                 )
-                regime_position_scale = strategy.get_regime_position_scale(symbol_regime)
-                btc_regime_position_scale = (
-                    strategy.get_btc_regime_position_scale_for_symbol(
-                        symbol,
-                        btc_reference_regime,
-                    )
-                )
-                btc_atr_position_scale = strategy.get_btc_atr_position_scale(
-                    btc_reference_atr_pct
-                )
-                combined_position_scale = (
-                    regime_position_scale
-                    * btc_regime_position_scale
-                    * btc_atr_position_scale
-                )
-                alt_atr_position_scale = strategy.get_alt_atr_position_scale(atr_pct)
-                pre_score_position_ratio = apply_regime_position_scale(
-                    base_position_ratio=base_position_ratio,
-                    regime_scale=(combined_position_scale * alt_atr_position_scale),
-                )
                 bb_upper, bb_mid, bb_lower = calc_bollinger_bands(
                     closes, period=strategy.bb_period, stddev_multiplier=strategy.bb_stddev
                 )
@@ -1050,10 +1035,6 @@ def run_bot():
                     correlation_with_btc=correlation_with_btc,
                     max_correlation_with_btc=strategy.max_correlation_with_btc,
                 )
-                position_ratio = apply_regime_position_scale(
-                    base_position_ratio=pre_score_position_ratio,
-                    regime_scale=allocation_score_result.score_scale,
-                )
                 volume_spike_entry_downgrade = evaluate_volume_spike_entry_downgrade(
                     enabled=strategy.enable_volume_spike_entry_downgrade,
                     symbol=symbol,
@@ -1075,28 +1056,35 @@ def run_bot():
                 volume_cap_allows_entry = (
                     volume_within_upper_bound or volume_spike_entry_downgrade.allowed
                 )
-                if volume_spike_entry_downgrade.allowed:
-                    position_ratio = apply_regime_position_scale(
-                        base_position_ratio=position_ratio,
-                        regime_scale=volume_spike_entry_downgrade.position_scale,
-                    )
-                if mean_reversion_lower_near_probe_allowed:
-                    position_ratio = apply_regime_position_scale(
-                        base_position_ratio=position_ratio,
-                        regime_scale=strategy.mean_reversion_lower_near_position_scale,
-                    )
-                if low_energy_probe_decision.allowed:
-                    low_energy_probe_position_ratio = apply_regime_position_scale(
-                        base_position_ratio=base_position_ratio,
-                        regime_scale=(
-                            btc_regime_position_scale
-                            * btc_atr_position_scale
-                            * alt_atr_position_scale
-                            * low_energy_probe_decision.position_scale
-                            * allocation_score_result.score_scale
-                        ),
-                    )
-                    position_ratio = max(position_ratio, low_energy_probe_position_ratio)
+                position_sizing = build_alt_position_sizing(
+                    strategy=strategy,
+                    symbol=symbol,
+                    base_position_ratio=base_position_ratio,
+                    symbol_regime=symbol_regime,
+                    btc_reference_regime=btc_reference_regime,
+                    btc_reference_atr_pct=btc_reference_atr_pct,
+                    alt_atr_pct=atr_pct,
+                    score_scale=allocation_score_result.score_scale,
+                    volume_spike_position_scale=(
+                        volume_spike_entry_downgrade.position_scale
+                        if volume_spike_entry_downgrade.allowed
+                        else None
+                    ),
+                    mean_reversion_lower_near_position_scale=(
+                        strategy.mean_reversion_lower_near_position_scale
+                        if mean_reversion_lower_near_probe_allowed
+                        else None
+                    ),
+                    low_energy_probe_allowed=low_energy_probe_decision.allowed,
+                    low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
+                )
+                regime_position_scale = position_sizing.regime_position_scale
+                btc_regime_position_scale = position_sizing.btc_regime_position_scale
+                btc_atr_position_scale = position_sizing.btc_atr_position_scale
+                combined_position_scale = position_sizing.combined_regime_position_scale
+                alt_atr_position_scale = position_sizing.alt_atr_position_scale
+                pre_score_position_ratio = position_sizing.pre_score_position_ratio
+                position_ratio = position_sizing.position_ratio
                 raw_entry_candidate = False
                 if strategy_key == "skip":
                     raw_entry_candidate = False
@@ -1198,13 +1186,13 @@ def run_bot():
                         f"(기본 이격도 {base_min_gap_pct:.4f}% -> 동적 이격도 {min_gap_pct:.4f}%)"
                     )
                 log(
-                    f"[{symbol}] 적용 매수 비중: 기본 {base_position_ratio:.4f} | "
-                    f"심볼 레짐 스케일 {regime_position_scale:.2f}x | "
-                    f"BTC 레짐({btc_reference_regime}) 스케일 {btc_regime_position_scale:.2f}x | "
-                    f"BTC ATR({0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%) 스케일 {btc_atr_position_scale:.2f}x | "
-                    f"ALT ATR({0.0 if atr_pct is None else atr_pct:.4f}%) 스케일 {alt_atr_position_scale:.2f}x | "
-                    f"score 스케일 {allocation_score_result.score_scale:.2f}x | "
-                    f"최종 {position_ratio:.4f}"
+                    format_alt_position_sizing_log(
+                        symbol=symbol,
+                        sizing=position_sizing,
+                        btc_reference_regime=btc_reference_regime,
+                        btc_reference_atr_pct=btc_reference_atr_pct,
+                        alt_atr_pct=atr_pct,
+                    )
                 )
                 log(
                     f"[{symbol}] allocation score: 총점 {allocation_score_result.allocation_score:.1f} | "

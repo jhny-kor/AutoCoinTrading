@@ -7,6 +7,7 @@
 - 레짐별 포지션 스케일을 적용하되 최소 0, 최대 1.2 범위로 제한하는 공통 helper 를 추가했다.
 - 알트/BTC 신규 진입과 추가매수의 포트폴리오 배분 호출을 공통 래퍼로 분리했다.
 - 배분 계산 호출 방식이 봇마다 갈라지지 않도록 정리했다.
+- 2026-05-07: 알트/BTC 봇에 흩어진 포지션 비중 계산과 로그 문구를 공통 결과 객체로 정리해 전략 동작을 고정했다.
 """
 
 from __future__ import annotations
@@ -23,6 +24,31 @@ class AllocationScoreResult:
     diversification_score_component: float
     score_scale: float
     reason_top: str
+
+
+@dataclass(frozen=True)
+class AltPositionSizingResult:
+    base_position_ratio: float
+    regime_position_scale: float
+    btc_regime_position_scale: float
+    btc_atr_position_scale: float
+    combined_regime_position_scale: float
+    alt_atr_position_scale: float
+    pre_score_position_ratio: float
+    score_scale: float
+    position_ratio: float
+    low_energy_probe_position_ratio: float | None
+
+
+@dataclass(frozen=True)
+class BtcPositionSizingResult:
+    base_position_ratio: float
+    regime_position_scale: float
+    atr_position_scale: float
+    pre_score_position_ratio: float
+    score_scale: float
+    position_ratio: float
+    low_energy_probe_position_ratio: float | None
 
 
 def _clamp_score(value: float, *, lower: float = 0.0, upper: float = 100.0) -> float:
@@ -185,6 +211,158 @@ def apply_regime_position_scale(
     """기본 포지션 비중에 레짐 스케일을 적용하고 안전 범위로 제한한다."""
     scaled = base_position_ratio * regime_scale
     return max(min_ratio, min(max_ratio, scaled))
+
+
+def build_alt_position_sizing(
+    *,
+    strategy,
+    symbol: str,
+    base_position_ratio: float,
+    symbol_regime: str | None,
+    btc_reference_regime: str | None,
+    btc_reference_atr_pct: float | None,
+    alt_atr_pct: float | None,
+    score_scale: float,
+    volume_spike_position_scale: float | None = None,
+    mean_reversion_lower_near_position_scale: float | None = None,
+    low_energy_probe_allowed: bool = False,
+    low_energy_probe_position_scale: float = 1.0,
+) -> AltPositionSizingResult:
+    """알트 신규 진입 비중 계산을 거래소 봇 간 동일한 순서로 적용한다."""
+    regime_position_scale = strategy.get_regime_position_scale(symbol_regime)
+    btc_regime_position_scale = strategy.get_btc_regime_position_scale_for_symbol(
+        symbol,
+        btc_reference_regime,
+    )
+    btc_atr_position_scale = strategy.get_btc_atr_position_scale(btc_reference_atr_pct)
+    combined_regime_position_scale = (
+        regime_position_scale * btc_regime_position_scale * btc_atr_position_scale
+    )
+    alt_atr_position_scale = strategy.get_alt_atr_position_scale(alt_atr_pct)
+    pre_score_position_ratio = apply_regime_position_scale(
+        base_position_ratio=base_position_ratio,
+        regime_scale=(combined_regime_position_scale * alt_atr_position_scale),
+    )
+    position_ratio = apply_regime_position_scale(
+        base_position_ratio=pre_score_position_ratio,
+        regime_scale=score_scale,
+    )
+    if volume_spike_position_scale is not None:
+        position_ratio = apply_regime_position_scale(
+            base_position_ratio=position_ratio,
+            regime_scale=volume_spike_position_scale,
+        )
+    if mean_reversion_lower_near_position_scale is not None:
+        position_ratio = apply_regime_position_scale(
+            base_position_ratio=position_ratio,
+            regime_scale=mean_reversion_lower_near_position_scale,
+        )
+
+    low_energy_probe_position_ratio = None
+    if low_energy_probe_allowed:
+        low_energy_probe_position_ratio = apply_regime_position_scale(
+            base_position_ratio=base_position_ratio,
+            regime_scale=(
+                btc_regime_position_scale
+                * btc_atr_position_scale
+                * alt_atr_position_scale
+                * low_energy_probe_position_scale
+                * score_scale
+            ),
+        )
+        position_ratio = max(position_ratio, low_energy_probe_position_ratio)
+
+    return AltPositionSizingResult(
+        base_position_ratio=base_position_ratio,
+        regime_position_scale=regime_position_scale,
+        btc_regime_position_scale=btc_regime_position_scale,
+        btc_atr_position_scale=btc_atr_position_scale,
+        combined_regime_position_scale=combined_regime_position_scale,
+        alt_atr_position_scale=alt_atr_position_scale,
+        pre_score_position_ratio=pre_score_position_ratio,
+        score_scale=score_scale,
+        position_ratio=position_ratio,
+        low_energy_probe_position_ratio=low_energy_probe_position_ratio,
+    )
+
+
+def format_alt_position_sizing_log(
+    *,
+    symbol: str,
+    sizing: AltPositionSizingResult,
+    btc_reference_regime: str | None,
+    btc_reference_atr_pct: float | None,
+    alt_atr_pct: float | None,
+) -> str:
+    return (
+        f"[{symbol}] 적용 매수 비중: 기본 {sizing.base_position_ratio:.4f} | "
+        f"심볼 레짐 스케일 {sizing.regime_position_scale:.2f}x | "
+        f"BTC 레짐({btc_reference_regime}) 스케일 {sizing.btc_regime_position_scale:.2f}x | "
+        f"BTC ATR({0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%) 스케일 {sizing.btc_atr_position_scale:.2f}x | "
+        f"ALT ATR({0.0 if alt_atr_pct is None else alt_atr_pct:.4f}%) 스케일 {sizing.alt_atr_position_scale:.2f}x | "
+        f"score 스케일 {sizing.score_scale:.2f}x | "
+        f"최종 {sizing.position_ratio:.4f}"
+    )
+
+
+def build_btc_position_sizing(
+    *,
+    settings,
+    symbol: str,
+    base_position_ratio: float,
+    symbol_regime: str | None,
+    atr_pct: float | None,
+    score_scale: float,
+    low_energy_probe_allowed: bool = False,
+    low_energy_probe_position_scale: float = 1.0,
+) -> BtcPositionSizingResult:
+    """BTC 신규 진입 비중 계산을 OKX/업비트 봇 간 동일한 순서로 적용한다."""
+    regime_position_scale = settings.get_regime_position_scale(symbol_regime)
+    atr_position_scale = settings.get_atr_position_scale(atr_pct)
+    pre_score_position_ratio = apply_regime_position_scale(
+        base_position_ratio=base_position_ratio,
+        regime_scale=(regime_position_scale * atr_position_scale),
+    )
+    position_ratio = apply_regime_position_scale(
+        base_position_ratio=pre_score_position_ratio,
+        regime_scale=score_scale,
+    )
+
+    low_energy_probe_position_ratio = None
+    if low_energy_probe_allowed:
+        low_energy_probe_position_ratio = apply_regime_position_scale(
+            base_position_ratio=base_position_ratio,
+            regime_scale=(
+                atr_position_scale
+                * low_energy_probe_position_scale
+                * score_scale
+            ),
+        )
+        position_ratio = max(position_ratio, low_energy_probe_position_ratio)
+
+    return BtcPositionSizingResult(
+        base_position_ratio=base_position_ratio,
+        regime_position_scale=regime_position_scale,
+        atr_position_scale=atr_position_scale,
+        pre_score_position_ratio=pre_score_position_ratio,
+        score_scale=score_scale,
+        position_ratio=position_ratio,
+        low_energy_probe_position_ratio=low_energy_probe_position_ratio,
+    )
+
+
+def format_btc_position_sizing_log(
+    *,
+    symbol: str,
+    sizing: BtcPositionSizingResult,
+) -> str:
+    return (
+        f"[{symbol}] 적용 매수 비중: 기본 {sizing.base_position_ratio:.4f} | "
+        f"레짐 스케일 {sizing.regime_position_scale:.2f}x | "
+        f"ATR 스케일 {sizing.atr_position_scale:.2f}x | "
+        f"score 스케일 {sizing.score_scale:.2f}x | "
+        f"최종 {sizing.position_ratio:.4f}"
+    )
 
 
 def build_alt_allocation(

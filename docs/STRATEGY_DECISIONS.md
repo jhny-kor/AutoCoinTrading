@@ -1057,6 +1057,33 @@
   - `tests/test_auto_recovery_watchdog.py`
   - `tests/test_entry_committee.py`
 
+### 46. 포지션 비중 계산 공통화 리팩토링 (2026-05-07, runtime refactor)
+
+- 변경 배경:
+  - 최근 레짐, BTC 레짐, BTC ATR, ALT ATR, allocation score, probe 보정이 추가되면서 OKX/업비트 알트 봇과 OKX/업비트 BTC 봇에 같은 계산 순서가 반복됐다.
+  - 전략값은 유지하되, 계산 순서가 거래소별로 갈라질 가능성을 줄여야 했다.
+- 변경 내용:
+  - [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+    - `AltPositionSizingResult`, `BtcPositionSizingResult` 추가
+    - `build_alt_position_sizing(...)`, `build_btc_position_sizing(...)` 추가
+    - OKX/업비트가 같은 로그 문구를 쓰도록 formatter 추가
+  - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py), [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+    - 알트 신규 진입 비중 계산을 공통 helper 로 대체
+  - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py), [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+    - BTC 신규 진입 비중 계산을 공통 helper 로 대체
+- 해석:
+  - 이번 변경은 전략 조정이 아니라 런타임 리팩토링이다.
+  - 신규 진입 비중 계산 순서는 기존과 동일하게 유지했다.
+  - 이후 레짐/ATR/score 기반 비중 조정은 `core/risk/allocation.py` 테스트를 먼저 갱신한 뒤 봇 본체에 연결한다.
+- 검증:
+  - `tests/test_regime_position_scale.py`
+  - `tests/test_strategy_settings.py`
+  - `tests/test_btc_trend_settings.py`
+  - `tests/test_upbit_ma_crossover_bot.py`
+  - `tests/test_upbit_provider.py`
+  - `python -m unittest discover -s tests -p 'test_*.py'`
+  - `py_compile` 대상: 네 개 실거래 봇과 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+
 ### 45. 장기 과거 시장 데이터 수집 기준 추가 (2026-05-06)
 
 - 변경 배경:
