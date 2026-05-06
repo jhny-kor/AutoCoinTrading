@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-06: BTC 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-05: BTC LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 진입 실패 reason 을 세분화하도록 연결
 - 2026-05-01: 거래량+ATR+RSI 과열 조합은 BTC 신규 진입을 막고, range 상단 추격 신호는 추가 확인을 요구하도록 보강
 - 2026-04-23: 확인 타임프레임 bullish 는 slope 하한까지 충족할 때만 유효하게 보고, 거래량 보너스는 ATR 동반 시에만 반영하도록 BTC 진입 품질을 더 보수화
@@ -106,6 +107,11 @@ from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_overheated_entry_risk,
     requires_overheat_confirmation,
+)
+from core.strategy.entry_committee import (
+    evaluate_entry_committee,
+    load_entry_committee_settings,
+    record_entry_committee_result,
 )
 from core.strategy.indicators import (
     calc_bollinger_band_width_pct,
@@ -252,6 +258,7 @@ def run_bot():
     """업비트 BTC 전용 EMA 추세추종 봇 메인 루프."""
     config = load_upbit_config()
     settings = load_btc_trend_settings()
+    entry_committee_settings = load_entry_committee_settings()
     exchange = create_upbit_client(config)
     market_data_provider: UpbitMarketDataProvider | None = create_upbit_market_data_provider(config)
     logger = BotLogger("upbit_btc_ema_trend_bot")
@@ -1124,6 +1131,7 @@ def run_bot():
                 noise_spread_multiplier=noise_spread_multiplier,
                 base_min_ema_spread_pct=base_min_ema_spread_pct,
                 effective_signal_score_min=effective_signal_score_min,
+                signal_is_strong=signal_is_strong,
                 entry_timing_phase=entry_timing_snapshot.phase,
                 entry_timing_confirmation_count=entry_timing_snapshot.confirmation_count,
                 entry_timing_required_confirmations=entry_timing_snapshot.required_confirmations,
@@ -1169,6 +1177,8 @@ def run_bot():
                 allocation_execution_score=allocation_score_result.execution_score_component,
                 allocation_diversification_score=allocation_score_result.diversification_score_component,
                 allocation_reason_top=allocation_score_result.reason_top,
+                order_value=order_value,
+                executable_order_value_quote=order_value,
                 pnl_pct=pnl_pct,
                 net_pnl_pct_estimate=current_net_realized_pnl_pct,
                 fee_protect_min_net_pnl_pct=settings.fee_protect_min_net_pnl_pct,
@@ -1216,6 +1226,11 @@ def run_bot():
                 regime_trailing_drawdown_multiplier=regime_policy.trailing_drawdown_multiplier,
                 regime_partial_take_profit_ratio_multiplier=regime_policy.partial_take_profit_ratio_multiplier,
             )
+            entry_committee_result = evaluate_entry_committee(
+                common_metrics,
+                entry_committee_settings,
+            )
+            common_metrics.update(entry_committee_result.to_metrics())
             log(
                 f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
                 f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
@@ -1318,6 +1333,13 @@ def run_bot():
                         required={"required_confirmations": entry_timing_snapshot.required_confirmations},
                     ),
                 ]
+            )
+            record_entry_committee_result(
+                structured_logger=structured_logger,
+                symbol=symbol,
+                metrics=common_metrics,
+                entry_steps=entry_steps,
+                result=entry_committee_result,
             )
             entry_ready, _ = structured_logger.run_funnel(
                 symbol=symbol,

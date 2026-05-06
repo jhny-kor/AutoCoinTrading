@@ -2,6 +2,7 @@
 # structured TOML format
 # 2026-04-03: canonical runtime config 예시로 승격
 # 2026-04-09: score 기반 동적 자본 배분 예시 키 추가
+# 2026-05-06: 매수 신호 다관점 검토 위원회 예시 키 추가
 
 [portfolio]
 enable_score_based_scaling = true
@@ -15,6 +16,18 @@ score_bucket_very_strong = 85
 score_bucket_strong = 75
 score_bucket_neutral = 65
 score_bucket_weak = 55
+
+[entry_committee]
+enabled = true
+mode = "shadow"
+min_approve_votes = 3
+require_risk_approval = true
+require_execution_approval = true
+min_signal_score = 50.0
+min_orderbook_pressure_score = 45.0
+min_fill_ratio = 0.70
+high_atr_percentile = 95.0
+upper_range_position_pct = 80.0
 
 [btc_trend]
 version = "btc_mid_v1"

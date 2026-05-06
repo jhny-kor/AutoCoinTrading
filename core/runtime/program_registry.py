@@ -1,5 +1,6 @@
 """
 수정 요약
+- 자동복구 watchdog 을 관리 대상 프로그램과 전체 시작 순서에 추가했다.
 - 업비트 공개 웹소켓 시장데이터 수집기를 관리 대상 프로그램으로 추가하고 전체 시작 순서에 포함했다.
 """
 
@@ -82,6 +83,13 @@ PROGRAM_SPECS: tuple[ProgramSpec, ...] = (
         report_label="텔레그램 명령 리스너",
         log_name="telegram_command_listener.log",
     ),
+    ProgramSpec(
+        name="auto_recovery",
+        script="run/auto_recovery_watchdog.py",
+        title="자동복구 감시기",
+        report_label="자동복구 감시기",
+        log_name="auto_recovery_watchdog.log",
+    ),
 )
 
 PROGRAMS: dict[str, str] = {spec.name: spec.script for spec in PROGRAM_SPECS}
@@ -96,6 +104,7 @@ START_ALL_ORDER: tuple[str, ...] = (
     "upbit",
     "okx_btc",
     "upbit_btc",
+    "auto_recovery",
 )
 TRADE_PROGRAM_SPECS: tuple[ProgramSpec, ...] = tuple(
     spec for spec in PROGRAM_SPECS if spec.strategy_type is not None

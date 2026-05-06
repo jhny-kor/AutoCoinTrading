@@ -41,6 +41,7 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 분석 수집기: [run/analysis_log_collector.py](/Users/plo/Documents/auto_coin_bot/run/analysis_log_collector.py)
 - 업비트 웹소켓 수집기: [run/upbit_market_data_stream.py](/Users/plo/Documents/auto_coin_bot/run/upbit_market_data_stream.py)
 - 텔레그램 명령 리스너: [run/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/run/telegram_command_listener.py)
+- 자동복구 감시기: [run/auto_recovery_watchdog.py](/Users/plo/Documents/auto_coin_bot/run/auto_recovery_watchdog.py)
 
 ## 빠른 시작
 
@@ -64,6 +65,7 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 분석 수집기
 - 업비트 웹소켓 수집기
 - 텔레그램 명령 리스너
+- 자동복구 감시기
 
 ### 수시 확인
 
@@ -117,6 +119,16 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 순익 보호 익절
 - 피라미딩 1회 제한
 - 레짐 기반 전략 라우터
+
+### 매수 검토 위원회
+
+매수 후보는 기존 퍼널과 별도로 `strategy / risk / execution / portfolio / regime` 관점에서 한 번 더 평가합니다.
+
+- 구현: [core/strategy/entry_committee.py](/Users/plo/Documents/auto_coin_bot/core/strategy/entry_committee.py)
+- 설정: [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)의 `[entry_committee]`
+- 현재 모드: `shadow`
+- 동작: 구조화 로그에 `entry_committee` 투표 결과를 남기지만, 실거래 진입을 즉시 추가 차단하지는 않음
+- 전환: 충분한 표본 검증 후 `mode = "active"` 로 바꾸면 위원회 거절이 실제 entry funnel 단계로 연결됨
 
 ### BTC 레짐 라우팅
 
@@ -226,6 +238,8 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 운영 헬스체크: `.venv/bin/python tools/healthcheck.py`
 - JSON 헬스체크: `.venv/bin/python tools/healthcheck.py --json`
 - strict 모드: `.venv/bin/python tools/healthcheck.py --mode strict`
+- 자동복구 1회 점검: `.venv/bin/python tools/auto_recovery_watchdog.py --once`
+- 자동복구 관리 시작: `.venv/bin/python bot_manager.py start auto_recovery`
 
 현재 테스트 범위:
 - 알트 신호 계산
@@ -241,11 +255,13 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 퍼널 생성기
 - 변경 효과 자동 비교
 - 미체결 후보 가상 추적
+- 매수 검토 위원회
 - 진입 상태 머신
 - 체결률 기반 실행 품질 가드
 - 포트폴리오 배분
 - decision journal / risk review
 - 운영 헬스체크
+- 자동복구 watchdog
 
 ## 백테스트
 
@@ -285,6 +301,7 @@ live 설정을 건드리지 않고 백테스트에만 추가 override TOML 을 �
 
 ## 검토가 필요한 부분
 
-- [tools/healthcheck.py](/Users/plo/Documents/auto_coin_bot/tools/healthcheck.py)는 기본 `warning` 모드에서 `upbit_stream` 같은 비핵심 경로를 전체 실패로 보지 않습니다. 배포/장애 대응 시에는 `--mode strict` 기준을 언제 쓸지 운영 규칙을 더 명확히 정하면 좋습니다.
+- [tools/auto_recovery_watchdog.py](/Users/plo/Documents/auto_coin_bot/tools/auto_recovery_watchdog.py)는 쿨다운과 시간당 재기동 제한을 둔 자동복구까지만 수행합니다. 코드 수정까지 자동화하는 self-healing 은 별도 검증/승인 절차 없이는 운영에 넣지 않는 것이 안전합니다.
+- [tools/healthcheck.py](/Users/plo/Documents/auto_coin_bot/tools/healthcheck.py)는 기본 `warning` 모드에서 `upbit_stream` 같은 경고성 경로를 전체 실패로 보지 않습니다. 자동복구는 WARN도 기본 복구 대상으로 보지만, 배포/장애 대응 시 `--mode strict` 기준을 언제 쓸지 운영 규칙을 더 명확히 정하면 좋습니다.
 - README의 `Docker / Windows 실행파일` 같은 배포 안내는 현재 실제 릴리스 절차와 계속 맞는지 별도 확인이 필요합니다.
 - 루트 호환 래퍼들은 아직 남아 있으므로, 실제 외부 사용 경로를 다시 확인한 뒤 정리 시점을 잡는 것이 좋습니다.

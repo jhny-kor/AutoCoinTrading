@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-06: 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-06: mean_reversion 하단 근접 후보는 소액 비중과 추가 confirmation 으로만 진입 후보화
 - 2026-05-05: 업비트 알트 고품질 후보가 최소주문금액에만 걸릴 때 예산과 손절방지 조건 확인 후 최소 주문 floor 를 적용
 - 2026-05-05: LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 업비트 주문 버퍼 후 최소금액 차단을 퍼널에 반영
@@ -114,6 +115,11 @@ from core.strategy.alt import (
     compute_alt_signal_state,
     compute_can_average_down,
     compute_alt_stop_loss_reentry_gate,
+)
+from core.strategy.entry_committee import (
+    evaluate_entry_committee,
+    load_entry_committee_settings,
+    record_entry_committee_result,
 )
 from core.strategy.combined_filters import (
     calc_recent_range_context,
@@ -414,6 +420,7 @@ def run_bot():
     """
     config = load_config()
     strategy = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+    entry_committee_settings = load_entry_committee_settings()
     exchange = create_upbit_client(config)
     market_data_provider = create_upbit_market_data_provider(config)
 
@@ -1740,6 +1747,9 @@ def run_bot():
                     noise_gap_multiplier=noise_gap_multiplier,
                     base_min_gap_pct=base_min_gap_pct,
                     signal_score=signal_score,
+                    signal_is_strong=signal_is_strong,
+                    entry_signal=entry_signal,
+                    bullish_signal=bullish,
                     rsi_value=rsi_value,
                     rsi_filter_passed=rsi_filter_passed,
                     macd_histogram=macd_histogram,
@@ -1857,6 +1867,7 @@ def run_bot():
                     allocation_diversification_score=allocation_score_result.diversification_score_component,
                     allocation_reason_top=allocation_score_result.reason_top,
                     effective_position_ratio=position_ratio,
+                    order_value=executable_krw_to_use,
                     regime_dynamic_overweight_allowed=regime_policy.allow_dynamic_overweight,
                     regime_stop_loss_multiplier=regime_policy.stop_loss_multiplier,
                     regime_take_profit_bonus_pct=regime_policy.take_profit_bonus_pct,
@@ -1866,6 +1877,11 @@ def run_bot():
                     partial_take_profit_pending=partial_take_profit_pending,
                     partial_stop_loss_pending=partial_stop_loss_pending,
                 )
+                entry_committee_result = evaluate_entry_committee(
+                    common_metrics,
+                    entry_committee_settings,
+                )
+                common_metrics.update(entry_committee_result.to_metrics())
 
                 entry_cooldown_active = (
                     in_cooldown
@@ -2096,6 +2112,13 @@ def run_bot():
                             required={"portfolio_target_budget_quote": allocation_decision.target_budget_quote},
                         ),
                     ]
+                )
+                record_entry_committee_result(
+                    structured_logger=structured_logger,
+                    symbol=symbol,
+                    metrics=common_metrics,
+                    entry_steps=entry_steps,
+                    result=entry_committee_result,
                 )
                 entry_ready, _ = structured_logger.run_funnel(
                     symbol=symbol,

@@ -1033,6 +1033,30 @@
   - 직접 명령(`/pnl`, `/last` 등)은 데이터 없음도 그대로 알려준다.
   - 복합 리포트(`/analysis`, 정기 리포트)는 판단에 필요한 섹션만 남겨 읽는 시간을 줄인다.
 
+### 44. 자동복구 watchdog 과 매수 검토 위원회 shadow 도입 (2026-05-06)
+
+- 변경 배경:
+  - 장애가 반복될 때 운영자가 로그를 보고 수동 재기동하는 시간이 길면 실제 거래 기회와 로그 연속성이 함께 손상된다.
+  - 매수 신호도 단일 점수만 보지 말고 전략/리스크/체결/포트폴리오/레짐 관점을 분리해, 어떤 관점이 반대했는지 기록할 필요가 있었다.
+- 변경 내용:
+  - [tools/auto_recovery_watchdog.py](/Users/plo/Documents/auto_coin_bot/tools/auto_recovery_watchdog.py)
+    - [tools/healthcheck.py](/Users/plo/Documents/auto_coin_bot/tools/healthcheck.py) 결과에서 `FAIL` 또는 기본 설정상 `WARN` 프로그램을 감지
+    - 쿨다운 `300초`, 시간당 최대 `3회` 제한을 둔 뒤 `bot_manager` 경로로 재기동
+    - 복구 성공/실패/보류를 `logs/runtime/auto_recovery/events.jsonl` 과 `logs/YYYY-MM-DD/auto_recovery_watchdog.log` 에 기록
+    - 복구 성공 시 텔레그램에 `장애 발생하여 해결완료` 형식으로 원인, 조치, 새 PID를 전송
+  - [core/runtime/program_registry.py](/Users/plo/Documents/auto_coin_bot/core/runtime/program_registry.py)
+    - `auto_recovery` 를 관리 대상 프로그램과 `start all` 순서에 추가
+  - [core/strategy/entry_committee.py](/Users/plo/Documents/auto_coin_bot/core/strategy/entry_committee.py)
+    - `strategy`, `risk`, `execution`, `portfolio`, `regime` 5개 관점으로 매수 후보를 독립 평가
+    - 현재 [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)은 `mode = "shadow"` 로 두어 실제 진입을 추가 차단하지 않고 구조화 로그만 남김
+    - 향후 표본이 쌓이면 `mode = "active"` 로 전환해 위원회 거절을 entry funnel 단계로 연결 가능
+- 운영 원칙:
+  - 자동복구는 프로세스 재기동까지만 수행하고, 코드 수정이나 설정 변경은 자동으로 하지 않는다.
+  - 매수 검토 위원회는 먼저 shadow 로그로 거절 관점과 실제 이후 성과를 비교한 뒤 active 전환 여부를 판단한다.
+- 검증:
+  - `tests/test_auto_recovery_watchdog.py`
+  - `tests/test_entry_committee.py`
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜
