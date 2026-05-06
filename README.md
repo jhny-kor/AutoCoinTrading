@@ -272,6 +272,7 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - 레지스트리 갱신: `.venv/bin/python tools/update_backtest_registry.py`
 - 장기 과거 데이터 수집: `.venv/bin/python tools/historical_market_collector.py launch`
 - 장기 수집 상태 확인: `.venv/bin/python tools/historical_market_collector.py status`
+- 실행 중인 장기 수집 완료 알림 감시: `.venv/bin/python tools/historical_market_collector.py launch-watch`
 
 과거 데이터 수집 기준:
 - BTC, ETH: 최근 3년

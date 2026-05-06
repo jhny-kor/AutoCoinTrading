@@ -93,6 +93,12 @@ OKX 추가 필드:
 .venv/bin/python tools/historical_market_collector.py status
 ```
 
+`launch` 로 시작한 수집은 기본적으로 완료/실패 시 텔레그램 알림을 보냅니다. 이미 실행 중인 수집 PID 를 감시해 완료 알림만 붙일 때는 아래 명령을 사용합니다.
+
+```bash
+.venv/bin/python tools/historical_market_collector.py launch-watch
+```
+
 테스트용 1페이지 수집:
 
 ```bash

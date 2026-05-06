@@ -1069,6 +1069,7 @@
     - OKX 는 spot 대응 SWAP `funding-rate-history` 도 함께 수집 가능
     - 중복 timestamp 는 건너뛰도록 구성해 중간 중단 후 같은 명령으로 이어받을 수 있게 함
     - 장시간 수집은 `launch/status` 로 백그라운드 실행과 PID 확인이 가능하게 함
+    - `launch` 완료/실패 텔레그램 알림과 기존 PID 감시용 `launch-watch` 를 추가
   - [docs/HISTORICAL_MARKET_DATA.md](/Users/plo/Documents/auto_coin_bot/docs/HISTORICAL_MARKET_DATA.md)
     - 수집 대상, 저장 경로, OHLCV/funding 필드, 제한 사항 문서화
 - 수집 필드:

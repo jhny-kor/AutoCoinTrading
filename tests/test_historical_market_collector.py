@@ -1,6 +1,6 @@
 """장기 과거 시장 데이터 수집 도구 테스트.
 
-페이지 단위 장기 수집에서 중복 timestamp 를 메모리 set 으로 유지하고, launch 가 collect 인자를 안전하게 구성하는 흐름까지 검증한다.
+페이지 단위 장기 수집에서 중복 timestamp 를 메모리 set 으로 유지하고, launch/watch 알림 인자를 안전하게 구성하는 흐름까지 검증한다.
 """
 
 import json
@@ -11,8 +11,10 @@ from types import SimpleNamespace
 
 from tools.historical_market_collector import (
     append_jsonl_unique,
+    build_collection_notification,
     build_collect_argv,
     build_default_targets,
+    build_watch_argv,
     parse_okx_funding_rows,
     parse_okx_history_candles,
     parse_upbit_candles,
@@ -147,6 +149,7 @@ class HistoricalMarketCollectorTests(unittest.TestCase):
                 max_pages=2,
                 request_delay_sec=0.2,
                 skip_funding=True,
+                no_telegram=False,
             )
         )
 
@@ -158,6 +161,44 @@ class HistoricalMarketCollectorTests(unittest.TestCase):
         self.assertIn("--max-pages", argv)
         self.assertIn("2", argv)
         self.assertIn("--skip-funding", argv)
+        self.assertIn("--notify-telegram", argv)
+
+    def test_build_watch_argv_preserves_pid_path_and_interval(self):
+        argv = build_watch_argv(
+            SimpleNamespace(
+                pid=1234,
+                pid_path="logs/pids/historical_market_collector.pid",
+                output_root="historical_data",
+                interval_sec=10.0,
+            )
+        )
+
+        self.assertIn("watch", argv)
+        self.assertIn("--pid", argv)
+        self.assertIn("1234", argv)
+        self.assertIn("--pid-path", argv)
+        self.assertIn("logs/pids/historical_market_collector.pid", argv)
+        self.assertIn("--interval-sec", argv)
+        self.assertIn("10.0", argv)
+
+    def test_build_collection_notification_summarizes_rows(self):
+        text = build_collection_notification(
+            summary={
+                "target_count": 2,
+                "ohlcv": [
+                    {"written_rows": 100, "page_count": 1},
+                    {"written_rows": 200, "page_count": 2},
+                ],
+                "funding": [{"written_rows": 3}],
+            },
+            output_root=Path("historical_data"),
+            status="완료",
+        )
+
+        self.assertIn("대상: 2개", text)
+        self.assertIn("OHLCV 신규 저장: 300 rows", text)
+        self.assertIn("Funding 신규 저장: 3 rows", text)
+        self.assertIn("OHLCV page: 3", text)
 
     def test_parse_okx_funding_rows_keeps_realized_rate_and_formula(self):
         rows = parse_okx_funding_rows(

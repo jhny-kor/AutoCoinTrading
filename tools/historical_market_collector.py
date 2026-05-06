@@ -4,6 +4,7 @@
 - OHLCV 는 백테스트와 바로 호환되는 JSONL 필드로 저장하고, OKX 는 funding rate history 도 함께 수집할 수 있게 구성했다.
 - 장기 1분봉 수집이 느려지지 않도록 기존 timestamp 는 target 시작 시 한 번만 읽고 메모리에서 중복을 제거한다.
 - 장시간 전체 수집은 launch/status 서브커맨드로 백그라운드 실행과 PID 확인이 가능하게 했다.
+- 장기 수집 완료/종료 시 텔레그램 알림을 보낼 수 있도록 collect 알림과 PID watcher 를 추가했다.
 
 과거 시장 데이터 수집기
 
@@ -45,6 +46,8 @@ DEFAULT_OUTPUT_ROOT = Path("historical_data")
 UPBIT_BASE_URL = "https://api.upbit.com"
 DEFAULT_LOG_PATH = Path("logs/historical_market_collector.log")
 DEFAULT_PID_PATH = Path("logs/pids/historical_market_collector.pid")
+DEFAULT_WATCH_LOG_PATH = Path("logs/historical_market_collector_watch.log")
+DEFAULT_WATCH_PID_PATH = Path("logs/pids/historical_market_collector_watch.pid")
 
 
 @dataclass(frozen=True)
@@ -790,6 +793,89 @@ def collect_targets(
     return summary
 
 
+def build_collection_notification(
+    *,
+    summary: dict[str, Any],
+    output_root: Path,
+    status: str,
+    note: str | None = None,
+) -> str:
+    """수집 요약을 텔레그램 알림 문구로 변환한다."""
+    ohlcv_results = summary.get("ohlcv", [])
+    funding_results = summary.get("funding", [])
+    total_ohlcv_written = sum(int(item.get("written_rows", 0)) for item in ohlcv_results)
+    total_funding_written = sum(int(item.get("written_rows", 0)) for item in funding_results)
+    total_pages = sum(int(item.get("page_count", 0)) for item in ohlcv_results)
+
+    lines = [
+        "[과거 시장 데이터 수집] " + status,
+        f"대상: {summary.get('target_count', len(ohlcv_results))}개",
+        f"OHLCV 신규 저장: {total_ohlcv_written} rows",
+        f"Funding 신규 저장: {total_funding_written} rows",
+        f"OHLCV page: {total_pages}",
+        f"저장 경로: {output_root}",
+    ]
+    if note:
+        lines.append(f"비고: {note}")
+    return "\n".join(lines)
+
+
+def send_telegram_message(text: str) -> tuple[bool, str | None]:
+    """텔레그램 메시지를 전송한다."""
+    from reporting.telegram_notifier import load_telegram_notifier
+
+    notifier = load_telegram_notifier()
+    return notifier.send_message_detailed(text)
+
+
+def notify_collection_summary(
+    *,
+    summary: dict[str, Any],
+    output_root: Path,
+    status: str = "완료",
+    note: str | None = None,
+) -> None:
+    """수집 결과를 텔레그램으로 알린다."""
+    sent, error = send_telegram_message(
+        build_collection_notification(
+            summary=summary,
+            output_root=output_root,
+            status=status,
+            note=note,
+        )
+    )
+    if sent:
+        print("텔레그램 완료 알림 전송 완료", flush=True)
+    else:
+        print(f"텔레그램 완료 알림 전송 실패: {error or '알 수 없는 오류'}", flush=True)
+
+
+def notify_collection_failure(*, output_root: Path, detail: str) -> None:
+    """수집 실패를 텔레그램으로 알린다."""
+    sent, error = send_telegram_message(
+        "\n".join(
+            [
+                "[과거 시장 데이터 수집] 실패",
+                f"저장 경로: {output_root}",
+                f"원인: {detail}",
+            ]
+        )
+    )
+    if sent:
+        print("텔레그램 실패 알림 전송 완료", flush=True)
+    else:
+        print(f"텔레그램 실패 알림 전송 실패: {error or '알 수 없는 오류'}", flush=True)
+
+
+def load_collection_summary(output_root: Path) -> dict[str, Any] | None:
+    """수집 요약 파일을 읽는다."""
+    summary_path = output_root / "collection_summary.json"
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """CLI 인자 파서를 만든다."""
     parser = argparse.ArgumentParser(description="장기 과거 시장 데이터 수집기")
@@ -799,6 +885,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect_parser = subparsers.add_parser("collect", help="수집 실행")
     launch_parser = subparsers.add_parser("launch", help="백그라운드 전체 수집 실행")
     status_parser = subparsers.add_parser("status", help="백그라운드 수집 상태 확인")
+    watch_parser = subparsers.add_parser("watch", help="수집 PID 종료 감시 후 텔레그램 알림")
+    launch_watch_parser = subparsers.add_parser("launch-watch", help="수집 완료 알림 watcher 백그라운드 실행")
     for sub in (plan_parser, collect_parser, launch_parser):
         sub.add_argument("--exchange", choices=["okx", "upbit", "all"], default="all")
         sub.add_argument("--symbols", help="쉼표 구분 심볼 목록. 지정하면 모든 선택 거래소에 동일 적용")
@@ -811,11 +899,20 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--max-pages", type=int, help="테스트용 최대 페이지 수")
     collect_parser.add_argument("--request-delay-sec", type=float, default=0.15)
     collect_parser.add_argument("--skip-funding", action="store_true")
+    collect_parser.add_argument("--notify-telegram", action="store_true")
     launch_parser.add_argument("--request-delay-sec", type=float, default=0.2)
     launch_parser.add_argument("--skip-funding", action="store_true")
     launch_parser.add_argument("--log-path", default=str(DEFAULT_LOG_PATH))
     launch_parser.add_argument("--pid-path", default=str(DEFAULT_PID_PATH))
+    launch_parser.add_argument("--no-telegram", action="store_true")
     status_parser.add_argument("--pid-path", default=str(DEFAULT_PID_PATH))
+    for sub in (watch_parser, launch_watch_parser):
+        sub.add_argument("--pid", type=int, help="감시할 수집 프로세스 PID")
+        sub.add_argument("--pid-path", default=str(DEFAULT_PID_PATH))
+        sub.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
+        sub.add_argument("--interval-sec", type=float, default=60.0)
+    launch_watch_parser.add_argument("--log-path", default=str(DEFAULT_WATCH_LOG_PATH))
+    launch_watch_parser.add_argument("--watch-pid-path", default=str(DEFAULT_WATCH_PID_PATH))
 
     return parser
 
@@ -879,16 +976,24 @@ def run_collect(args: argparse.Namespace) -> int:
     end_default = now_ms()
     end_ms = parse_date_to_ms(args.end, end_default)
     start_ms = parse_date_to_ms(args.start, 0) if args.start else None
-    summary = collect_targets(
-        targets,
-        output_root=Path(args.output_root),
-        start_ms=start_ms,
-        end_ms=end_ms,
-        request_delay_sec=args.request_delay_sec,
-        max_pages=args.max_pages,
-        include_funding=not args.skip_funding,
-    )
+    output_root = Path(args.output_root)
+    try:
+        summary = collect_targets(
+            targets,
+            output_root=output_root,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            request_delay_sec=args.request_delay_sec,
+            max_pages=args.max_pages,
+            include_funding=not args.skip_funding,
+        )
+    except Exception as exc:
+        if getattr(args, "notify_telegram", False):
+            notify_collection_failure(output_root=output_root, detail=repr(exc))
+        raise
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+    if getattr(args, "notify_telegram", False):
+        notify_collection_summary(summary=summary, output_root=output_root)
     return 0
 
 
@@ -921,6 +1026,8 @@ def build_collect_argv(args: argparse.Namespace) -> list[str]:
         argv.extend(["--max-pages", str(args.max_pages)])
     if args.skip_funding:
         argv.append("--skip-funding")
+    if not getattr(args, "no_telegram", False):
+        argv.append("--notify-telegram")
     return argv
 
 
@@ -983,6 +1090,105 @@ def run_status(args: argparse.Namespace) -> int:
     return 1
 
 
+def resolve_watch_pid(args: argparse.Namespace) -> int | None:
+    """watch 인자에서 감시할 PID 를 결정한다."""
+    if args.pid is not None:
+        return args.pid
+    return read_pid(Path(args.pid_path))
+
+
+def run_watch(args: argparse.Namespace) -> int:
+    """수집 PID 종료를 감시하고 텔레그램 알림을 보낸다."""
+    pid = resolve_watch_pid(args)
+    output_root = Path(args.output_root)
+    if pid is None:
+        notify_collection_failure(
+            output_root=output_root,
+            detail=f"감시할 PID 를 찾지 못했습니다: {args.pid_path}",
+        )
+        return 1
+
+    print(f"장기 과거 데이터 수집 PID {pid} 종료 감시 시작", flush=True)
+    while is_pid_alive(pid):
+        time.sleep(max(1.0, float(args.interval_sec)))
+
+    summary = load_collection_summary(output_root)
+    if summary is None:
+        notify_collection_failure(
+            output_root=output_root,
+            detail=f"PID {pid} 종료를 감지했지만 collection_summary.json 이 없습니다.",
+        )
+        return 1
+
+    notify_collection_summary(
+        summary=summary,
+        output_root=output_root,
+        status="완료 감지",
+        note=f"감시 PID {pid} 종료",
+    )
+    return 0
+
+
+def build_watch_argv(args: argparse.Namespace) -> list[str]:
+    """launch-watch args 를 watch 서브커맨드 인자로 변환한다."""
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "watch",
+        "--pid-path",
+        args.pid_path,
+        "--output-root",
+        args.output_root,
+        "--interval-sec",
+        str(args.interval_sec),
+    ]
+    if args.pid is not None:
+        argv.extend(["--pid", str(args.pid)])
+    return argv
+
+
+def run_launch_watch(args: argparse.Namespace) -> int:
+    """watcher 를 백그라운드로 실행한다."""
+    watch_pid_path = Path(args.watch_pid_path)
+    existing_pid = read_pid(watch_pid_path)
+    if existing_pid is not None and is_pid_alive(existing_pid):
+        print(f"장기 과거 데이터 수집 watcher 가 이미 실행 중입니다. PID {existing_pid}")
+        return 0
+
+    if existing_pid is not None:
+        try:
+            watch_pid_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    log_path = Path(args.log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            build_watch_argv(args),
+            cwd=str(ROOT),
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+        )
+    write_pid(watch_pid_path, process.pid)
+    print(
+        json.dumps(
+            {
+                "status": "watcher_started",
+                "pid": process.pid,
+                "watch_pid_path": str(watch_pid_path),
+                "log_path": str(log_path),
+                "collector_pid_path": args.pid_path,
+                "output_root": args.output_root,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def main() -> int:
     """CLI 진입점."""
     args = build_parser().parse_args()
@@ -994,6 +1200,10 @@ def main() -> int:
         return run_launch(args)
     if args.command == "status":
         return run_status(args)
+    if args.command == "watch":
+        return run_watch(args)
+    if args.command == "launch-watch":
+        return run_launch_watch(args)
     raise ValueError(f"지원하지 않는 명령입니다: {args.command}")
 
 
