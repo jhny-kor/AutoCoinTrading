@@ -128,6 +128,7 @@
   - 단타 프로젝트 관리 대상 프로세스 시작/중지/상태 확인
   - PID 파일 기반 보조 상태 추적
   - 부팅 자동시작 시 `ps` 권한 이슈 대응 포함
+  - defunct 프로세스가 pidfile 에 남아 재시작을 막지 않도록 `ps stat` 기반 정리 수행
 
 ### 텔레그램 운영
 
@@ -167,7 +168,7 @@
   - 알트/BTC 신규 진입 비중 계산 결과 객체 제공
   - 알트: 심볼 레짐, BTC 레짐, BTC ATR, ALT ATR, score, probe 보정 순서 관리
   - BTC: 심볼 레짐, BTC ATR, score, probe 보정 순서 관리
-  - OKX/업비트 봇의 포지션 비중 로그 문구 공통화
+  - OKX/업비트 봇의 포지션 비중, allocation score, 포트폴리오 예산 로그 문구 공통화
 
 - [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
   - trade_history 기준 평균 진입가와 내부 상태 복구

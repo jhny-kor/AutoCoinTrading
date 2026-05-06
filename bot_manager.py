@@ -15,6 +15,7 @@
 - launchd 환경에서 ps 호출 권한이 없어도 자동 시작이 실패하지 않도록 보완했다.
 - ps 조회가 막힌 경우 PID 파일을 이용해 중복 시작과 상태 추적을 이어가도록 보완했다.
 - 프로세스 목록 조회가 막힌 경우 상태 출력에 안내 문구를 함께 남기도록 정리했다.
+- 2026-05-07: defunct 프로세스 PID 파일을 실행 중으로 오판하지 않도록 ps stat 기반 정리를 추가했다.
 
 가능한 모든 터미널 명령
 - .venv/bin/python bot_manager.py status
@@ -95,6 +96,17 @@ class ManagedProcess:
     command: str
 
 
+@dataclass(frozen=True)
+class ProcessListingEntry:
+    """ps 출력 한 줄을 구조화한 값."""
+
+    pid: int
+    ppid: int
+    elapsed: str
+    stat: str
+    command: str
+
+
 def pid_file_path(name: str) -> Path:
     """프로그램 이름에 대응하는 PID 파일 경로를 반환한다."""
     return PID_DIR / f"{name}.pid"
@@ -136,6 +148,34 @@ def remove_pid_file(name: str) -> None:
         path.unlink()
     except FileNotFoundError:
         return
+
+
+def parse_process_listing_line(raw_line: str) -> ProcessListingEntry | None:
+    """ps 출력 한 줄을 파싱한다."""
+    line = raw_line.strip()
+    if not line:
+        return None
+
+    parts = line.split(None, 4)
+    if len(parts) != 5:
+        return None
+
+    pid_text, ppid_text, elapsed, stat, command = parts
+    try:
+        return ProcessListingEntry(
+            pid=int(pid_text),
+            ppid=int(ppid_text),
+            elapsed=elapsed,
+            stat=stat,
+            command=command,
+        )
+    except ValueError:
+        return None
+
+
+def is_zombie_stat(stat: str) -> bool:
+    """ps STAT 값이 defunct/zombie 상태인지 판단한다."""
+    return stat.upper().startswith("Z")
 
 
 def build_pidfile_fallback_processes(
@@ -216,7 +256,7 @@ def list_managed_processes(exclude_current: bool = True) -> list[ManagedProcess]
 
     try:
         result = subprocess.run(
-            ["ps", "-Ao", "pid=,ppid=,etime=,command="],
+            ["ps", "-Ao", "pid=,ppid=,etime=,stat=,command="],
             capture_output=True,
             text=True,
             check=True,
@@ -237,34 +277,38 @@ def list_managed_processes(exclude_current: bool = True) -> list[ManagedProcess]
 
     current_pid = os.getpid()
     processes: list[ManagedProcess] = []
+    zombie_pids: set[int] = set()
 
     for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if not line:
+        entry = parse_process_listing_line(raw_line)
+        if entry is None:
             continue
 
-        parts = line.split(None, 3)
-        if len(parts) != 4:
+        if is_zombie_stat(entry.stat):
+            zombie_pids.add(entry.pid)
             continue
 
-        pid_text, ppid_text, elapsed, command = parts
-        pid = int(pid_text)
-        if exclude_current and pid == current_pid:
+        if exclude_current and entry.pid == current_pid:
             continue
 
         for name, script in PROGRAMS.items():
-            if command_matches_script(command, script):
+            if command_matches_script(entry.command, script):
                 processes.append(
                     ManagedProcess(
                         name=name,
                         script=script,
-                        pid=pid,
-                        ppid=int(ppid_text),
-                        elapsed=elapsed,
-                        command=command,
+                        pid=entry.pid,
+                        ppid=entry.ppid,
+                        elapsed=entry.elapsed,
+                        command=entry.command,
                     )
                 )
                 break
+
+    for name in PROGRAMS:
+        pid = read_pid_file(name)
+        if pid in zombie_pids:
+            remove_pid_file(name)
 
     return merge_with_pidfile_processes(processes, exclude_current=exclude_current)
 

@@ -91,7 +91,10 @@ from core.risk.allocation import (
     build_alt_allocation,
     build_alt_position_sizing,
     compute_allocation_score,
+    format_allocation_score_log,
     format_alt_position_sizing_log,
+    format_dynamic_bonus_log,
+    format_portfolio_budget_log,
 )
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
@@ -1194,14 +1197,7 @@ def run_bot():
                         alt_atr_pct=atr_pct,
                     )
                 )
-                log(
-                    f"[{symbol}] allocation score: 총점 {allocation_score_result.allocation_score:.1f} | "
-                    f"signal {allocation_score_result.signal_score_component:.1f}, "
-                    f"market {allocation_score_result.market_score_component:.1f}, "
-                    f"execution {allocation_score_result.execution_score_component:.1f}, "
-                    f"diversification {allocation_score_result.diversification_score_component:.1f} | "
-                    f"주요 사유 {allocation_score_result.reason_top}"
-                )
+                log(format_allocation_score_log(symbol=symbol, score=allocation_score_result))
                 if funding_rate is not None:
                     log(
                         f"[{symbol}] OKX funding rate: {funding_rate:.6f} "
@@ -1291,16 +1287,15 @@ def run_bot():
                         f"(표본 {fill_quality_snapshot.sample_count}, 차단 기준 {strategy.fill_quality_min_fill_ratio * 100:.1f}%)"
                     )
                 log(
-                    f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
-                    f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
-                    f"누적 투입 {allocation_decision.current_cost_basis_quote:.4f} {quote} | "
-                    f"남은 예산 {allocation_decision.remaining_budget_quote:.4f} {quote}"
+                    format_portfolio_budget_log(
+                        symbol=symbol,
+                        allocation_decision=allocation_decision,
+                        quote=quote,
+                        quote_decimals=4,
+                    )
                 )
                 if allocation_decision.dynamic_bonus_applied:
-                    log(
-                        f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
-                        f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
-                    )
+                    log(format_dynamic_bonus_log(symbol=symbol, allocation_decision=allocation_decision))
                 if min_order_amount > 0:
                     log(f"[{symbol}] 적용 최소 주문 수량: {min_order_amount:.4f} {base}")
                     log(f"[{symbol}] 포지션 인식 최소 수량도 동일하게 {position_threshold:.4f} {base} 로 적용합니다.")

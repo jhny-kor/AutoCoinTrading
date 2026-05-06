@@ -98,7 +98,10 @@ from core.risk.allocation import (
     build_btc_allocations,
     build_btc_position_sizing,
     compute_allocation_score,
+    format_allocation_score_log,
     format_btc_position_sizing_log,
+    format_dynamic_bonus_log,
+    format_portfolio_budget_log,
 )
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.runtime.bootstrap import build_btc_runtime_state
@@ -1089,14 +1092,7 @@ def run_bot():
                 dynamic_bonus_eligible=dynamic_bonus_eligible,
             )
             log(format_btc_position_sizing_log(symbol=symbol, sizing=position_sizing))
-            log(
-                f"[{symbol}] allocation score: 총점 {allocation_score_result.allocation_score:.1f} | "
-                f"signal {allocation_score_result.signal_score_component:.1f}, "
-                f"market {allocation_score_result.market_score_component:.1f}, "
-                f"execution {allocation_score_result.execution_score_component:.1f}, "
-                f"diversification {allocation_score_result.diversification_score_component:.1f} | "
-                f"주요 사유 {allocation_score_result.reason_top}"
-            )
+            log(format_allocation_score_log(symbol=symbol, score=allocation_score_result))
             order_value = allocation_decision.approved_order_value_quote
             add_on_order_value = add_on_allocation_decision.approved_order_value_quote
 
@@ -1226,16 +1222,15 @@ def run_bot():
             )
             common_metrics.update(entry_committee_result.to_metrics())
             log(
-                f"[{symbol}] 포트폴리오 목표 비중: 기본 {allocation_decision.base_target_pct * 100:.2f}% | "
-                f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
-                f"누적 투입 {allocation_decision.current_cost_basis_quote:.0f} {quote} | "
-                f"남은 예산 {allocation_decision.remaining_budget_quote:.0f} {quote}"
+                format_portfolio_budget_log(
+                    symbol=symbol,
+                    allocation_decision=allocation_decision,
+                    quote=quote,
+                    quote_decimals=0,
+                )
             )
             if allocation_decision.dynamic_bonus_applied:
-                log(
-                    f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
-                    f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
-                )
+                log(format_dynamic_bonus_log(symbol=symbol, allocation_decision=allocation_decision))
             if stop_loss_pattern_blocked:
                 log(
                     f"[{symbol}] 손절 후 패턴 재진입 대기 중입니다. "

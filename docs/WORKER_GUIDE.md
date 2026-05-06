@@ -111,7 +111,7 @@
 4. 변경 후 `trade_history_logger.py` 와 `structured_log_manager.py` 에 남는 로그 필드가 부족하지 않은지 확인합니다.
 5. 실거래 영향을 주는 경우 최근 로그 해석과 기대 효과를 문서에 남깁니다.
 
-포지션 비중을 바꿀 때는 먼저 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)의 `build_alt_position_sizing(...)`, `build_btc_position_sizing(...)` 와 [tests/test_regime_position_scale.py](/Users/plo/Documents/auto_coin_bot/tests/test_regime_position_scale.py)를 확인합니다.
+포지션 비중, allocation score, 포트폴리오 예산 로그를 바꿀 때는 먼저 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)의 sizing/log formatter 와 [tests/test_regime_position_scale.py](/Users/plo/Documents/auto_coin_bot/tests/test_regime_position_scale.py)를 확인합니다.
 
 ### 업비트/OKX 주문 지연 문제
 
@@ -161,8 +161,9 @@
 1. 현재 실행 상태를 먼저 확인합니다.
 2. 설정 변경이 크면 `stop all` 후 `start all` 로 재기동합니다.
 3. 일부 프로세스만 남으면 개별 `stop --force` 로 정리합니다.
-4. 재기동 후 PID 와 실행시간을 다시 확인합니다.
-5. 설정 반영 여부는 최신 로그 첫 구간에서 확인합니다.
+4. `PPID 0`, 실행시간 `?` 처럼 pidfile 기준 stale 상태가 보이면 [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)의 defunct pidfile 정리가 동작하는지 `status` 를 다시 확인합니다.
+5. 재기동 후 PID 와 실행시간을 다시 확인합니다.
+6. 설정 반영 여부는 최신 로그 첫 구간에서 확인합니다.
 
 ### 테스트와 검증
 

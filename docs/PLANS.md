@@ -28,7 +28,7 @@
   - `BTC ATR 스케일`
   - `allocation score 스케일`
   - `low energy probe 보정`
-- OKX/업비트 봇은 같은 결과 객체와 같은 로그 formatter 를 사용하므로, 이후 포지션 비중 관련 수정은 전략 본체보다 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)를 먼저 봅니다.
+- OKX/업비트 봇은 같은 결과 객체와 같은 로그 formatter 를 사용하므로, 이후 포지션 비중, allocation score, 포트폴리오 예산 로그 관련 수정은 전략 본체보다 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)를 먼저 봅니다.
 - 이 리팩토링은 계산 위치만 바꾼 것이며, 설정값과 진입/청산 조건은 바꾸지 않았습니다.
 
 ### 2026-04-18 현재 적용 핵심 강화 요약

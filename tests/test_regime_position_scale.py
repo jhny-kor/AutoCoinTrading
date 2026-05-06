@@ -4,8 +4,12 @@ from core.risk.allocation import (
     apply_regime_position_scale,
     build_alt_position_sizing,
     build_btc_position_sizing,
+    format_allocation_score_log,
     format_alt_position_sizing_log,
     format_btc_position_sizing_log,
+    format_dynamic_bonus_log,
+    format_portfolio_budget_log,
+    AllocationScoreResult,
 )
 
 
@@ -45,6 +49,14 @@ class DummyBtcSettings:
         if atr_pct is not None and atr_pct < 0.16:
             return 0.8
         return 1.0
+
+
+class DummyAllocationDecision:
+    base_target_pct = 0.3
+    effective_target_pct = 0.35
+    current_cost_basis_quote = 1234.5678
+    remaining_budget_quote = 9876.5432
+    dynamic_bonus_pct = 0.05
 
 
 class RegimePositionScaleTests(unittest.TestCase):
@@ -119,6 +131,55 @@ class RegimePositionScaleTests(unittest.TestCase):
         self.assertIn(
             "ATR 스케일 0.35x",
             format_btc_position_sizing_log(symbol="BTC/KRW", sizing=sizing),
+        )
+
+    def test_format_allocation_score_log_preserves_fields(self):
+        score = AllocationScoreResult(
+            allocation_score=72.3,
+            signal_score_component=80.0,
+            market_score_component=60.0,
+            execution_score_component=90.0,
+            diversification_score_component=55.0,
+            score_scale=0.9,
+            reason_top="diversification",
+        )
+
+        self.assertEqual(
+            "[XRP/KRW] allocation score: 총점 72.3 | "
+            "signal 80.0, market 60.0, execution 90.0, diversification 55.0 | "
+            "주요 사유 diversification",
+            format_allocation_score_log(symbol="XRP/KRW", score=score),
+        )
+
+    def test_format_portfolio_budget_log_preserves_quote_precision(self):
+        self.assertEqual(
+            "[BTC/KRW] 포트폴리오 목표 비중: 기본 30.00% | 유효 35.00% | "
+            "누적 투입 1235 KRW | 남은 예산 9877 KRW",
+            format_portfolio_budget_log(
+                symbol="BTC/KRW",
+                allocation_decision=DummyAllocationDecision(),
+                quote="KRW",
+                quote_decimals=0,
+            ),
+        )
+        self.assertEqual(
+            "[BTC/USDT] 포트폴리오 목표 비중: 기본 30.00% | 유효 35.00% | "
+            "누적 투입 1234.5678 USDT | 남은 예산 9876.5432 USDT",
+            format_portfolio_budget_log(
+                symbol="BTC/USDT",
+                allocation_decision=DummyAllocationDecision(),
+                quote="USDT",
+                quote_decimals=4,
+            ),
+        )
+
+    def test_format_dynamic_bonus_log_preserves_message(self):
+        self.assertEqual(
+            "[ETH/KRW] 거래량/추세 강세로 목표 비중을 +5.00% 임시 확대합니다.",
+            format_dynamic_bonus_log(
+                symbol="ETH/KRW",
+                allocation_decision=DummyAllocationDecision(),
+            ),
         )
 
 

@@ -8,6 +8,7 @@
 - 알트/BTC 신규 진입과 추가매수의 포트폴리오 배분 호출을 공통 래퍼로 분리했다.
 - 배분 계산 호출 방식이 봇마다 갈라지지 않도록 정리했다.
 - 2026-05-07: 알트/BTC 봇에 흩어진 포지션 비중 계산과 로그 문구를 공통 결과 객체로 정리해 전략 동작을 고정했다.
+- 2026-05-07: allocation score, 포트폴리오 예산, 동적 보너스 로그 문구를 공통 formatter 로 묶었다.
 """
 
 from __future__ import annotations
@@ -362,6 +363,40 @@ def format_btc_position_sizing_log(
         f"ATR 스케일 {sizing.atr_position_scale:.2f}x | "
         f"score 스케일 {sizing.score_scale:.2f}x | "
         f"최종 {sizing.position_ratio:.4f}"
+    )
+
+
+def format_allocation_score_log(*, symbol: str, score: AllocationScoreResult) -> str:
+    return (
+        f"[{symbol}] allocation score: 총점 {score.allocation_score:.1f} | "
+        f"signal {score.signal_score_component:.1f}, "
+        f"market {score.market_score_component:.1f}, "
+        f"execution {score.execution_score_component:.1f}, "
+        f"diversification {score.diversification_score_component:.1f} | "
+        f"주요 사유 {score.reason_top}"
+    )
+
+
+def format_portfolio_budget_log(
+    *,
+    symbol: str,
+    allocation_decision,
+    quote: str,
+    quote_decimals: int,
+) -> str:
+    return (
+        f"[{symbol}] 포트폴리오 목표 비중: "
+        f"기본 {allocation_decision.base_target_pct * 100:.2f}% | "
+        f"유효 {allocation_decision.effective_target_pct * 100:.2f}% | "
+        f"누적 투입 {allocation_decision.current_cost_basis_quote:.{quote_decimals}f} {quote} | "
+        f"남은 예산 {allocation_decision.remaining_budget_quote:.{quote_decimals}f} {quote}"
+    )
+
+
+def format_dynamic_bonus_log(*, symbol: str, allocation_decision) -> str:
+    return (
+        f"[{symbol}] 거래량/추세 강세로 목표 비중을 "
+        f"+{allocation_decision.dynamic_bonus_pct * 100:.2f}% 임시 확대합니다."
     )
 
 

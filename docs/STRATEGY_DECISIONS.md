@@ -1066,11 +1066,13 @@
   - [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
     - `AltPositionSizingResult`, `BtcPositionSizingResult` 추가
     - `build_alt_position_sizing(...)`, `build_btc_position_sizing(...)` 추가
-    - OKX/업비트가 같은 로그 문구를 쓰도록 formatter 추가
+    - OKX/업비트가 같은 포지션 비중, allocation score, 포트폴리오 예산, 동적 보너스 로그 문구를 쓰도록 formatter 추가
   - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py), [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
     - 알트 신규 진입 비중 계산을 공통 helper 로 대체
   - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py), [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
     - BTC 신규 진입 비중 계산을 공통 helper 로 대체
+  - [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)
+    - 재기동 중 남은 defunct PID 를 실행 중인 봇으로 오판하지 않도록 `ps stat` 기반 pidfile 정리를 추가
 - 해석:
   - 이번 변경은 전략 조정이 아니라 런타임 리팩토링이다.
   - 신규 진입 비중 계산 순서는 기존과 동일하게 유지했다.
@@ -1081,6 +1083,7 @@
   - `tests/test_btc_trend_settings.py`
   - `tests/test_upbit_ma_crossover_bot.py`
   - `tests/test_upbit_provider.py`
+  - `tests/test_bot_manager.py`
   - `python -m unittest discover -s tests -p 'test_*.py'`
   - `py_compile` 대상: 네 개 실거래 봇과 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
 
