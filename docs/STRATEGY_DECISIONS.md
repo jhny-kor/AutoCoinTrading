@@ -992,6 +992,47 @@
   - 단독 지표를 삭제하지는 않는다.
   - 다만 단독 긍정 신호로 매수 비중이 커지는 구조는 줄이고, 위험 조합일 때 차단/감점되도록 유지한다.
 
+### 42. 변경 효과 자동 비교와 미체결 후보 가상 추적 (2026-05-06)
+
+- 변경 배경:
+  - 최근 전략 변경이 많아졌지만, 변경 직후 `진입이 더 막혔는지`, `손절이 줄었는지`, `막힌 후보가 실제로는 수익 기회였는지`를 한 번에 비교하는 루프가 부족했다.
+  - 손절 방지 목표에서는 필터를 추가하는 것보다, 차단된 후보의 사후 가격 흐름을 계속 검증하는 장치가 먼저 필요하다고 판단했다.
+- 변경 내용:
+  - [reporting/change_effect_report.py](/Users/plo/Documents/auto_coin_bot/reporting/change_effect_report.py)
+    - 최신 git 변경 시각 또는 지정 시각 기준으로 전후 `scan`, `ready`, `order_requested`, `filled`, 주요 차단 사유, 손절 수, 평균 순손익을 비교
+    - CLI: `.venv/bin/python tools/change_effect_report.py --hours 12`
+  - [reporting/shadow_candidate_tracker.py](/Users/plo/Documents/auto_coin_bot/reporting/shadow_candidate_tracker.py)
+    - 실제 매수되지 않은 entry scan 후보를 이후 scan 가격으로 가상 추적
+    - 후보별 `MFE`, `MAE`, 최종 수익률, 가상 TP/SL 도달 여부, 첫 차단 사유를 기록
+    - CLI: `.venv/bin/python tools/shadow_candidate_tracker.py --hours 6 --horizon-minutes 60`
+  - [reporting/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/reporting/telegram_command_listener.py)
+    - `/change`, `/shadow` 명령 추가
+    - `/analysis` 에 변경 효과와 미체결 후보 요약을 함께 표시
+- 운영 원칙:
+  - 이 기능은 주문 gate 를 직접 바꾸지 않는다.
+  - 먼저 차단된 후보의 사후 성과를 쌓고, 어떤 차단 사유가 실제 수익 기회를 과도하게 막는지 확인한 뒤 설정값을 조정한다.
+- 검증:
+  - `tests/test_change_effect_report.py`
+  - `tests/test_shadow_candidate_tracker.py`
+
+### 43. 텔레그램 리포트 판정 중심 정리 (2026-05-06)
+
+- 변경 배경:
+  - 텔레그램 리포트에 `아직 데이터가 없습니다`, `ready 0 / filled 0` 같은 저신호 문구가 반복되면 실제 판단에 방해가 된다.
+  - 변경 효과와 미체결 후보 리포트는 숫자보다 `현재 조정이 개선인지, 표본 부족인지, 위험 신호인지`가 먼저 보여야 한다.
+- 변경 내용:
+  - [reporting/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/reporting/telegram_command_listener.py)
+    - `/analysis`, 일일 리포트, 주간 리포트에서 빈 보조 섹션을 자동 숨김
+    - 전략 퍼널/병목/체결 변화 문구를 진입 기준으로 정리하고 ready율, 병목 비중을 함께 표시
+    - 심볼별 결론은 원자료 나열보다 행동 판단 문구 중심으로 표시
+  - [reporting/change_effect_report.py](/Users/plo/Documents/auto_coin_bot/reporting/change_effect_report.py)
+    - 변경 전후 비교에 `판정` 문구와 시간당 scan 흐름을 추가
+  - [reporting/shadow_candidate_tracker.py](/Users/plo/Documents/auto_coin_bot/reporting/shadow_candidate_tracker.py)
+    - 미체결 후보 요약에 가상 익절/손절 비율 기반 판정 문구를 추가
+- 운영 원칙:
+  - 직접 명령(`/pnl`, `/last` 등)은 데이터 없음도 그대로 알려준다.
+  - 복합 리포트(`/analysis`, 정기 리포트)는 판단에 필요한 섹션만 남겨 읽는 시간을 줄인다.
+
 ## 앞으로 기록할 때 남기면 좋은 항목
 
 - 수정 날짜

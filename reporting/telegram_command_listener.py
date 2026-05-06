@@ -1,6 +1,8 @@
 """
 수정 요약
 - 2026-04-28: /analysis 와 /weekly 에 decision journal 기반 의사결정 리뷰와 reflection 요약을 추가했다.
+- 2026-05-06: 복합 리포트에서 빈 보조 섹션을 숨기고 핵심 판정이 먼저 보이도록 텔레그램 문구를 정리했다.
+- 2026-05-06: /change 와 /shadow 명령으로 변경 효과 자동 비교와 미체결 후보 가상 추적 요약을 확인하도록 추가했다.
 - 2026-04-24: 튜닝 비교 리포트가 오래된 diff 파일에 머무르지 않도록 최신 batch_summary 2개 비교 fallback 과 Sharpe/PF 표시를 추가
 - 시간대 리포트, 최근 체결, 레짐/시장 요약, 최근 로그의 심볼 라벨 앞에 초록 원 배지를 붙여 텔레그램 가독성을 높임
 - /analysis 와 /weekly 에 최신 튜닝 세트 diff 요약을 붙여 보수형 대비 혼합형 개선 여부를 바로 보이도록 확장
@@ -55,6 +57,8 @@
 - /regime
 - /weekly
 - /last
+- /change
+- /shadow
 
 가능한 실행 명령
 - .venv/bin/python telegram_command_listener.py
@@ -102,6 +106,14 @@ from reporting.position_snapshot import (
     format_exchange_error_text,
 )
 from reporting.decision_journal import build_recent_reflection_summary
+from reporting.change_effect_report import (
+    build_change_effect_report,
+    format_change_effect_text,
+)
+from reporting.shadow_candidate_tracker import (
+    build_shadow_candidate_report,
+    format_shadow_candidate_text,
+)
 from market_regime_guard import classify_symbol_regime
 from state_recovery import (
     load_program_daily_realized_pnl_quote,
@@ -251,6 +263,41 @@ def send_text_in_chunks(notifier, text: str, limit: int = 3900) -> tuple[bool, s
     return sent_any, last_error
 
 
+LOW_SIGNAL_SECTION_MARKERS = (
+    "아직",
+    "없습니다",
+    "비교할 수 없습니다",
+    "집계할",
+    "찾지 못해",
+    "만들 수 없습니다",
+)
+
+
+def is_low_signal_section(section: str) -> bool:
+    """복합 리포트에서 숨겨도 되는 빈 보조 섹션인지 판단한다."""
+    lines = [line.strip() for line in section.strip().splitlines() if line.strip()]
+    if not lines:
+        return True
+    if len(lines) == 1:
+        return any(marker in lines[0] for marker in LOW_SIGNAL_SECTION_MARKERS)
+    if len(lines) <= 2 and any(marker in lines[-1] for marker in LOW_SIGNAL_SECTION_MARKERS):
+        return True
+    return False
+
+
+def join_report_sections(sections: list[str], *, skip_low_signal: bool = True) -> str:
+    """텔레그램 복합 리포트 섹션을 저신호 문구 없이 합친다."""
+    filtered: list[str] = []
+    for section in sections:
+        normalized = section.strip()
+        if not normalized:
+            continue
+        if skip_low_signal and is_low_signal_section(normalized):
+            continue
+        filtered.append(normalized)
+    return "\n\n".join(filtered)
+
+
 def format_number(value: float, decimals: int = 4) -> str:
     """지정 소수점 자리수와 천 단위 쉼표를 적용한 숫자 문자열을 만든다."""
     return f"{value:,.{decimals}f}"
@@ -284,6 +331,8 @@ def build_help_text() -> str:
         "- /analysis : 최근 분석 로그 요약\n"
         "- /regime : 심볼별 현재 레짐 요약\n"
         "- /weekly : 최근 7일 기준 주간 리포트\n"
+        "- /change : 최신 변경 전후 효과 자동 비교\n"
+        "- /shadow : 미체결 후보 가상 추적 요약\n"
         "- /last : 최근 운영 로그 확인\n"
         "- /help : 도움말"
     )
@@ -1071,6 +1120,8 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_recovered_position_state_text(settings),
         build_backtest_comparison_text(settings),
         build_latest_tuning_diff_text(),
+        build_change_effect_text(hours=2.0),
+        build_shadow_candidate_summary_text(lookback_hours=2.0),
         build_recent_reflection_summary(days=7),
         build_strategy_funnel_text(),
         build_trade_quality_text(settings),
@@ -1079,7 +1130,27 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_time_of_day_text(),
         build_volume_candidate_text(settings),
     ]
-    return "\n\n".join(section for section in sections if section)
+    return join_report_sections(sections)
+
+
+def build_change_effect_text(hours: float = 6.0) -> str:
+    """최신 git 변경 시점 기준 전후 효과 비교 문구를 만든다."""
+    try:
+        report = build_change_effect_report(hours=hours)
+    except ValueError:
+        return "변경 효과 자동 비교\n- 최신 git 변경 시각을 찾지 못해 비교할 수 없습니다."
+    except Exception as exc:
+        return f"변경 효과 자동 비교\n- 집계 중 오류가 발생했습니다: {exc}"
+    return format_change_effect_text(report)
+
+
+def build_shadow_candidate_summary_text(lookback_hours: float = 6.0) -> str:
+    """미체결 후보 가상 추적 요약 문구를 만든다."""
+    try:
+        report = build_shadow_candidate_report(lookback_hours=lookback_hours)
+    except Exception as exc:
+        return f"미체결 후보 가상 추적\n- 집계 중 오류가 발생했습니다: {exc}"
+    return format_shadow_candidate_text(report)
 
 
 def iter_recent_trade_records(days: int) -> list[dict]:
@@ -1294,6 +1365,8 @@ def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
         for record in analyze_strategy_logs.read_program_records(base_dir, program_name, "strategy.jsonl"):
             if not is_in_recent_days(str(record.get("recorded_at_local", "")), days, now=now):
                 continue
+            if str(record.get("side", "")) != "entry":
+                continue
             key = (program_name, str(record.get("symbol", "")), str(record.get("side", "")))
             bucket = grouped.setdefault(
                 key,
@@ -1319,7 +1392,7 @@ def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
     if not grouped:
         return f"최근 {days}일 전략 퍼널 요약\n- 아직 최근 {days}일 전략 로그가 없습니다."
 
-    lines = [f"최근 {days}일 전략 퍼널 요약"]
+    lines = [f"최근 {days}일 진입 퍼널 병목"]
     rows = sorted(
         grouped.items(),
         key=lambda item: (-int(item[1]["scans"]), item[0][0], item[0][1], item[0][2]),
@@ -1329,10 +1402,15 @@ def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
         top_block_reason = "-"
         if block_reasons:
             top_block_reason = sorted(block_reasons.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        scans = int(bucket["scans"])
+        ready = int(bucket["ready"])
+        filled = int(bucket["filled"])
+        top_block_count = int(block_reasons.get(top_block_reason, 0)) if block_reasons else 0
+        ready_rate = (ready / scans) * 100 if scans else 0.0
         lines.append(
-            f"- {program_name} | {symbol} {side} | "
-            f"scan {bucket['scans']} -> ready {bucket['ready']} -> filled {bucket['filled']} | "
-            f"주요 병목 {top_block_reason}"
+            f"- {program_name} | {format_symbol_badge(symbol)} | "
+            f"scan {scans} / ready {ready} ({ready_rate:.2f}%) / 체결 {filled} | "
+            f"병목 {top_block_reason} {top_block_count}회"
         )
     return "\n".join(lines)
 
@@ -1371,7 +1449,7 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
     now = datetime.now()
     start = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
     end = now.strftime("%Y-%m-%d %H:%M:%S")
-    return "\n\n".join(
+    return join_report_sections(
         [
             "주간 리포트",
             f"집계 구간: {start} ~ {end}",
@@ -1386,7 +1464,8 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
             build_weekly_funnel_text(7),
             build_weekly_time_of_day_text(7),
             build_volume_candidate_text(settings),
-        ]
+        ],
+        skip_low_signal=True,
     )
 
 
@@ -1701,16 +1780,27 @@ def build_strategy_funnel_text(limit: int = 8) -> str:
     rows = analyze_strategy_logs.build_summary_rows(base_dir)
     if not rows:
         return "전략 퍼널 분석 요약\n- 아직 집계할 전략 퍼널 로그가 없습니다."
+    rows = [row for row in rows if str(row.get("side", "")) == "entry"]
+    if not rows:
+        return "전략 퍼널 분석 요약\n- 집계된 진입 퍼널 로그가 아직 없습니다."
 
     def sort_key(row: dict) -> tuple:
-        return (row.get("program_name", ""), row.get("symbol", ""), row.get("side", ""))
+        scans = int(row.get("scans", 0) or 0)
+        ready = int(row.get("ready", 0) or 0)
+        return (-scans, -ready, row.get("program_name", ""), row.get("symbol", ""))
 
-    lines = ["전략 퍼널 분석 요약"]
+    lines = ["진입 퍼널 병목 요약"]
     for row in sorted(rows, key=sort_key)[:limit]:
+        scans = int(row.get("scans", 0) or 0)
+        ready = int(row.get("ready", 0) or 0)
+        filled = int(row.get("filled", 0) or 0)
+        ready_rate = (ready / scans) * 100 if scans > 0 else 0.0
+        top_block_count = int(row.get("top_block_count", 0) or 0)
+        top_block_ratio = (top_block_count / scans) * 100 if scans > 0 else 0.0
         lines.append(
-            f"- {row['program_name']} | {row['symbol']} {row['side']} | "
-            f"scan {row['scans']} -> ready {row['ready']} -> filled {row['filled']} | "
-            f"주요 병목 {row['top_block_reason']}"
+            f"- {row['program_name']} | {format_symbol_badge(str(row['symbol']))} | "
+            f"scan {scans} / ready {ready} ({ready_rate:.2f}%) / 체결 {filled} | "
+            f"병목 {row['top_block_reason']} {top_block_count}회 ({top_block_ratio:.1f}%)"
         )
     return "\n".join(lines)
 
@@ -1814,9 +1904,11 @@ def build_bottleneck_change_text(limit: int = 8) -> str:
     if not pairs:
         return "병목 TOP 3 변화\n- 시간 버킷 요약 로그가 아직 없어 비교할 수 없습니다."
 
-    lines = ["병목 TOP 3 변화"]
+    lines = ["최근 1시간 병목 변화"]
     for (program_name, symbol), records in sorted(pairs.items())[:limit]:
         current = records[0]
+        if int(current.get("scan_count", 0) or 0) <= 0:
+            continue
         current_reasons = current.get("block_reason_counts", {}) or {}
         current_top = sorted(
             current_reasons.items(),
@@ -1826,17 +1918,18 @@ def build_bottleneck_change_text(limit: int = 8) -> str:
 
         if len(records) < 2:
             lines.append(
-                f"- {program_name} | {symbol} | 현재 {current_top_text} | 이전 비교 데이터 부족"
+                f"- {program_name} | {format_symbol_badge(symbol)} | 현재 {current_top_text} | 이전 비교 부족"
             )
             continue
 
         previous = records[1]
         previous_top = previous.get("top_block_reason") or "없음"
-        previous_count = (previous.get("block_reason_counts", {}) or {}).get(previous_top, 0)
+        current_top_reason = current_top[0][0] if current_top else "없음"
+        trend = "변화 없음" if current_top_reason == previous_top else f"{previous_top} -> {current_top_reason}"
         lines.append(
-            f"- {program_name} | {symbol} | 현재 {current_top_text} | 이전 대표 {previous_top}:{previous_count}"
+            f"- {program_name} | {format_symbol_badge(symbol)} | {trend} | 현재 {current_top_text}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) if len(lines) > 1 else "최근 1시간 병목 변화\n- 의미 있는 진입 스캔 변화가 아직 없습니다."
 
 
 def build_filled_change_text(limit: int = 8) -> str:
@@ -1845,7 +1938,7 @@ def build_filled_change_text(limit: int = 8) -> str:
     if not pairs:
         return "체결 변화 요약\n- 시간 버킷 요약 로그가 아직 없어 비교할 수 없습니다."
 
-    lines = ["체결 변화 요약"]
+    lines = ["최근 1시간 체결 변화"]
     for (program_name, symbol), records in sorted(pairs.items())[:limit]:
         current = records[0]
         current_filled = int(current.get("filled_count", 0))
@@ -1854,18 +1947,23 @@ def build_filled_change_text(limit: int = 8) -> str:
         )
         if len(records) < 2:
             lines.append(
-                f"- {program_name} | {symbol} | 현재 ready {current_ready}, filled {current_filled} | 이전 비교 데이터 부족"
+                f"- {program_name} | {format_symbol_badge(symbol)} | ready {current_ready}, 체결 {current_filled} | 이전 비교 부족"
             )
             continue
 
         previous = records[1]
         previous_filled = int(previous.get("filled_count", 0))
+        previous_ready = int(previous.get("entry_ready_count", 0)) + int(previous.get("exit_ready_count", 0))
         delta = current_filled - previous_filled
-        delta_text = f"{delta:+d}"
+        ready_delta = current_ready - previous_ready
+        if current_ready == 0 and current_filled == 0 and previous_ready == 0 and previous_filled == 0:
+            continue
         lines.append(
-            f"- {program_name} | {symbol} | ready {current_ready}, filled {current_filled} | 이전 대비 {delta_text}"
+            f"- {program_name} | {format_symbol_badge(symbol)} | "
+            f"ready {previous_ready}->{current_ready} ({ready_delta:+d}) | "
+            f"체결 {previous_filled}->{current_filled} ({delta:+d})"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) if len(lines) > 1 else "최근 1시간 체결 변화\n- ready/체결 변화가 아직 없습니다."
 
 
 def build_symbol_conclusion_text(limit: int = 8) -> str:
@@ -1877,6 +1975,9 @@ def build_symbol_conclusion_text(limit: int = 8) -> str:
     rows = analyze_strategy_logs.build_summary_rows(base_dir)
     if not rows:
         return "심볼별 핵심 한 줄 결론\n- 아직 집계할 전략 로그가 없습니다."
+    rows = [row for row in rows if str(row.get("side", "")) == "entry"]
+    if not rows:
+        return "심볼별 핵심 한 줄 결론\n- 아직 집계할 진입 전략 로그가 없습니다."
 
     def build_conclusion(row: dict) -> str:
         top_reason = row.get("top_block_reason", "")
@@ -1900,9 +2001,9 @@ def build_symbol_conclusion_text(limit: int = 8) -> str:
         return "아직 표본이 적어 조금 더 로그를 쌓아보는 것이 좋습니다."
 
     lines = ["심볼별 핵심 한 줄 결론"]
-    for row in sorted(rows, key=lambda item: (item["program_name"], item["symbol"], item["side"]))[:limit]:
+    for row in sorted(rows, key=lambda item: (-int(item.get("scans", 0) or 0), item["program_name"], item["symbol"]))[:limit]:
         lines.append(
-            f"- {row['program_name']} | {row['symbol']} {row['side']} | {build_conclusion(row)}"
+            f"- {row['program_name']} | {format_symbol_badge(str(row['symbol']))} | {build_conclusion(row)}"
         )
     return "\n".join(lines)
 
@@ -1910,7 +2011,7 @@ def build_symbol_conclusion_text(limit: int = 8) -> str:
 def build_daily_report_text(settings: ListenerSettings, label: str) -> str:
     """정해진 시간에 보낼 일일 리포트 문구를 만든다."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return "\n\n".join(
+    return join_report_sections(
         [
             f"{label} 일일 리포트",
             f"기준 시각: {now}",
@@ -1922,7 +2023,8 @@ def build_daily_report_text(settings: ListenerSettings, label: str) -> str:
             build_symbol_conclusion_text(),
             build_recent_trades_text(),
             build_today_skip_summary_text(),
-        ]
+        ],
+        skip_low_signal=True,
     )
 
 
@@ -2262,6 +2364,10 @@ def build_response_text(command: str, settings: ListenerSettings) -> str:
         return build_regime_text(settings)
     if command == "/weekly":
         return build_weekly_report_text(settings)
+    if command == "/change":
+        return build_change_effect_text()
+    if command == "/shadow":
+        return build_shadow_candidate_summary_text()
     if command == "/last":
         return build_last_logs_text(settings)
     if command in {"/start", "/help"}:

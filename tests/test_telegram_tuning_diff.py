@@ -7,10 +7,23 @@ from reporting.telegram_command_listener import (
     build_tuning_diff_rows_from_batch_summaries,
     enrich_summary_metrics_from_result_dir,
     format_tuning_diff_row,
+    join_report_sections,
 )
 
 
 class TelegramTuningDiffTests(unittest.TestCase):
+    def test_join_report_sections_hides_empty_helper_sections(self):
+        text = join_report_sections(
+            [
+                "핵심 요약\n- 판단 가능",
+                "시간대 성과 요약\n- 아직 시간대별 체결 데이터가 없습니다.",
+                "",
+            ]
+        )
+
+        self.assertIn("핵심 요약", text)
+        self.assertNotIn("시간대 성과 요약", text)
+
     def test_build_tuning_diff_rows_from_batch_summaries_includes_new_metrics(self):
         before_payload = {
             "rows": [

@@ -74,6 +74,8 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
   - `/analysis`
   - `/regime`
   - `/weekly`
+  - `/change`
+  - `/shadow`
   - `/last`
 - 터미널
   - `.venv/bin/python bot_manager.py status`
@@ -83,6 +85,8 @@ OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 �
 - 시장 로그 요약: `.venv/bin/python analyze_logs.py`
 - 전략 퍼널 분석: `.venv/bin/python analyze_strategy_logs.py`
 - CSV 저장: `.venv/bin/python analyze_strategy_logs.py --csv reports/strategy_funnel.csv`
+- 변경 효과 자동 비교: `.venv/bin/python tools/change_effect_report.py --hours 12`
+- 미체결 후보 가상 추적: `.venv/bin/python tools/shadow_candidate_tracker.py --hours 6 --horizon-minutes 60`
 
 ## 전략 요약
 
@@ -206,11 +210,15 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - `/analysis`
 - `/regime`
 - `/weekly`
+- `/change`
+- `/shadow`
 - `/last`
 - `/help`
 
 `/analysis` 와 `/weekly` 에는 최근 decision journal 기반 의사결정 리뷰가 포함됩니다.  
 체결별 risk posture, 반복 우려 항목, 최근 reflection 을 함께 보여주며, journal 이 아직 없으면 최근 `trade_history` 를 같은 방식으로 임시 평가합니다.
+`/change` 는 최신 git 변경 시각 전후의 진입 퍼널/체결/손절 변화를 비교하고, `/shadow` 는 실제 매수되지 않은 후보가 이후 가격 흐름에서 가상 익절/손절에 도달했는지 보여줍니다.
+복합 리포트는 빈 보조 섹션을 숨기고, 숫자 나열보다 `판정`과 주요 병목이 먼저 보이도록 정리합니다.
 
 ## 테스트와 헬스체크
 
@@ -231,6 +239,8 @@ BTC 진입 확인 루프는 루프 주기 `10초` 기준으로 심볼별 분리 
 - Sharpe 기반 후보 랭킹
 - 상태 복구
 - 퍼널 생성기
+- 변경 효과 자동 비교
+- 미체결 후보 가상 추적
 - 진입 상태 머신
 - 체결률 기반 실행 품질 가드
 - 포트폴리오 배분
