@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-06: mean_reversion 하단 근접 후보는 소액 비중과 추가 confirmation 으로만 진입 후보화
 - 2026-05-05: 업비트 알트 고품질 후보가 최소주문금액에만 걸릴 때 예산과 손절방지 조건 확인 후 최소 주문 floor 를 적용
 - 2026-05-05: LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 업비트 주문 버퍼 후 최소금액 차단을 퍼널에 반영
 - 2026-05-05: mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합을 신규 진입 차단 조건으로 연결
@@ -923,6 +924,11 @@ def run_bot():
                         high_volume_ratio=strategy.mean_reversion_high_volume_ratio,
                         mid_atr_percentile=strategy.mean_reversion_mid_atr_percentile,
                         min_distance_from_low_pct=strategy.mean_reversion_min_distance_from_low_pct,
+                        allow_lower_near_probe=strategy.enable_mean_reversion_lower_near_probe,
+                        lower_near_max_distance_pct=strategy.mean_reversion_lower_near_max_distance_pct,
+                        lower_near_min_headroom_pct=strategy.mean_reversion_lower_near_min_headroom_pct,
+                        lower_near_position_scale=strategy.mean_reversion_lower_near_position_scale,
+                        lower_near_extra_confirmation_loops=strategy.mean_reversion_lower_near_extra_confirmation_loops,
                     )
                 bullish = bool(signal_state["bullish"])
                 bearish = bool(signal_state["bearish"])
@@ -936,6 +942,12 @@ def run_bot():
                 entry_signal = bool(signal_state["entry_signal"])
                 mean_reversion_falling_knife_blocked = bool(
                     signal_state.get("falling_knife_blocked", False)
+                )
+                mean_reversion_lower_near_probe_allowed = bool(
+                    signal_state.get("lower_near_probe_allowed", False)
+                )
+                mean_reversion_lower_near_extra_confirmation_loops = int(
+                    signal_state.get("lower_near_extra_confirmation_loops", 0)
                 )
                 low_energy_probe_decision = evaluate_low_energy_probe(
                     enabled=strategy.enable_low_energy_probe,
@@ -1163,6 +1175,12 @@ def run_bot():
                         and (not symbol_regime_requires_fresh_cross or bullish)
                     )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
+                if mean_reversion_lower_near_probe_allowed:
+                    log(
+                        f"[{symbol}] mean_reversion 하단 reclaim 전이지만 하단 근접 소액 probe 후보로 전환합니다. "
+                        f"bb_lower_distance={float(signal_state.get('bb_lower_distance_pct', 0.0)):.4f}%, "
+                        f"headroom={gap_pct:.4f}%, position_scale={strategy.mean_reversion_lower_near_position_scale:.2f}x"
+                    )
                 entry_timing_snapshot = update_entry_timing_state(
                     state_store=entry_timing_state,
                     symbol=symbol,
@@ -1182,6 +1200,7 @@ def run_bot():
                         )
                         + volume_spike_entry_downgrade.extra_confirmation_loops
                         + low_energy_probe_decision.extra_confirmation_loops
+                        + mean_reversion_lower_near_extra_confirmation_loops
                     ),
                 )
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
@@ -1578,6 +1597,11 @@ def run_bot():
                         base_position_ratio=position_ratio,
                         regime_scale=volume_spike_entry_downgrade.position_scale,
                     )
+                if mean_reversion_lower_near_probe_allowed:
+                    position_ratio = apply_regime_position_scale(
+                        base_position_ratio=position_ratio,
+                        regime_scale=strategy.mean_reversion_lower_near_position_scale,
+                    )
                 if low_energy_probe_decision.allowed:
                     low_energy_probe_position_ratio = apply_regime_position_scale(
                         base_position_ratio=base_position_ratio,
@@ -1790,6 +1814,25 @@ def run_bot():
                     low_energy_probe_allowed=low_energy_probe_decision.allowed,
                     low_energy_probe_reason=low_energy_probe_decision.reason,
                     low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
+                    mean_reversion_lower_reclaim_confirmed=bool(
+                        signal_state.get("lower_reclaim_confirmed", bullish)
+                    ),
+                    mean_reversion_lower_near_probe_allowed=mean_reversion_lower_near_probe_allowed,
+                    mean_reversion_lower_near_probe_reason=str(
+                        signal_state.get("lower_near_probe_reason", "")
+                    ),
+                    mean_reversion_bb_lower_distance_pct=float(
+                        signal_state.get("bb_lower_distance_pct", 0.0)
+                    ),
+                    mean_reversion_lower_near_max_distance_pct=(
+                        strategy.mean_reversion_lower_near_max_distance_pct
+                    ),
+                    mean_reversion_lower_near_position_scale=(
+                        strategy.mean_reversion_lower_near_position_scale
+                    ),
+                    mean_reversion_lower_near_extra_confirmation_loops=(
+                        mean_reversion_lower_near_extra_confirmation_loops
+                    ),
                     low_energy_avg_volume_ratio=low_energy_snapshot.avg_volume_ratio,
                     low_energy_avg_abs_change_pct=low_energy_snapshot.avg_abs_change_pct,
                     low_energy_ready_count=low_energy_snapshot.ready_count,
@@ -1881,6 +1924,16 @@ def run_bot():
                     squeeze_band_passed=bool(signal_state.get("squeeze_band_passed", True)),
                     squeeze_volume_passed=bool(signal_state.get("squeeze_volume_passed", True)),
                     squeeze_breakout_passed=bool(signal_state.get("squeeze_breakout_passed", True)),
+                    mean_reversion_lower_reclaim_confirmed=bool(
+                        signal_state.get("lower_reclaim_confirmed", bullish)
+                    ),
+                    mean_reversion_lower_near_probe_allowed=mean_reversion_lower_near_probe_allowed,
+                    mean_reversion_bb_lower_distance_pct=float(
+                        signal_state.get("bb_lower_distance_pct", 0.0)
+                    ),
+                    mean_reversion_lower_near_max_distance_pct=(
+                        strategy.mean_reversion_lower_near_max_distance_pct
+                    ),
                     atr_context_passed=bool(signal_state.get("atr_context_passed", True)),
                     range_context_passed=bool(signal_state.get("range_context_passed", True)),
                     falling_knife_blocked=mean_reversion_falling_knife_blocked,

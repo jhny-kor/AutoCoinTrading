@@ -188,6 +188,11 @@ class StrategySettingsTests(unittest.TestCase):
                 "STRATEGY_MEAN_REVERSION_HIGH_VOLUME_RATIO": "2.0",
                 "STRATEGY_MEAN_REVERSION_MID_ATR_PERCENTILE": "60",
                 "STRATEGY_MEAN_REVERSION_MIN_DISTANCE_FROM_LOW_PCT": "0.10",
+                "STRATEGY_ENABLE_MEAN_REVERSION_LOWER_NEAR_PROBE": "true",
+                "STRATEGY_MEAN_REVERSION_LOWER_NEAR_MAX_DISTANCE_PCT": "0.12",
+                "STRATEGY_MEAN_REVERSION_LOWER_NEAR_MIN_HEADROOM_PCT": "0.12",
+                "STRATEGY_MEAN_REVERSION_LOWER_NEAR_POSITION_SCALE": "0.25",
+                "STRATEGY_MEAN_REVERSION_LOWER_NEAR_EXTRA_CONFIRMATION_LOOPS": "2",
                 "STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO": "2.0",
                 "STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE": "85",
                 "STRATEGY_OVERHEAT_GUARD_RSI": "68",
@@ -221,6 +226,11 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(2.0, settings.mean_reversion_high_volume_ratio)
         self.assertEqual(60, settings.mean_reversion_mid_atr_percentile)
         self.assertEqual(0.10, settings.mean_reversion_min_distance_from_low_pct)
+        self.assertTrue(settings.enable_mean_reversion_lower_near_probe)
+        self.assertEqual(0.12, settings.mean_reversion_lower_near_max_distance_pct)
+        self.assertEqual(0.12, settings.mean_reversion_lower_near_min_headroom_pct)
+        self.assertEqual(0.25, settings.mean_reversion_lower_near_position_scale)
+        self.assertEqual(2, settings.mean_reversion_lower_near_extra_confirmation_loops)
         self.assertEqual(2.0, settings.overheat_guard_volume_ratio)
         self.assertEqual(85, settings.overheat_guard_atr_percentile)
         self.assertEqual(68, settings.overheat_guard_rsi)

@@ -1,5 +1,6 @@
 """
 수정 요약
+- mean_reversion 하단 근접 신호를 소액/추가확인 probe 후보로 제한하는 설정을 추가
 - 업비트 알트 고품질 READY 후보가 최소주문금액에만 걸릴 때 보수적으로 주문 floor 를 적용하는 설정을 추가
 - LOW_ENERGY 소액 probe 진입 보정 설정을 추가해 완전 차단 대신 고품질 후보만 추가확인으로 보낼 수 있게 확장
 - mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합 차단 설정을 추가
@@ -119,6 +120,11 @@ class StrategySettings:
     mean_reversion_high_volume_ratio: float
     mean_reversion_mid_atr_percentile: float
     mean_reversion_min_distance_from_low_pct: float
+    enable_mean_reversion_lower_near_probe: bool
+    mean_reversion_lower_near_max_distance_pct: float
+    mean_reversion_lower_near_min_headroom_pct: float
+    mean_reversion_lower_near_position_scale: float
+    mean_reversion_lower_near_extra_confirmation_loops: int
     overheat_guard_volume_ratio: float
     overheat_guard_atr_percentile: float
     overheat_guard_rsi: float
@@ -749,6 +755,11 @@ def load_strategy_settings(
         mean_reversion_high_volume_ratio=config_float("strategy", "mean_reversion_high_volume_ratio", 2.0, env_key="STRATEGY_MEAN_REVERSION_HIGH_VOLUME_RATIO"),
         mean_reversion_mid_atr_percentile=config_float("strategy", "mean_reversion_mid_atr_percentile", 60.0, env_key="STRATEGY_MEAN_REVERSION_MID_ATR_PERCENTILE"),
         mean_reversion_min_distance_from_low_pct=config_float("strategy", "mean_reversion_min_distance_from_low_pct", 0.10, env_key="STRATEGY_MEAN_REVERSION_MIN_DISTANCE_FROM_LOW_PCT"),
+        enable_mean_reversion_lower_near_probe=config_bool("strategy", "enable_mean_reversion_lower_near_probe", True, env_key="STRATEGY_ENABLE_MEAN_REVERSION_LOWER_NEAR_PROBE"),
+        mean_reversion_lower_near_max_distance_pct=config_float("strategy", "mean_reversion_lower_near_max_distance_pct", 0.12, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_MAX_DISTANCE_PCT"),
+        mean_reversion_lower_near_min_headroom_pct=config_float("strategy", "mean_reversion_lower_near_min_headroom_pct", 0.12, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_MIN_HEADROOM_PCT"),
+        mean_reversion_lower_near_position_scale=config_float("strategy", "mean_reversion_lower_near_position_scale", 0.25, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_POSITION_SCALE"),
+        mean_reversion_lower_near_extra_confirmation_loops=config_int("strategy", "mean_reversion_lower_near_extra_confirmation_loops", 2, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_EXTRA_CONFIRMATION_LOOPS"),
         overheat_guard_volume_ratio=config_float("strategy", "overheat_guard_volume_ratio", 2.0, env_key="STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO"),
         overheat_guard_atr_percentile=config_float("strategy", "overheat_guard_atr_percentile", 85.0, env_key="STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE"),
         overheat_guard_rsi=config_float("strategy", "overheat_guard_rsi", 68.0, env_key="STRATEGY_OVERHEAT_GUARD_RSI"),

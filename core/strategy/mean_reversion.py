@@ -1,5 +1,6 @@
 """
 작업 요약
+- Bollinger 하단 reclaim 을 완전 해제하지 않고 하단 근접 신호를 소액/추가확인 probe 후보로만 허용
 - 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합에서는 mean_reversion 진입을 차단하도록 보강
 - ATR percentile 과 최근 range 위치를 함께 확인해 횡보장 반등 진입이 고변동/상단 추격으로 바뀌지 않도록 보강
 - mean_reversion 전용 RSI 범위와 MACD 회복 조건을 적용해 추세형 hard filter 를 보수적으로 완화
@@ -42,7 +43,12 @@ def compute_bollinger_mean_reversion_state(
     high_volume_ratio: float = 2.0,
     mid_atr_percentile: float = 60.0,
     min_distance_from_low_pct: float = 0.10,
-) -> dict[str, float | bool]:
+    allow_lower_near_probe: bool = False,
+    lower_near_max_distance_pct: float = 0.12,
+    lower_near_min_headroom_pct: float = 0.12,
+    lower_near_position_scale: float = 0.25,
+    lower_near_extra_confirmation_loops: int = 2,
+) -> dict[str, float | bool | str]:
     """볼린저 하단 복귀와 중단 회귀 여지를 기반으로 mean reversion 신호를 계산한다."""
     if bb_lower is None or bb_mid is None:
         return {
@@ -62,12 +68,19 @@ def compute_bollinger_mean_reversion_state(
             "high_volume_context": False,
             "mid_atr_context": False,
             "low_reclaim_unconfirmed": False,
+            "lower_reclaim_confirmed": False,
+            "lower_near_probe_allowed": False,
+            "lower_near_probe_reason": "bollinger_band_missing",
+            "bb_lower_distance_pct": 0.0,
+            "lower_near_position_scale": lower_near_position_scale,
+            "lower_near_extra_confirmation_loops": 0,
         }
 
     lower_reclaim = prev_close <= bb_lower and last_close > bb_lower
     upper_reject = bb_upper is not None and prev_close >= bb_upper and last_close < bb_upper
     mid_headroom_pct = ((bb_mid - last_close) / last_close * 100) if last_close > 0 else 0.0
     gap_pct = max(0.0, mid_headroom_pct)
+    bb_lower_distance_pct = ((last_close - bb_lower) / last_close * 100) if last_close > 0 else 0.0
 
     squeeze_component = 0.0
     if bb_width_pct is not None and squeeze_max_bandwidth_pct > 0:
@@ -151,8 +164,46 @@ def compute_bollinger_mean_reversion_state(
         },
     )
     signal_is_strong = signal_score >= signal_score_min
+    lower_near_price_context = (
+        not lower_reclaim
+        and 0.0 <= bb_lower_distance_pct <= lower_near_max_distance_pct
+    )
+    lower_near_headroom_passed = gap_pct >= lower_near_min_headroom_pct
+    lower_near_probe_allowed = (
+        allow_lower_near_probe
+        and lower_near_price_context
+        and lower_near_headroom_passed
+        and signal_is_strong
+        and rsi_filter_passed
+        and macd_filter_passed
+        and atr_context_passed
+        and range_context_passed
+        and not falling_knife_blocked
+    )
+    lower_near_probe_reason = "lower_near_probe_allowed"
+    if not allow_lower_near_probe:
+        lower_near_probe_reason = "lower_near_probe_disabled"
+    elif lower_reclaim:
+        lower_near_probe_reason = "lower_reclaim_confirmed"
+    elif not lower_near_price_context:
+        lower_near_probe_reason = "lower_near_distance_too_far"
+    elif not lower_near_headroom_passed:
+        lower_near_probe_reason = "lower_near_headroom_low"
+    elif not signal_is_strong:
+        lower_near_probe_reason = "lower_near_signal_low"
+    elif not rsi_filter_passed:
+        lower_near_probe_reason = "lower_near_rsi_blocked"
+    elif not macd_filter_passed:
+        lower_near_probe_reason = "lower_near_macd_blocked"
+    elif not atr_context_passed:
+        lower_near_probe_reason = "lower_near_atr_blocked"
+    elif not range_context_passed:
+        lower_near_probe_reason = "lower_near_range_blocked"
+    elif falling_knife_blocked:
+        lower_near_probe_reason = "lower_near_falling_knife"
+
     entry_signal = (
-        lower_reclaim
+        (lower_reclaim or lower_near_probe_allowed)
         and gap_pct > 0
         and signal_is_strong
         and rsi_filter_passed
@@ -162,7 +213,7 @@ def compute_bollinger_mean_reversion_state(
         and not falling_knife_blocked
     )
     return {
-        "bullish": lower_reclaim,
+        "bullish": lower_reclaim or lower_near_probe_allowed,
         "bearish": upper_reject,
         "gap_pct": gap_pct,
         "signal_score": signal_score,
@@ -178,4 +229,12 @@ def compute_bollinger_mean_reversion_state(
         "high_volume_context": high_volume_context,
         "mid_atr_context": mid_atr_context,
         "low_reclaim_unconfirmed": low_reclaim_unconfirmed,
+        "lower_reclaim_confirmed": lower_reclaim,
+        "lower_near_probe_allowed": lower_near_probe_allowed,
+        "lower_near_probe_reason": lower_near_probe_reason,
+        "bb_lower_distance_pct": bb_lower_distance_pct,
+        "lower_near_position_scale": lower_near_position_scale,
+        "lower_near_extra_confirmation_loops": lower_near_extra_confirmation_loops
+        if lower_near_probe_allowed
+        else 0,
     }
