@@ -59,6 +59,32 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(2, settings.volume_spike_entry_extra_confirmation_loops)
         self.assertTrue(settings.volume_spike_entry_require_htf_bullish)
 
+    def test_loads_sol_probe_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_ENABLE_SOL_PROBE": "true",
+                "STRATEGY_SOL_PROBE_SYMBOLS": "SOL/USDT,SOL/KRW",
+                "STRATEGY_SOL_PROBE_MIN_SIGNAL_SCORE": "70",
+                "STRATEGY_SOL_PROBE_POSITION_SCALE": "0.25",
+                "STRATEGY_SOL_PROBE_TAKE_PROFIT_PCT": "0.8",
+                "STRATEGY_SOL_PROBE_STOP_LOSS_PCT": "0.5",
+                "STRATEGY_SOL_PROBE_MAX_HOLD_MINUTES": "180",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertTrue(settings.enable_sol_probe)
+        self.assertTrue(settings.allows_sol_probe("SOL/USDT"))
+        self.assertTrue(settings.allows_sol_probe("SOL/KRW"))
+        self.assertFalse(settings.allows_sol_probe("XRP/KRW"))
+        self.assertEqual(70, settings.sol_probe_min_signal_score)
+        self.assertEqual(0.25, settings.sol_probe_position_scale)
+        self.assertEqual(0.8, settings.sol_probe_take_profit_pct)
+        self.assertEqual(0.5, settings.sol_probe_stop_loss_pct)
+        self.assertEqual(180, settings.sol_probe_max_hold_minutes)
+
     def test_loads_btc_regime_position_scale_map(self):
         with patch.dict(
             os.environ,

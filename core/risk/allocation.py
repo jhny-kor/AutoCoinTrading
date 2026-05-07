@@ -9,6 +9,7 @@
 - 배분 계산 호출 방식이 봇마다 갈라지지 않도록 정리했다.
 - 2026-05-07: 알트/BTC 봇에 흩어진 포지션 비중 계산과 로그 문구를 공통 결과 객체로 정리해 전략 동작을 고정했다.
 - 2026-05-07: allocation score, 포트폴리오 예산, 동적 보너스 로그 문구를 공통 formatter 로 묶었다.
+- 2026-05-07: SOL 제한형 probe 는 심볼 레짐 차단 비중을 우회하되 25% 제한 비중으로만 계산하도록 연결했다.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class AltPositionSizingResult:
     score_scale: float
     position_ratio: float
     low_energy_probe_position_ratio: float | None
+    sol_probe_position_ratio: float | None
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,8 @@ def build_alt_position_sizing(
     mean_reversion_lower_near_position_scale: float | None = None,
     low_energy_probe_allowed: bool = False,
     low_energy_probe_position_scale: float = 1.0,
+    sol_probe_allowed: bool = False,
+    sol_probe_position_scale: float = 1.0,
 ) -> AltPositionSizingResult:
     """알트 신규 진입 비중 계산을 거래소 봇 간 동일한 순서로 적용한다."""
     regime_position_scale = strategy.get_regime_position_scale(symbol_regime)
@@ -273,6 +277,20 @@ def build_alt_position_sizing(
         )
         position_ratio = max(position_ratio, low_energy_probe_position_ratio)
 
+    sol_probe_position_ratio = None
+    if sol_probe_allowed:
+        sol_probe_position_ratio = apply_regime_position_scale(
+            base_position_ratio=base_position_ratio,
+            regime_scale=(
+                btc_regime_position_scale
+                * btc_atr_position_scale
+                * alt_atr_position_scale
+                * sol_probe_position_scale
+                * score_scale
+            ),
+        )
+        position_ratio = sol_probe_position_ratio
+
     return AltPositionSizingResult(
         base_position_ratio=base_position_ratio,
         regime_position_scale=regime_position_scale,
@@ -284,6 +302,7 @@ def build_alt_position_sizing(
         score_scale=score_scale,
         position_ratio=position_ratio,
         low_energy_probe_position_ratio=low_energy_probe_position_ratio,
+        sol_probe_position_ratio=sol_probe_position_ratio,
     )
 
 
@@ -295,6 +314,11 @@ def format_alt_position_sizing_log(
     btc_reference_atr_pct: float | None,
     alt_atr_pct: float | None,
 ) -> str:
+    sol_probe_text = (
+        f"{sizing.sol_probe_position_ratio:.4f}"
+        if sizing.sol_probe_position_ratio is not None
+        else "미적용"
+    )
     return (
         f"[{symbol}] 적용 매수 비중: 기본 {sizing.base_position_ratio:.4f} | "
         f"심볼 레짐 스케일 {sizing.regime_position_scale:.2f}x | "
@@ -302,6 +326,7 @@ def format_alt_position_sizing_log(
         f"BTC ATR({0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%) 스케일 {sizing.btc_atr_position_scale:.2f}x | "
         f"ALT ATR({0.0 if alt_atr_pct is None else alt_atr_pct:.4f}%) 스케일 {sizing.alt_atr_position_scale:.2f}x | "
         f"score 스케일 {sizing.score_scale:.2f}x | "
+        f"SOL probe 비중 {sol_probe_text} | "
         f"최종 {sizing.position_ratio:.4f}"
     )
 

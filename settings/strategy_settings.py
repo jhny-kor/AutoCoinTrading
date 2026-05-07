@@ -1,6 +1,7 @@
 """
 수정 요약
 - mean_reversion 하단 근접 신호를 소액/추가확인 probe 후보로 제한하는 설정을 추가
+- SOL 제한형 probe 진입/익절/손절/최대 보유시간 설정을 추가
 - 업비트 알트 고품질 READY 후보가 최소주문금액에만 걸릴 때 보수적으로 주문 floor 를 적용하는 설정을 추가
 - LOW_ENERGY 소액 probe 진입 보정 설정을 추가해 완전 차단 대신 고품질 후보만 추가확인으로 보낼 수 있게 확장
 - mean_reversion 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합 차단 설정을 추가
@@ -151,6 +152,13 @@ class StrategySettings:
     low_energy_probe_max_atr_percentile: float
     low_energy_probe_position_scale: float
     low_energy_probe_extra_confirmation_loops: int
+    enable_sol_probe: bool
+    sol_probe_symbols: tuple[str, ...]
+    sol_probe_min_signal_score: float
+    sol_probe_position_scale: float
+    sol_probe_take_profit_pct: float
+    sol_probe_stop_loss_pct: float
+    sol_probe_max_hold_minutes: int
     enable_upbit_min_order_floor: bool
     upbit_min_order_floor_min_signal_score: float
     upbit_min_order_floor_buffer_pct: float
@@ -379,6 +387,10 @@ class StrategySettings:
     def uses_partial_stop_loss(self, symbol: str) -> bool:
         """심볼이 부분손절 대상인지 반환한다."""
         return symbol in self.partial_stop_loss_symbols
+
+    def allows_sol_probe(self, symbol: str) -> bool:
+        """심볼이 SOL 제한형 probe 대상인지 반환한다."""
+        return self.enable_sol_probe and symbol in self.sol_probe_symbols
 
     def blocks_entry_when_htf_bearish(self, symbol: str) -> bool:
         """심볼이 상위 하락 추세일 때 신규 진입 차단 대상인지 반환한다."""
@@ -795,6 +807,18 @@ def load_strategy_settings(
         low_energy_probe_max_atr_percentile=config_float("strategy", "low_energy_probe_max_atr_percentile", 65.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MAX_ATR_PERCENTILE"),
         low_energy_probe_position_scale=config_float("strategy", "low_energy_probe_position_scale", 0.25, env_key="STRATEGY_LOW_ENERGY_PROBE_POSITION_SCALE"),
         low_energy_probe_extra_confirmation_loops=config_int("strategy", "low_energy_probe_extra_confirmation_loops", 2, env_key="STRATEGY_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
+        enable_sol_probe=config_bool("strategy", "enable_sol_probe", False, env_key="STRATEGY_ENABLE_SOL_PROBE"),
+        sol_probe_symbols=tuple(
+            parse_symbol_list(
+                config_str("strategy", "sol_probe_symbols", "SOL/USDT,SOL/KRW", env_key="STRATEGY_SOL_PROBE_SYMBOLS"),
+                ["SOL/USDT", "SOL/KRW"],
+            )
+        ),
+        sol_probe_min_signal_score=config_float("strategy", "sol_probe_min_signal_score", 70.0, env_key="STRATEGY_SOL_PROBE_MIN_SIGNAL_SCORE"),
+        sol_probe_position_scale=config_float("strategy", "sol_probe_position_scale", 0.25, env_key="STRATEGY_SOL_PROBE_POSITION_SCALE"),
+        sol_probe_take_profit_pct=config_float("strategy", "sol_probe_take_profit_pct", 0.8, env_key="STRATEGY_SOL_PROBE_TAKE_PROFIT_PCT"),
+        sol_probe_stop_loss_pct=config_float("strategy", "sol_probe_stop_loss_pct", 0.5, env_key="STRATEGY_SOL_PROBE_STOP_LOSS_PCT"),
+        sol_probe_max_hold_minutes=config_int("strategy", "sol_probe_max_hold_minutes", 180, env_key="STRATEGY_SOL_PROBE_MAX_HOLD_MINUTES"),
         enable_upbit_min_order_floor=config_bool("strategy", "enable_upbit_min_order_floor", True, env_key="STRATEGY_ENABLE_UPBIT_MIN_ORDER_FLOOR"),
         upbit_min_order_floor_min_signal_score=config_float("strategy", "upbit_min_order_floor_min_signal_score", 75.0, env_key="STRATEGY_UPBIT_MIN_ORDER_FLOOR_MIN_SIGNAL_SCORE"),
         upbit_min_order_floor_buffer_pct=config_float("strategy", "upbit_min_order_floor_buffer_pct", 0.02, env_key="STRATEGY_UPBIT_MIN_ORDER_FLOOR_BUFFER_PCT"),

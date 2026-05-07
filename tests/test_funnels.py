@@ -102,6 +102,53 @@ class FunnelBuilderTests(unittest.TestCase):
         )
         self.assertEqual("mean_reversion_lower_reclaim_missing", steps[0].reason)
 
+    def test_alt_entry_steps_accept_probe_signal(self):
+        steps = build_alt_entry_steps(
+            entry_signal=True,
+            bullish=False,
+            trend_follow_entry=False,
+            signal_is_strong=True,
+            signal_score=72.0,
+            min_signal_score=70.0,
+            gap_pct=0.1,
+            min_gap_pct=0.2,
+            max_gap_pct=0.8,
+            gap_within_upper_bound=True,
+            rsi_filter_passed=True,
+            macd_filter_passed=True,
+            htf_bullish=True,
+            volume_filter_passed=True,
+            volume_ratio=1.0,
+            effective_min_volume_ratio=0.9,
+            max_volume_ratio=2.5,
+            volume_within_upper_bound=True,
+            volume_cap_downgrade_allowed=False,
+            volume_cap_downgrade_reason="within_normal_volume_cap",
+            volume_cap_hard_max_ratio=30.0,
+            volatility_filter_passed=True,
+            avg_abs_change_pct=0.2,
+            min_volatility_pct=0.03,
+            max_volatility_pct=5.0,
+            in_cooldown=False,
+            seconds_since_last_trade=999.0,
+            can_average_down=True,
+            last_close=101.0,
+            avg_entry_price=None,
+            current_entry_count=0,
+            max_entry_count=1,
+            daily_loss_limit_reached=False,
+            daily_realized_pnl_quote=0.0,
+            max_daily_loss_quote=5000.0,
+            order_value_quote=10000.0,
+            min_buy_order_value=5000.0,
+            entry_probe_signal=True,
+            entry_probe_reason="sol_probe_allowed",
+        )
+
+        self.assertTrue(steps[0].passed)
+        self.assertTrue(steps[11].passed)
+        self.assertTrue(steps[0].actual["entry_probe_signal"])
+
     def test_alt_exit_steps_trigger_reason(self):
         steps = build_alt_exit_steps(
             has_position=True,
@@ -128,6 +175,35 @@ class FunnelBuilderTests(unittest.TestCase):
         self.assertEqual("position", steps[0].stage)
         self.assertEqual("take_profit", steps[-1].stage)
         self.assertTrue(steps[1].passed)
+
+    def test_alt_exit_steps_accept_sol_probe_time_exit(self):
+        steps = build_alt_exit_steps(
+            has_position=True,
+            stop_loss_triggered=False,
+            profit_protect_triggered=False,
+            break_even_guard_triggered=False,
+            volume_spike_exit_triggered=False,
+            bearish=False,
+            in_cooldown=True,
+            seconds_since_last_trade=30.0,
+            signal_is_strong=False,
+            gap_pct=0.01,
+            min_gap_pct=0.2,
+            htf_bearish=False,
+            take_profit_ready=False,
+            pnl_pct=0.1,
+            current_net_realized_pnl_pct=0.0,
+            mfe_pct=0.2,
+            min_take_profit_pct=0.8,
+            fee_protect_min_net_pnl_pct=0.2,
+            break_even_guard_min_mfe_pct=1.0,
+            break_even_guard_floor_net_pnl_pct=0.0,
+            sol_probe_time_exit_triggered=True,
+        )
+
+        self.assertTrue(steps[1].passed)
+        self.assertTrue(steps[2].passed)
+        self.assertTrue(steps[-1].passed)
 
     def test_btc_entry_steps_include_order_amount(self):
         steps = build_btc_entry_steps(

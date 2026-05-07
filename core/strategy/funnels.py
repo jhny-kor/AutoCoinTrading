@@ -1,6 +1,7 @@
 """
 작업 요약
 - mean_reversion 하단 근접 probe 후보는 raw signal 단계에서 reclaim 과 구분해 기록
+- SOL 제한형 probe 신호와 최대 보유 시간 청산 트리거를 알트 퍼널에 노출
 - no_entry_signal 포괄 차단을 raw 신호, squeeze, mean_reversion 컨텍스트, 최종 integrity 단계로 세분화
 - 거래량 상한 초과 신호를 소액/추가확인 후보로 낮춘 경우 volume_cap 단계를 통과하도록 확장
 - OKX funding rate 과열 차단 단계를 알트/BTC 진입 퍼널에 추가
@@ -64,6 +65,8 @@ def build_alt_entry_steps(
     mean_reversion_lower_near_probe_allowed: bool = False,
     mean_reversion_bb_lower_distance_pct: float | None = None,
     mean_reversion_lower_near_max_distance_pct: float | None = None,
+    entry_probe_signal: bool = False,
+    entry_probe_reason: str | None = None,
     atr_context_passed: bool = True,
     range_context_passed: bool = True,
     falling_knife_blocked: bool = False,
@@ -79,23 +82,27 @@ def build_alt_entry_steps(
     stop_loss_pattern_required_volume_ratio: float | None = None,
 ):
     normalized_strategy = str(entry_strategy_key or "ma").strip().lower()
-    raw_signal_passed = bullish or trend_follow_entry
+    raw_signal_passed = bullish or trend_follow_entry or entry_probe_signal
     raw_signal_reason = "trend_signal_missing"
-    raw_signal_required = {"bullish_or_trend_follow_entry": True}
+    raw_signal_required = {"bullish_or_trend_follow_entry_or_probe": True}
     if normalized_strategy in {"mean_reversion", "low_energy_probe"}:
-        raw_signal_passed = bullish
+        raw_signal_passed = bullish or entry_probe_signal
         raw_signal_reason = "mean_reversion_lower_reclaim_missing"
         raw_signal_required = {
-            "bollinger_lower_reclaim_or_lower_near_probe": True,
+            "bollinger_lower_reclaim_or_lower_near_probe_or_entry_probe": True,
             "lower_near_max_distance_pct": mean_reversion_lower_near_max_distance_pct,
         }
     elif normalized_strategy == "squeeze":
-        raw_signal_passed = squeeze_band_passed and squeeze_volume_passed and squeeze_breakout_passed
+        raw_signal_passed = (
+            entry_probe_signal
+            or (squeeze_band_passed and squeeze_volume_passed and squeeze_breakout_passed)
+        )
         raw_signal_reason = "squeeze_entry_signal_missing"
         raw_signal_required = {
             "squeeze_band_passed": True,
             "squeeze_volume_passed": True,
             "squeeze_breakout_passed": True,
+            "entry_probe_signal": entry_probe_signal,
         }
 
     steps = [
@@ -113,6 +120,8 @@ def build_alt_entry_steps(
                 "lower_reclaim_confirmed": mean_reversion_lower_reclaim_confirmed,
                 "lower_near_probe_allowed": mean_reversion_lower_near_probe_allowed,
                 "bb_lower_distance_pct": mean_reversion_bb_lower_distance_pct,
+                "entry_probe_signal": entry_probe_signal,
+                "entry_probe_reason": entry_probe_reason,
             },
             required=raw_signal_required,
         ),
@@ -314,6 +323,7 @@ def build_alt_exit_steps(
     fee_protect_min_net_pnl_pct: float,
     break_even_guard_min_mfe_pct: float,
     break_even_guard_floor_net_pnl_pct: float,
+    sol_probe_time_exit_triggered: bool = False,
 ):
     return [
         FunnelStep(
@@ -325,41 +335,77 @@ def build_alt_exit_steps(
         ),
         FunnelStep(
             stage="exit_trigger",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or bearish),
+            passed=(
+                stop_loss_triggered
+                or profit_protect_triggered
+                or break_even_guard_triggered
+                or volume_spike_exit_triggered
+                or sol_probe_time_exit_triggered
+                or bearish
+            ),
             reason="no_exit_signal",
             actual={
                 "stop_loss_triggered": stop_loss_triggered,
                 "profit_protect_triggered": profit_protect_triggered,
                 "break_even_guard_triggered": break_even_guard_triggered,
                 "volume_spike_exit_triggered": volume_spike_exit_triggered,
+                "sol_probe_time_exit_triggered": sol_probe_time_exit_triggered,
                 "bearish_signal": bearish,
             },
             required={"exit_signal": True},
         ),
         FunnelStep(
             stage="cooldown",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or not in_cooldown),
+            passed=(
+                stop_loss_triggered
+                or profit_protect_triggered
+                or break_even_guard_triggered
+                or volume_spike_exit_triggered
+                or sol_probe_time_exit_triggered
+                or not in_cooldown
+            ),
             reason="cooldown_active",
             actual={"seconds_since_last_trade": seconds_since_last_trade},
             required={"cooldown_inactive": True},
         ),
         FunnelStep(
             stage="distance",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or signal_is_strong),
+            passed=(
+                stop_loss_triggered
+                or profit_protect_triggered
+                or break_even_guard_triggered
+                or volume_spike_exit_triggered
+                or sol_probe_time_exit_triggered
+                or signal_is_strong
+            ),
             reason="distance_too_small",
             actual={"gap_pct": gap_pct},
             required={"min_gap_pct": min_gap_pct},
         ),
         FunnelStep(
             stage="higher_timeframe",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or htf_bearish),
+            passed=(
+                stop_loss_triggered
+                or profit_protect_triggered
+                or break_even_guard_triggered
+                or volume_spike_exit_triggered
+                or sol_probe_time_exit_triggered
+                or htf_bearish
+            ),
             reason="higher_timeframe_not_bearish",
             actual={"htf_bearish": htf_bearish},
             required={"htf_bearish": True},
         ),
         FunnelStep(
             stage="take_profit",
-            passed=(stop_loss_triggered or profit_protect_triggered or break_even_guard_triggered or volume_spike_exit_triggered or take_profit_ready),
+            passed=(
+                stop_loss_triggered
+                or profit_protect_triggered
+                or break_even_guard_triggered
+                or volume_spike_exit_triggered
+                or sol_probe_time_exit_triggered
+                or take_profit_ready
+            ),
             reason="take_profit_not_reached",
             actual={
                 "pnl_pct": pnl_pct,

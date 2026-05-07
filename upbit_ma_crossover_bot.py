@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-07: SOL 제한형 probe 전략을 연결해 점수 70 이상 소액 진입과 180분 시간 청산을 적용
 - 2026-05-06: 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-06: mean_reversion 하단 근접 후보는 소액 비중과 추가 confirmation 으로만 진입 후보화
 - 2026-05-05: 업비트 알트 고품질 후보가 최소주문금액에만 걸릴 때 예산과 손절방지 조건 확인 후 최소 주문 floor 를 적용
@@ -142,6 +143,10 @@ from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
 from core.strategy.low_energy import evaluate_low_energy_probe
 from core.strategy.mean_reversion import compute_bollinger_mean_reversion_state
 from core.strategy.regime_router import route_alt_strategy
+from core.strategy.sol_probe import (
+    evaluate_sol_probe_entry,
+    is_sol_probe_time_exit_triggered,
+)
 from core.strategy.volume_spike_entry import evaluate_volume_spike_entry_downgrade
 from core.strategy.indicators import (
     calc_atr,
@@ -964,6 +969,26 @@ def run_bot():
                 mean_reversion_lower_near_extra_confirmation_loops = int(
                     signal_state.get("lower_near_extra_confirmation_loops", 0)
                 )
+                if strategy.allows_sol_probe(symbol):
+                    effective_max_entry_count = 1
+                sol_probe_entry_decision = evaluate_sol_probe_entry(
+                    enabled=strategy.enable_sol_probe,
+                    symbol=symbol,
+                    eligible_symbols=strategy.sol_probe_symbols,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.sol_probe_min_signal_score,
+                    has_position=has_position,
+                    current_entry_count=current_entry_count,
+                    position_scale=strategy.sol_probe_position_scale,
+                )
+                sol_probe_entry_allowed = sol_probe_entry_decision.allowed
+                if sol_probe_entry_allowed:
+                    entry_signal = True
+                    signal_is_strong = True
+                    log(
+                        f"[{symbol}] SOL 제한형 probe 후보로 전환합니다. "
+                        f"signal={signal_score:.1f}, position_scale={sol_probe_entry_decision.position_scale:.2f}x"
+                    )
                 low_energy_probe_decision = evaluate_low_energy_probe(
                     enabled=strategy.enable_low_energy_probe,
                     low_energy_guard_active=low_energy_guard_active,
@@ -982,10 +1007,14 @@ def run_bot():
                     extra_confirmation_loops=strategy.low_energy_probe_extra_confirmation_loops,
                 )
                 effective_low_energy_guard_active = (
-                    low_energy_guard_active and not low_energy_probe_decision.allowed
+                    low_energy_guard_active
+                    and not low_energy_probe_decision.allowed
+                    and not sol_probe_entry_allowed
                 )
                 effective_symbol_regime_blocks_entry = (
-                    symbol_regime_blocks_entry and not low_energy_probe_decision.allowed
+                    symbol_regime_blocks_entry
+                    and not low_energy_probe_decision.allowed
+                    and not sol_probe_entry_allowed
                 )
                 if low_energy_probe_decision.allowed:
                     effective_max_entry_count = max(1, effective_max_entry_count)
@@ -1159,7 +1188,7 @@ def run_bot():
                 elif strategy_key == "breakout":
                     raw_entry_candidate = (
                         entry_signal
-                        and bullish
+                        and (bullish or sol_probe_entry_allowed)
                         and not effective_symbol_regime_blocks_entry
                         and not effective_low_energy_guard_active
                         and not correlation_entry_blocked
@@ -1171,7 +1200,7 @@ def run_bot():
                         and not volume_atr_execution_blocked
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
-                        and (not symbol_regime_requires_fresh_cross or bullish)
+                        and (not symbol_regime_requires_fresh_cross or bullish or sol_probe_entry_allowed)
                     )
                 else:
                     raw_entry_candidate = (
@@ -1187,7 +1216,7 @@ def run_bot():
                         and not volume_atr_execution_blocked
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
-                        and (not symbol_regime_requires_fresh_cross or bullish)
+                        and (not symbol_regime_requires_fresh_cross or bullish or sol_probe_entry_allowed)
                     )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
                 if mean_reversion_lower_near_probe_allowed:
@@ -1437,8 +1466,17 @@ def run_bot():
                     lowest_price_since_entry.pop(symbol, None)
 
                 fee_round_trip_pct = config["fee_rate_pct"] * 2
-                take_profit_pct = strategy.get_take_profit_pct(symbol)
-                stop_loss_pct = strategy.get_stop_loss_pct(symbol) * regime_policy.stop_loss_multiplier
+                sol_probe_exit_active = strategy.allows_sol_probe(symbol)
+                take_profit_pct = (
+                    strategy.sol_probe_take_profit_pct
+                    if sol_probe_exit_active
+                    else strategy.get_take_profit_pct(symbol)
+                )
+                stop_loss_pct = (
+                    strategy.sol_probe_stop_loss_pct
+                    if sol_probe_exit_active
+                    else strategy.get_stop_loss_pct(symbol) * regime_policy.stop_loss_multiplier
+                )
                 fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
                 break_even_guard_min_mfe_pct = strategy.get_break_even_guard_min_mfe_pct(symbol)
                 break_even_guard_floor_net_pnl_pct = (
@@ -1463,8 +1501,19 @@ def run_bot():
                     and not partial_stop_loss_done.get(symbol, False)
                 )
                 effective_min_take_profit_pct = max(
-                    take_profit_pct + regime_policy.take_profit_bonus_pct,
+                    take_profit_pct
+                    if sol_probe_exit_active
+                    else take_profit_pct + regime_policy.take_profit_bonus_pct,
                     fee_round_trip_pct * 1.1,
+                )
+                sol_probe_time_exit_triggered = is_sol_probe_time_exit_triggered(
+                    enabled=strategy.enable_sol_probe,
+                    symbol=symbol,
+                    eligible_symbols=strategy.sol_probe_symbols,
+                    has_position=has_position,
+                    opened_at=entry_opened_at.get(symbol),
+                    now_ts=time.time(),
+                    max_hold_minutes=strategy.sol_probe_max_hold_minutes,
                 )
                 if has_position:
                     log(
@@ -1560,6 +1609,11 @@ def run_bot():
                         f"상태에서 거래량 배수 {0.0 if volume_ratio is None else volume_ratio:.4f} 가 "
                         f"{strategy.volume_spike_exit_max_volume_ratio:.4f} 이하로 급감해 조기 청산합니다."
                     )
+                if has_position and sol_probe_time_exit_triggered:
+                    log(
+                        f"[{symbol}] SOL probe 최대 보유 시간 "
+                        f"{strategy.sol_probe_max_hold_minutes}분을 초과해 시간 청산합니다."
+                    )
 
                 base_position_ratio = strategy.get_position_ratio(
                     symbol,
@@ -1604,6 +1658,8 @@ def run_bot():
                     ),
                     low_energy_probe_allowed=low_energy_probe_decision.allowed,
                     low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
+                    sol_probe_allowed=sol_probe_entry_allowed,
+                    sol_probe_position_scale=sol_probe_entry_decision.position_scale,
                 )
                 regime_position_scale = position_sizing.regime_position_scale
                 btc_regime_position_scale = position_sizing.btc_regime_position_scale
@@ -1635,6 +1691,7 @@ def run_bot():
                         portfolio_allocator.settings.enable_dynamic_overweight
                         and regime_policy.allow_dynamic_overweight
                         and not volume_spike_entry_downgrade.allowed
+                        and not sol_probe_entry_allowed
                     ),
                 )
                 requested_order_value, allocation_decision = build_alt_allocation(
@@ -1655,8 +1712,12 @@ def run_bot():
                     buffer_krw=config["krw_order_buffer_krw"],
                 )
                 upbit_min_order_floor_applied = False
-                upbit_min_order_floor_reason = "not_needed"
-                if executable_krw_to_use <= strategy.min_buy_order_value:
+                upbit_min_order_floor_reason = (
+                    "sol_probe_floor_disabled"
+                    if sol_probe_entry_allowed
+                    else "not_needed"
+                )
+                if executable_krw_to_use <= strategy.min_buy_order_value and not sol_probe_entry_allowed:
                     floor_min_signal_score = max(
                         effective_signal_score_min,
                         strategy.upbit_min_order_floor_min_signal_score,
@@ -1709,9 +1770,12 @@ def run_bot():
                 )
                 if allocation_decision.dynamic_bonus_applied:
                     log(format_dynamic_bonus_log(symbol=symbol, allocation_decision=allocation_decision))
-                estimated_sell_amount = (
-                    base_free * float(alt_exit_state["estimated_sell_ratio"])
+                estimated_sell_ratio = (
+                    1.0
+                    if sol_probe_time_exit_triggered
+                    else float(alt_exit_state["estimated_sell_ratio"])
                 )
+                estimated_sell_amount = base_free * estimated_sell_ratio
                 estimated_sell_amount = safe_amount_to_precision(
                     exchange, symbol, estimated_sell_amount
                 )
@@ -1807,6 +1871,13 @@ def run_bot():
                     low_energy_probe_allowed=low_energy_probe_decision.allowed,
                     low_energy_probe_reason=low_energy_probe_decision.reason,
                     low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
+                    sol_probe_entry_allowed=sol_probe_entry_allowed,
+                    sol_probe_entry_reason=sol_probe_entry_decision.reason,
+                    sol_probe_position_scale=sol_probe_entry_decision.position_scale,
+                    sol_probe_take_profit_pct=strategy.sol_probe_take_profit_pct,
+                    sol_probe_stop_loss_pct=strategy.sol_probe_stop_loss_pct,
+                    sol_probe_max_hold_minutes=strategy.sol_probe_max_hold_minutes,
+                    sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                     mean_reversion_lower_reclaim_confirmed=bool(
                         signal_state.get("lower_reclaim_confirmed", bullish)
                     ),
@@ -1933,12 +2004,36 @@ def run_bot():
                     mean_reversion_lower_near_max_distance_pct=(
                         strategy.mean_reversion_lower_near_max_distance_pct
                     ),
+                    entry_probe_signal=sol_probe_entry_allowed,
+                    entry_probe_reason=sol_probe_entry_decision.reason,
                     atr_context_passed=bool(signal_state.get("atr_context_passed", True)),
                     range_context_passed=bool(signal_state.get("range_context_passed", True)),
                     falling_knife_blocked=mean_reversion_falling_knife_blocked,
                 )
                 entry_steps.extend(
                     [
+                        FunnelStep(
+                            stage="sol_probe",
+                            passed=(
+                                not strategy.allows_sol_probe(symbol)
+                                or sol_probe_entry_allowed
+                                or has_position
+                                or current_entry_count > 0
+                            ),
+                            reason=sol_probe_entry_decision.reason,
+                            actual={
+                                "enabled": strategy.enable_sol_probe,
+                                "signal_score": signal_score,
+                                "has_position": has_position,
+                                "entry_count": current_entry_count,
+                                "position_scale": sol_probe_entry_decision.position_scale,
+                            },
+                            required={
+                                "symbols": strategy.sol_probe_symbols,
+                                "min_signal_score": strategy.sol_probe_min_signal_score,
+                                "same_symbol_position_limit": 1,
+                            },
+                        ),
                         FunnelStep(
                             stage="htf_bearish_entry_guard",
                             passed=not htf_bearish_entry_blocked,
@@ -2133,6 +2228,7 @@ def run_bot():
                     fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
                     break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+                    sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                 )
                 exit_steps.extend(
                     [
@@ -2167,6 +2263,8 @@ def run_bot():
                         if break_even_guard_triggered
                         else "volume_spike_exit_triggered"
                         if volume_spike_exit_triggered
+                        else "sol_probe_time_exit_triggered"
+                        if sol_probe_time_exit_triggered
                         else "take_profit_conditions_met"
                     ),
                 )
@@ -2335,6 +2433,9 @@ def run_bot():
                                 "take_profit_pct": effective_min_take_profit_pct,
                                 "configured_take_profit_pct": take_profit_pct,
                                 "stop_loss_pct": stop_loss_pct,
+                                "sol_probe_entry_allowed": sol_probe_entry_allowed,
+                                "sol_probe_entry_reason": sol_probe_entry_decision.reason,
+                                "sol_probe_position_scale": sol_probe_entry_decision.position_scale,
                                 "fee_round_trip_pct": fee_round_trip_pct,
                                 "min_volume_ratio": effective_min_volume_ratio,
                                 "volume_filter_passed": volume_filter_passed,
@@ -2384,6 +2485,10 @@ def run_bot():
                         sell_ratio = 1.0
                         exit_reason_key = "volume_spike_take_profit"
                         sell_reason = "거래량급감익절"
+                    elif sol_probe_time_exit_triggered:
+                        sell_ratio = 1.0
+                        exit_reason_key = "sol_probe_time_exit"
+                        sell_reason = "SOL Probe 시간청산"
                     elif partial_take_profit_pending:
                         sell_ratio = effective_partial_take_profit_ratio
                         exit_reason_key = "partial_take_profit"
@@ -2602,6 +2707,8 @@ def run_bot():
                                     "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
                                     "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                                     "profit_protect_triggered": profit_protect_triggered,
+                                    "sol_probe_time_exit_triggered": sol_probe_time_exit_triggered,
+                                    "sol_probe_max_hold_minutes": strategy.sol_probe_max_hold_minutes,
                                     "pnl_pct_at_decision": pnl_pct,
                                     "htf_bearish": htf_bearish,
                                     "holding_seconds": holding_seconds,
@@ -2684,6 +2791,8 @@ def run_bot():
                                     "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
                                     "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                                     "profit_protect_triggered": profit_protect_triggered,
+                                    "sol_probe_time_exit_triggered": sol_probe_time_exit_triggered,
+                                    "sol_probe_max_hold_minutes": strategy.sol_probe_max_hold_minutes,
                                     "entry_price_unknown": True,
                                     "htf_bearish": htf_bearish,
                                 },
