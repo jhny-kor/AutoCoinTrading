@@ -15,9 +15,13 @@ from tools.historical_market_collector import (
     build_collect_argv,
     build_default_targets,
     build_watch_argv,
+    CollectionTarget,
+    find_ohlcv_gaps,
+    load_existing_timestamps,
     parse_okx_funding_rows,
     parse_okx_history_candles,
     parse_upbit_candles,
+    synthesize_short_ohlcv_gaps,
     years_for_symbol,
 )
 
@@ -92,8 +96,86 @@ class HistoricalMarketCollectorTests(unittest.TestCase):
         )
 
         self.assertEqual("KRW-BTC", rows[0]["market_id"])
+        self.assertEqual(1699999980000, rows[0]["timestamp_ms"])
         self.assertEqual(1.0, rows[0]["volume"])
         self.assertEqual(100500.0, rows[0]["quote_volume"])
+
+    def test_load_existing_timestamps_uses_upbit_candle_minute_for_dedup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ohlcv.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "timestamp_ms": 1700000000123,
+                        "candle_date_time_utc": "2023-11-14T22:13:00",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual({1699999980000}, load_existing_timestamps(path))
+
+    def test_find_ohlcv_gaps_reports_missing_minute_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ohlcv.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"timestamp_ms": 60_000}),
+                        json.dumps({"timestamp_ms": 180_000}),
+                        json.dumps({"timestamp_ms": 300_000}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                [(120_000, 120_000, 1), (240_000, 240_000, 1)],
+                find_ohlcv_gaps(path, timeframe_ms=60_000),
+            )
+
+    def test_synthesize_short_ohlcv_gaps_fills_only_short_missing_minutes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ohlcv.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "timestamp_ms": 60_000,
+                                "candle_date_time_utc": "1970-01-01T00:01:00",
+                                "close": 100.0,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "timestamp_ms": 180_000,
+                                "candle_date_time_utc": "1970-01-01T00:03:00",
+                                "close": 101.0,
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            written = synthesize_short_ohlcv_gaps(
+                path,
+                target=CollectionTarget("upbit", "BTC/KRW", "1m", 3),
+                timeframe_ms=60_000,
+                max_gap_minutes=1,
+            )
+
+            self.assertEqual(1, written)
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            synthetic = [row for row in rows if row.get("synthetic")]
+            self.assertEqual(1, len(synthetic))
+            self.assertEqual(120_000, synthetic[0]["timestamp_ms"])
+            self.assertEqual(100.0, synthetic[0]["close"])
+            self.assertEqual(0.0, synthetic[0]["volume"])
 
     def test_append_jsonl_unique_skips_existing_timestamp(self):
         with tempfile.TemporaryDirectory() as tmp:

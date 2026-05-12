@@ -1,5 +1,8 @@
 """
 작업 요약
+- 업비트 API가 제공하지 않는 짧은 무거래 gap 은 이전 종가 기준 volume=0 합성 캔들로 선택 보정할 수 있게 했다.
+- 업비트 candle timestamp 를 분봉 정각 기준으로 정규화하고, 기존 파일도 candle_date_time_utc 기준으로 중복 판정하도록 보강했다.
+- 업비트 과거 OHLCV gap 만 재조회하는 fill-upbit-gaps 서브커맨드를 추가했다.
 - BTC/ETH 는 3년, 그 외 알트는 1년 기준으로 공개 과거 시장 데이터를 수집하는 도구를 추가했다.
 - OHLCV 는 백테스트와 바로 호환되는 JSONL 필드로 저장하고, OKX 는 funding rate history 도 함께 수집할 수 있게 구성했다.
 - 장기 1분봉 수집이 느려지지 않도록 기존 timestamp 는 target 시작 시 한 번만 읽고 메모리에서 중복을 제거한다.
@@ -91,6 +94,22 @@ class FundingCollectionResult:
     page_count: int
 
 
+@dataclass(frozen=True)
+class GapFillResult:
+    """업비트 과거 OHLCV gap 보정 결과."""
+
+    exchange: str
+    symbol: str
+    timeframe: str
+    gap_count: int
+    attempted_gap_count: int
+    filled_rows: int
+    synthetic_rows: int
+    skipped_existing_rows: int
+    page_count: int
+    remaining_gap_count: int
+
+
 def now_ms() -> int:
     """현재 UTC 시각을 ms 로 반환한다."""
     return int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -99,6 +118,15 @@ def now_ms() -> int:
 def iso_utc(timestamp_ms: int) -> str:
     """ms timestamp 를 UTC ISO 문자열로 변환한다."""
     return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat()
+
+
+def parse_utc_minute_to_ms(raw: str) -> int:
+    """업비트 candle_date_time_utc 값을 분봉 정각 ms 로 변환한다."""
+    text = raw.strip()
+    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.astimezone(timezone.utc).replace(second=0, microsecond=0).timestamp() * 1000)
 
 
 def parse_date_to_ms(raw: str | None, default_ms: int) -> int:
@@ -261,9 +289,11 @@ def load_existing_timestamps(path: Path, key: str = "timestamp_ms") -> set[int]:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            value = payload.get(key)
             try:
-                timestamps.add(int(value))
+                if key == "timestamp_ms" and payload.get("candle_date_time_utc"):
+                    timestamps.add(parse_utc_minute_to_ms(str(payload["candle_date_time_utc"])))
+                else:
+                    timestamps.add(int(payload.get(key)))
             except (TypeError, ValueError):
                 continue
     return timestamps
@@ -381,7 +411,12 @@ def parse_upbit_candles(
     parsed: list[dict[str, Any]] = []
     market_id = symbol_to_upbit_market(symbol)
     for item in rows:
-        timestamp_ms = int(item["timestamp"])
+        candle_time_utc = item.get("candle_date_time_utc")
+        timestamp_ms = (
+            parse_utc_minute_to_ms(str(candle_time_utc))
+            if candle_time_utc
+            else int(item["timestamp"])
+        )
         volume_base = float(item["candle_acc_trade_volume"])
         quote_volume = float(item["candle_acc_trade_price"])
         parsed.append(
@@ -460,6 +495,7 @@ def collect_ohlcv_target(
     limit: int | None = None,
     request_delay_sec: float = 0.15,
     max_pages: int | None = None,
+    existing_timestamps: set[int] | None = None,
 ) -> CollectionResult:
     """단일 target 의 OHLCV 를 수집한다."""
     end_ts = end_ms or now_ms()
@@ -472,7 +508,11 @@ def collect_ohlcv_target(
     written_rows = 0
     skipped_rows = 0
     exchange = create_okx_public_client() if target.exchange == "okx" else None
-    existing_timestamps = load_existing_timestamps(output_path, key="timestamp_ms")
+    existing_keys = (
+        existing_timestamps
+        if existing_timestamps is not None
+        else load_existing_timestamps(output_path, key="timestamp_ms")
+    )
 
     while True:
         if max_pages is not None and page_count >= max_pages:
@@ -520,7 +560,7 @@ def collect_ohlcv_target(
             output_path,
             bounded_rows,
             key="timestamp_ms",
-            existing_keys=existing_timestamps,
+            existing_keys=existing_keys,
         )
         fetched_rows += len(rows)
         written_rows += written
@@ -580,6 +620,193 @@ def collect_ohlcv_target(
         started_at_ms=start_ts,
         ended_at_ms=end_ts,
     )
+
+
+def find_ohlcv_gaps(
+    path: Path,
+    *,
+    timeframe_ms: int,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+) -> list[tuple[int, int, int]]:
+    """기존 OHLCV 파일에서 누락된 분봉 구간을 찾는다."""
+    timestamps = sorted(load_existing_timestamps(path, key="timestamp_ms"))
+    if not timestamps:
+        return []
+    lower = start_ms if start_ms is not None else timestamps[0]
+    upper = end_ms if end_ms is not None else timestamps[-1]
+    bounded = [ts for ts in timestamps if lower <= ts <= upper]
+    if len(bounded) < 2:
+        return []
+    gaps: list[tuple[int, int, int]] = []
+    for prev_ts, next_ts in zip(bounded, bounded[1:]):
+        missing_count = max(0, int((next_ts - prev_ts) / timeframe_ms) - 1)
+        if missing_count <= 0:
+            continue
+        gaps.append((prev_ts + timeframe_ms, next_ts - timeframe_ms, missing_count))
+    return gaps
+
+
+def collect_upbit_gap_target(
+    target: CollectionTarget,
+    *,
+    output_root: Path,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    request_delay_sec: float = 0.12,
+    max_gaps: int | None = None,
+    synthesize_short_gaps_min: int = 0,
+) -> GapFillResult:
+    """업비트 target 의 기존 OHLCV gap 구간만 재조회한다."""
+    if target.exchange != "upbit":
+        raise ValueError("fill-upbit-gaps 는 업비트 target 만 지원합니다.")
+    output_path = ohlcv_output_path(output_root, target)
+    timeframe_ms = timeframe_to_ms(target.timeframe)
+    existing_keys = load_existing_timestamps(output_path, key="timestamp_ms")
+    gaps = find_ohlcv_gaps(
+        output_path,
+        timeframe_ms=timeframe_ms,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    selected_gaps = sorted(gaps, key=lambda item: item[2], reverse=True)
+    if max_gaps is not None:
+        selected_gaps = selected_gaps[:max_gaps]
+    filled_rows = 0
+    synthetic_rows = 0
+    skipped_rows = 0
+    page_count = 0
+    for gap_start_ms, gap_end_ms, _missing_count in selected_gaps:
+        result = collect_ohlcv_target(
+            target,
+            output_root=output_root,
+            start_ms=gap_start_ms,
+            end_ms=gap_end_ms,
+            request_delay_sec=request_delay_sec,
+            existing_timestamps=existing_keys,
+        )
+        filled_rows += result.written_rows
+        skipped_rows += result.skipped_existing_rows
+        page_count += result.page_count
+        time.sleep(max(0.0, request_delay_sec))
+
+    if synthesize_short_gaps_min > 0:
+        synthetic_rows = synthesize_short_ohlcv_gaps(
+            output_path,
+            target=target,
+            timeframe_ms=timeframe_ms,
+            max_gap_minutes=synthesize_short_gaps_min,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            existing_timestamps=existing_keys,
+        )
+
+    remaining_gaps = find_ohlcv_gaps(
+        output_path,
+        timeframe_ms=timeframe_ms,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    return GapFillResult(
+        exchange=target.exchange,
+        symbol=target.symbol,
+        timeframe=target.timeframe,
+        gap_count=len(gaps),
+        attempted_gap_count=len(selected_gaps),
+        filled_rows=filled_rows,
+        synthetic_rows=synthetic_rows,
+        skipped_existing_rows=skipped_rows,
+        page_count=page_count,
+        remaining_gap_count=len(remaining_gaps),
+    )
+
+
+def load_ohlcv_rows_by_timestamp(path: Path) -> dict[int, dict[str, Any]]:
+    """OHLCV JSONL 을 canonical timestamp 기준 dict 로 읽는다."""
+    rows: dict[int, dict[str, Any]] = {}
+    if not path.exists():
+        return rows
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+                if payload.get("candle_date_time_utc"):
+                    timestamp_ms = parse_utc_minute_to_ms(str(payload["candle_date_time_utc"]))
+                else:
+                    timestamp_ms = int(payload["timestamp_ms"])
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                continue
+            rows.setdefault(timestamp_ms, payload)
+    return rows
+
+
+def synthesize_short_ohlcv_gaps(
+    path: Path,
+    *,
+    target: CollectionTarget,
+    timeframe_ms: int,
+    max_gap_minutes: int,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    existing_timestamps: set[int] | None = None,
+) -> int:
+    """짧은 무거래 gap 을 이전 종가 기준 volume=0 캔들로 보정한다."""
+    rows_by_ts = load_ohlcv_rows_by_timestamp(path)
+    if not rows_by_ts:
+        return 0
+    existing = existing_timestamps if existing_timestamps is not None else set(rows_by_ts)
+    timestamps = sorted(ts for ts in rows_by_ts if (start_ms is None or ts >= start_ms) and (end_ms is None or ts <= end_ms))
+    if len(timestamps) < 2:
+        return 0
+    collected_at = datetime.now(timezone.utc).isoformat()
+    market_id = symbol_to_upbit_market(target.symbol)
+    synthetic_rows: list[dict[str, Any]] = []
+    max_missing = max(0, int(max_gap_minutes))
+    for prev_ts, next_ts in zip(timestamps, timestamps[1:]):
+        missing_count = max(0, int((next_ts - prev_ts) / timeframe_ms) - 1)
+        if missing_count <= 0 or missing_count > max_missing:
+            continue
+        prev_row = rows_by_ts[prev_ts]
+        close = float(prev_row["close"])
+        for offset in range(1, missing_count + 1):
+            timestamp_ms = prev_ts + timeframe_ms * offset
+            if timestamp_ms in existing:
+                continue
+            candle_dt = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc)
+            kst_dt = candle_dt + timedelta(hours=9)
+            synthetic_rows.append(
+                {
+                    "exchange": "upbit",
+                    "symbol": target.symbol,
+                    "market_id": market_id,
+                    "timeframe": target.timeframe,
+                    "timestamp_ms": timestamp_ms,
+                    "datetime_utc": iso_utc(timestamp_ms),
+                    "candle_date_time_utc": candle_dt.replace(tzinfo=None).isoformat(timespec="minutes"),
+                    "candle_date_time_kst": kst_dt.replace(tzinfo=None).isoformat(timespec="minutes"),
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                    "volume": 0.0,
+                    "volume_base": 0.0,
+                    "quote_volume": 0.0,
+                    "source": "synthetic.no_trade_gap_fill",
+                    "synthetic": True,
+                    "gap_fill_prev_timestamp_ms": prev_ts,
+                    "gap_fill_next_timestamp_ms": next_ts,
+                    "collected_at": collected_at,
+                }
+            )
+    written, _skipped = append_jsonl_unique(
+        path,
+        synthetic_rows,
+        key="timestamp_ms",
+        existing_keys=existing,
+    )
+    return written
 
 
 def parse_okx_funding_rows(
@@ -883,11 +1110,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_parser = subparsers.add_parser("plan", help="수집 대상과 예상 캔들 수를 출력")
     collect_parser = subparsers.add_parser("collect", help="수집 실행")
+    fill_upbit_gaps_parser = subparsers.add_parser("fill-upbit-gaps", help="업비트 기존 OHLCV gap 구간만 재조회")
     launch_parser = subparsers.add_parser("launch", help="백그라운드 전체 수집 실행")
     status_parser = subparsers.add_parser("status", help="백그라운드 수집 상태 확인")
     watch_parser = subparsers.add_parser("watch", help="수집 PID 종료 감시 후 텔레그램 알림")
     launch_watch_parser = subparsers.add_parser("launch-watch", help="수집 완료 알림 watcher 백그라운드 실행")
-    for sub in (plan_parser, collect_parser, launch_parser):
+    for sub in (plan_parser, collect_parser, fill_upbit_gaps_parser, launch_parser):
         sub.add_argument("--exchange", choices=["okx", "upbit", "all"], default="all")
         sub.add_argument("--symbols", help="쉼표 구분 심볼 목록. 지정하면 모든 선택 거래소에 동일 적용")
         sub.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
@@ -900,6 +1128,14 @@ def build_parser() -> argparse.ArgumentParser:
     collect_parser.add_argument("--request-delay-sec", type=float, default=0.15)
     collect_parser.add_argument("--skip-funding", action="store_true")
     collect_parser.add_argument("--notify-telegram", action="store_true")
+    fill_upbit_gaps_parser.add_argument("--request-delay-sec", type=float, default=0.12)
+    fill_upbit_gaps_parser.add_argument("--max-gaps", type=int, help="심볼별 최대 gap 조회 개수")
+    fill_upbit_gaps_parser.add_argument(
+        "--synthesize-short-gaps-min",
+        type=int,
+        default=0,
+        help="API가 제공하지 않는 짧은 gap 을 이전 종가/volume=0 캔들로 보정할 최대 누락 분 수",
+    )
     launch_parser.add_argument("--request-delay-sec", type=float, default=0.2)
     launch_parser.add_argument("--skip-funding", action="store_true")
     launch_parser.add_argument("--log-path", default=str(DEFAULT_LOG_PATH))
@@ -994,6 +1230,46 @@ def run_collect(args: argparse.Namespace) -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
     if getattr(args, "notify_telegram", False):
         notify_collection_summary(summary=summary, output_root=output_root)
+    return 0
+
+
+def run_fill_upbit_gaps(args: argparse.Namespace) -> int:
+    """업비트 기존 OHLCV 파일의 gap 구간만 재조회한다."""
+    targets = [
+        target for target in _build_targets_from_args(args)
+        if target.exchange == "upbit"
+    ]
+    end_ms = parse_date_to_ms(args.end, now_ms()) if args.end else None
+    start_ms = parse_date_to_ms(args.start, 0) if args.start else None
+    output_root = Path(args.output_root)
+    results: list[GapFillResult] = []
+    for target in targets:
+        print(f"[gap 보정] {target.exchange} {target.symbol} {target.timeframe}", flush=True)
+        result = collect_upbit_gap_target(
+            target,
+            output_root=output_root,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            request_delay_sec=args.request_delay_sec,
+            max_gaps=args.max_gaps,
+            synthesize_short_gaps_min=args.synthesize_short_gaps_min,
+        )
+        results.append(result)
+        print(
+            f"  gap {result.gap_count}개 중 {result.attempted_gap_count}개 조회 | "
+            f"신규 {result.filled_rows} rows | 합성 {result.synthetic_rows} rows | "
+            f"잔여 gap {result.remaining_gap_count}개 | "
+            f"page {result.page_count}",
+            flush=True,
+        )
+
+    summary = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "target_count": len(targets),
+        "gap_fill": [asdict(result) for result in results],
+    }
+    write_manifest(output_root / "upbit_gap_fill_summary.json", summary)
+    print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
     return 0
 
 
@@ -1196,6 +1472,8 @@ def main() -> int:
         return print_plan(args)
     if args.command == "collect":
         return run_collect(args)
+    if args.command == "fill-upbit-gaps":
+        return run_fill_upbit_gaps(args)
     if args.command == "launch":
         return run_launch(args)
     if args.command == "status":
