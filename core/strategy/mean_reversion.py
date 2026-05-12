@@ -1,5 +1,6 @@
 """
 작업 요약
+- 하단 근접 probe 는 전역 strong score 와 분리한 전용 최소 점수 기준으로 더 적극 허용하되 RSI/MACD/ATR/range/falling-knife 안전 필터는 유지
 - Bollinger 하단 reclaim 을 완전 해제하지 않고 하단 근접 신호를 소액/추가확인 probe 후보로만 허용
 - 음수 slope + 고거래량 + 중고 ATR + 저점 근접 조합에서는 mean_reversion 진입을 차단하도록 보강
 - ATR percentile 과 최근 range 위치를 함께 확인해 횡보장 반등 진입이 고변동/상단 추격으로 바뀌지 않도록 보강
@@ -46,6 +47,7 @@ def compute_bollinger_mean_reversion_state(
     allow_lower_near_probe: bool = False,
     lower_near_max_distance_pct: float = 0.12,
     lower_near_min_headroom_pct: float = 0.12,
+    lower_near_min_signal_score: float | None = None,
     lower_near_position_scale: float = 0.25,
     lower_near_extra_confirmation_loops: int = 2,
 ) -> dict[str, float | bool | str]:
@@ -71,6 +73,12 @@ def compute_bollinger_mean_reversion_state(
             "lower_reclaim_confirmed": False,
             "lower_near_probe_allowed": False,
             "lower_near_probe_reason": "bollinger_band_missing",
+            "lower_near_min_signal_score": (
+                lower_near_min_signal_score
+                if lower_near_min_signal_score is not None
+                else signal_score_min
+            ),
+            "lower_near_signal_passed": False,
             "bb_lower_distance_pct": 0.0,
             "lower_near_position_scale": lower_near_position_scale,
             "lower_near_extra_confirmation_loops": 0,
@@ -164,6 +172,12 @@ def compute_bollinger_mean_reversion_state(
         },
     )
     signal_is_strong = signal_score >= signal_score_min
+    effective_lower_near_min_signal_score = (
+        lower_near_min_signal_score
+        if lower_near_min_signal_score is not None
+        else signal_score_min
+    )
+    lower_near_signal_passed = signal_score >= effective_lower_near_min_signal_score
     lower_near_price_context = (
         not lower_reclaim
         and 0.0 <= bb_lower_distance_pct <= lower_near_max_distance_pct
@@ -173,7 +187,7 @@ def compute_bollinger_mean_reversion_state(
         allow_lower_near_probe
         and lower_near_price_context
         and lower_near_headroom_passed
-        and signal_is_strong
+        and lower_near_signal_passed
         and rsi_filter_passed
         and macd_filter_passed
         and atr_context_passed
@@ -189,7 +203,7 @@ def compute_bollinger_mean_reversion_state(
         lower_near_probe_reason = "lower_near_distance_too_far"
     elif not lower_near_headroom_passed:
         lower_near_probe_reason = "lower_near_headroom_low"
-    elif not signal_is_strong:
+    elif not lower_near_signal_passed:
         lower_near_probe_reason = "lower_near_signal_low"
     elif not rsi_filter_passed:
         lower_near_probe_reason = "lower_near_rsi_blocked"
@@ -202,8 +216,8 @@ def compute_bollinger_mean_reversion_state(
     elif falling_knife_blocked:
         lower_near_probe_reason = "lower_near_falling_knife"
 
-    entry_signal = (
-        (lower_reclaim or lower_near_probe_allowed)
+    reclaim_entry_signal = (
+        lower_reclaim
         and gap_pct > 0
         and signal_is_strong
         and rsi_filter_passed
@@ -212,6 +226,17 @@ def compute_bollinger_mean_reversion_state(
         and range_context_passed
         and not falling_knife_blocked
     )
+    lower_near_entry_signal = (
+        lower_near_probe_allowed
+        and gap_pct > 0
+        and lower_near_signal_passed
+        and rsi_filter_passed
+        and macd_filter_passed
+        and atr_context_passed
+        and range_context_passed
+        and not falling_knife_blocked
+    )
+    entry_signal = reclaim_entry_signal or lower_near_entry_signal
     return {
         "bullish": lower_reclaim or lower_near_probe_allowed,
         "bearish": upper_reject,
@@ -232,6 +257,8 @@ def compute_bollinger_mean_reversion_state(
         "lower_reclaim_confirmed": lower_reclaim,
         "lower_near_probe_allowed": lower_near_probe_allowed,
         "lower_near_probe_reason": lower_near_probe_reason,
+        "lower_near_min_signal_score": effective_lower_near_min_signal_score,
+        "lower_near_signal_passed": lower_near_signal_passed,
         "bb_lower_distance_pct": bb_lower_distance_pct,
         "lower_near_position_scale": lower_near_position_scale,
         "lower_near_extra_confirmation_loops": lower_near_extra_confirmation_loops

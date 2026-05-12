@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-12: BTC LOW_ENERGY probe 기본 기준을 낮추고 추가 확인을 늘려 소액 후보 전환을 더 적극화
 - BTC LOW_ENERGY 소액 probe 진입 보정 설정을 추가해 강한 신호만 추가확인 후 제한 진입할 수 있게 확장
 - 2026-05-01: 고거래량+고ATR+RSI 과열 추격 진입 차단과 최근 range 상단 추가확인 설정을 추가
 - 2026-04-23: BTC 손절 억제를 위해 확인 타임프레임 slope 하한과 거래량 보너스용 ATR 동반 조건을 추가
@@ -345,12 +346,12 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         high_volume_min_atr_pct_map=parse_symbol_float_map(config_value("btc_trend", "high_volume_min_atr_pct_map", {}, env_key="BTC_TREND_HIGH_VOLUME_MIN_ATR_PCT_MAP")),
         high_volume_extra_confirmation_loops_map=parse_symbol_int_map(config_value("btc_trend", "high_volume_extra_confirmation_loops_map", {}, env_key="BTC_TREND_HIGH_VOLUME_EXTRA_CONFIRMATION_LOOPS_MAP")),
         enable_low_energy_probe=config_bool("btc_trend", "enable_low_energy_probe", True, env_key="BTC_TREND_ENABLE_LOW_ENERGY_PROBE"),
-        low_energy_probe_min_signal_score=config_float("btc_trend", "low_energy_probe_min_signal_score", 92.0, env_key="BTC_TREND_LOW_ENERGY_PROBE_MIN_SIGNAL_SCORE"),
-        low_energy_probe_min_volume_ratio=config_float("btc_trend", "low_energy_probe_min_volume_ratio", 0.65, env_key="BTC_TREND_LOW_ENERGY_PROBE_MIN_VOLUME_RATIO"),
+        low_energy_probe_min_signal_score=config_float("btc_trend", "low_energy_probe_min_signal_score", 45.0, env_key="BTC_TREND_LOW_ENERGY_PROBE_MIN_SIGNAL_SCORE"),
+        low_energy_probe_min_volume_ratio=config_float("btc_trend", "low_energy_probe_min_volume_ratio", 0.35, env_key="BTC_TREND_LOW_ENERGY_PROBE_MIN_VOLUME_RATIO"),
         low_energy_probe_require_confirm_bullish=config_bool("btc_trend", "low_energy_probe_require_confirm_bullish", True, env_key="BTC_TREND_LOW_ENERGY_PROBE_REQUIRE_CONFIRM_BULLISH"),
         low_energy_probe_max_atr_percentile=config_float("btc_trend", "low_energy_probe_max_atr_percentile", 70.0, env_key="BTC_TREND_LOW_ENERGY_PROBE_MAX_ATR_PERCENTILE"),
-        low_energy_probe_position_scale=config_float("btc_trend", "low_energy_probe_position_scale", 0.25, env_key="BTC_TREND_LOW_ENERGY_PROBE_POSITION_SCALE"),
-        low_energy_probe_extra_confirmation_loops=config_int("btc_trend", "low_energy_probe_extra_confirmation_loops", 2, env_key="BTC_TREND_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
+        low_energy_probe_position_scale=config_float("btc_trend", "low_energy_probe_position_scale", 0.30, env_key="BTC_TREND_LOW_ENERGY_PROBE_POSITION_SCALE"),
+        low_energy_probe_extra_confirmation_loops=config_int("btc_trend", "low_energy_probe_extra_confirmation_loops", 3, env_key="BTC_TREND_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
         overheat_guard_volume_ratio=config_float("btc_trend", "overheat_guard_volume_ratio", 2.0, env_key="BTC_TREND_OVERHEAT_GUARD_VOLUME_RATIO"),
         overheat_guard_atr_percentile=config_float("btc_trend", "overheat_guard_atr_percentile", 85.0, env_key="BTC_TREND_OVERHEAT_GUARD_ATR_PERCENTILE"),
         overheat_guard_rsi=config_float("btc_trend", "overheat_guard_rsi", 68.0, env_key="BTC_TREND_OVERHEAT_GUARD_RSI"),

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-12: 하단 근접 mean_reversion probe 전용 최소 점수 설정을 추가해 전역 strong 기준과 분리
 - mean_reversion 하단 근접 신호를 소액/추가확인 probe 후보로 제한하는 설정을 추가
 - SOL 제한형 probe 진입/익절/손절/최대 보유시간 설정을 추가
 - 업비트 알트 고품질 READY 후보가 최소주문금액에만 걸릴 때 보수적으로 주문 floor 를 적용하는 설정을 추가
@@ -124,6 +125,7 @@ class StrategySettings:
     enable_mean_reversion_lower_near_probe: bool
     mean_reversion_lower_near_max_distance_pct: float
     mean_reversion_lower_near_min_headroom_pct: float
+    mean_reversion_lower_near_min_signal_score: float
     mean_reversion_lower_near_position_scale: float
     mean_reversion_lower_near_extra_confirmation_loops: int
     overheat_guard_volume_ratio: float
@@ -770,6 +772,7 @@ def load_strategy_settings(
         enable_mean_reversion_lower_near_probe=config_bool("strategy", "enable_mean_reversion_lower_near_probe", True, env_key="STRATEGY_ENABLE_MEAN_REVERSION_LOWER_NEAR_PROBE"),
         mean_reversion_lower_near_max_distance_pct=config_float("strategy", "mean_reversion_lower_near_max_distance_pct", 0.12, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_MAX_DISTANCE_PCT"),
         mean_reversion_lower_near_min_headroom_pct=config_float("strategy", "mean_reversion_lower_near_min_headroom_pct", 0.12, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_MIN_HEADROOM_PCT"),
+        mean_reversion_lower_near_min_signal_score=config_float("strategy", "mean_reversion_lower_near_min_signal_score", 40.0, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_MIN_SIGNAL_SCORE"),
         mean_reversion_lower_near_position_scale=config_float("strategy", "mean_reversion_lower_near_position_scale", 0.25, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_POSITION_SCALE"),
         mean_reversion_lower_near_extra_confirmation_loops=config_int("strategy", "mean_reversion_lower_near_extra_confirmation_loops", 2, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_EXTRA_CONFIRMATION_LOOPS"),
         overheat_guard_volume_ratio=config_float("strategy", "overheat_guard_volume_ratio", 2.0, env_key="STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO"),
@@ -800,13 +803,13 @@ def load_strategy_settings(
         stop_loss_context_min_similarity_count=config_int("strategy", "stop_loss_context_min_similarity_count", 3, env_key="STRATEGY_STOP_LOSS_CONTEXT_MIN_SIMILARITY_COUNT"),
         stop_loss_context_extra_confirmation_loops=config_int("strategy", "stop_loss_context_extra_confirmation_loops", 2, env_key="STRATEGY_STOP_LOSS_CONTEXT_EXTRA_CONFIRMATION_LOOPS"),
         enable_low_energy_probe=config_bool("strategy", "enable_low_energy_probe", True, env_key="STRATEGY_ENABLE_LOW_ENERGY_PROBE"),
-        low_energy_probe_min_signal_score=config_float("strategy", "low_energy_probe_min_signal_score", 85.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_SIGNAL_SCORE"),
-        low_energy_probe_min_volume_ratio=config_float("strategy", "low_energy_probe_min_volume_ratio", 0.85, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_VOLUME_RATIO"),
+        low_energy_probe_min_signal_score=config_float("strategy", "low_energy_probe_min_signal_score", 45.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_SIGNAL_SCORE"),
+        low_energy_probe_min_volume_ratio=config_float("strategy", "low_energy_probe_min_volume_ratio", 0.35, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_VOLUME_RATIO"),
         low_energy_probe_require_htf_bullish=config_bool("strategy", "low_energy_probe_require_htf_bullish", True, env_key="STRATEGY_LOW_ENERGY_PROBE_REQUIRE_HTF_BULLISH"),
-        low_energy_probe_min_orderbook_pressure_score=config_float("strategy", "low_energy_probe_min_orderbook_pressure_score", 55.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_ORDERBOOK_PRESSURE_SCORE"),
-        low_energy_probe_max_atr_percentile=config_float("strategy", "low_energy_probe_max_atr_percentile", 65.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MAX_ATR_PERCENTILE"),
-        low_energy_probe_position_scale=config_float("strategy", "low_energy_probe_position_scale", 0.25, env_key="STRATEGY_LOW_ENERGY_PROBE_POSITION_SCALE"),
-        low_energy_probe_extra_confirmation_loops=config_int("strategy", "low_energy_probe_extra_confirmation_loops", 2, env_key="STRATEGY_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
+        low_energy_probe_min_orderbook_pressure_score=config_float("strategy", "low_energy_probe_min_orderbook_pressure_score", 0.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MIN_ORDERBOOK_PRESSURE_SCORE"),
+        low_energy_probe_max_atr_percentile=config_float("strategy", "low_energy_probe_max_atr_percentile", 70.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MAX_ATR_PERCENTILE"),
+        low_energy_probe_position_scale=config_float("strategy", "low_energy_probe_position_scale", 0.30, env_key="STRATEGY_LOW_ENERGY_PROBE_POSITION_SCALE"),
+        low_energy_probe_extra_confirmation_loops=config_int("strategy", "low_energy_probe_extra_confirmation_loops", 3, env_key="STRATEGY_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
         enable_sol_probe=config_bool("strategy", "enable_sol_probe", False, env_key="STRATEGY_ENABLE_SOL_PROBE"),
         sol_probe_symbols=tuple(
             parse_symbol_list(

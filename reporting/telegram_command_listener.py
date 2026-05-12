@@ -1,6 +1,7 @@
 """
 수정 요약
 - 2026-04-28: /analysis 와 /weekly 에 decision journal 기반 의사결정 리뷰와 reflection 요약을 추가했다.
+- 2026-05-11: 정기 리포트의 스킵 사유와 백테스트 대비 실거래 섹션을 구체 사유/가독성 중심으로 정리했다.
 - 2026-05-06: 복합 리포트에서 빈 보조 섹션을 숨기고 핵심 판정이 먼저 보이도록 텔레그램 문구를 정리했다.
 - 2026-05-06: /change 와 /shadow 명령으로 변경 효과 자동 비교와 미체결 후보 가상 추적 요약을 확인하도록 추가했다.
 - 2026-04-24: 튜닝 비교 리포트가 오래된 diff 파일에 머무르지 않도록 최신 batch_summary 2개 비교 fallback 과 Sharpe/PF 표시를 추가
@@ -561,11 +562,12 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
     rows = load_latest_backtest_comparison_rows(settings)
     if not rows:
         return (
-            "백테스트 대비 실거래 설명\n"
-            "- 아직 comparison.json 이 없습니다. backtest_replay.py 와 compare_backtest_to_live.py 를 먼저 실행해 주세요."
+            "📊 백테스트 대비 실거래\n"
+            "- 비교 파일 없음: `reports/backtests/**/comparison.json` 이 없습니다.\n"
+            "- 조치: `backtest_replay.py` 실행 후 `compare_backtest_to_live.py` 로 최신 기간 비교 파일을 생성해야 합니다."
         )
 
-    lines = ["백테스트 대비 실거래 설명"]
+    lines = ["📊 백테스트 대비 실거래"]
     covered_symbols: set[str] = set()
     for payload in rows[:limit]:
         filters = payload.get("filters", {}) if isinstance(payload.get("filters"), dict) else {}
@@ -576,8 +578,12 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
         program_name = str(filters.get("program_name", ""))
         covered_symbols.add(symbol)
         label = PROGRAM_LABELS.get(program_name, program_name)
+        since = str(filters.get("since") or "-")
+        until = str(filters.get("until") or "-")
         backtest_sell_count = int(backtest.get("sell_count", 0) or 0)
         live_sell_count = int(live.get("sell_count", 0) or 0)
+        backtest_trade_count = int(backtest.get("trade_count", 0) or 0)
+        live_trade_count = int(live.get("trade_count", 0) or 0)
         backtest_win_rate = float(backtest.get("win_rate_pct", 0.0) or 0.0)
         live_win_rate = float(live.get("win_rate_pct", 0.0) or 0.0)
         backtest_avg_pnl = float(backtest.get("avg_net_realized_pnl_pct", 0.0) or 0.0)
@@ -594,31 +600,44 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
             if live.get("top_exit_reasons")
             else "-"
         )
+        lines.append("")
+        lines.append(f"- {format_symbol_badge(symbol)} | {label}")
+        lines.append(f"  • 기간: {since} ~ {until}")
+        if backtest_trade_count == 0 and live_trade_count == 0:
+            lines.append("  • 값 없음: 백테스트/실거래 체결 표본이 모두 0건입니다.")
+            if since.startswith("2099") or until.startswith("2099"):
+                lines.append("  • 원인: 현재 comparison.json 의 비교 기간이 미래 테스트 기간이라 실제 체결 값이 비어 있습니다.")
+            else:
+                lines.append("  • 원인: 해당 비교 기간에 매수/매도 체결이 없거나 비교 파일이 오래된 기간으로 생성됐습니다.")
+            lines.append("  • 조치: 최신 운영 기간으로 백테스트와 실거래 비교를 다시 생성해야 합니다.")
+            continue
+
         lines.append(
-            f"- {label} | {symbol} | "
-            f"백테스트 매도 {backtest_sell_count}건 / 실거래 매도 {live_sell_count}건 | "
-            f"승률 차이 {live_win_rate - backtest_win_rate:+.2f}%p | "
-            f"평균 순손익률 차이 {live_avg_pnl - backtest_avg_pnl:+.4f}%p"
+            f"  • 표본: 백테스트 체결 {backtest_trade_count}건·매도 {backtest_sell_count}건 / "
+            f"실거래 체결 {live_trade_count}건·매도 {live_sell_count}건"
         )
         lines.append(
-            f"  성과: 백테스트 총 순손익 {backtest_total_quote:.4f}, "
-            f"실거래 총 순손익 {live_total_quote:.4f}"
+            f"  • 차이: 승률 {live_win_rate - backtest_win_rate:+.2f}%p / "
+            f"평균 순손익률 {live_avg_pnl - backtest_avg_pnl:+.4f}%p"
         )
         lines.append(
-            f"  종료 사유: 백테스트 대표 `{backtest_top_reason}` / "
-            f"실거래 대표 `{live_top_reason}`"
+            f"  • 성과: 백테스트 {backtest_total_quote:.4f} / 실거래 {live_total_quote:.4f}"
+        )
+        lines.append(
+            f"  • 종료 사유: 백테스트 `{backtest_top_reason}` / 실거래 `{live_top_reason}`"
         )
         if comments:
-            lines.append(f"  해석: {' / '.join(str(comment) for comment in comments[:4])}")
+            lines.append(f"  • 해석: {' / '.join(str(comment) for comment in comments[:3])}")
     missing_symbols = sorted(set(settings.okx_symbols + settings.upbit_symbols) - covered_symbols)
     if missing_symbols:
-        lines.append(f"- 비교 결과가 아직 없는 심볼: {', '.join(missing_symbols[:6])}")
+        lines.append("")
+        lines.append(f"- ⚠️ 비교 파일 없는 심볼: {', '.join(missing_symbols[:6])}")
+        lines.append("  • 원인: 해당 심볼의 최신 `comparison.json` 이 `reports/backtests` 아래에 없습니다.")
         sample_symbol = missing_symbols[0]
         sample_exchange = "upbit" if sample_symbol.endswith("/KRW") else "okx"
-        sample_strategy = "btc" if sample_symbol.startswith("BTC/") else "alt"
         sample_slug = sample_symbol.replace("/", "_").replace("-", "_").lower()
         lines.append(
-            "  권장 실행: "
+            "  • 권장 실행: "
             f".venv/bin/python backtest_report_runner.py snapshot --label auto_compare_{sample_slug} "
             f"--symbols {sample_symbol} --exchanges {sample_exchange}"
         )
@@ -2014,7 +2033,7 @@ def build_daily_report_text(settings: ListenerSettings, label: str) -> str:
     return join_report_sections(
         [
             f"{label} 일일 리포트",
-            f"기준 시각: {now}",
+            f"⏱ 기준 시각: {now}",
             build_pnl_text(),
             build_positions_text(settings),
             build_analysis_text(settings),
@@ -2114,23 +2133,52 @@ def map_strategy_reason_to_label(
     reason: str,
     actual: dict[str, object] | None,
     required: dict[str, object] | None,
+    *,
+    stage: str = "",
+    side: str = "",
 ) -> str:
     """구조화 전략 로그의 reason 코드를 사용자용 스킵 사유 라벨로 바꾼다."""
     actual = actual or {}
     required = required or {}
 
-    if reason in {"no_bullish_signal", "no_entry_signal"}:
-        return "조건 미충족 대기"
+    if reason == "no_bullish_signal":
+        return "상승 전환 신호 미형성"
+    if reason == "no_entry_signal":
+        return "진입 신호 미형성"
+    if reason == "trend_signal_missing":
+        if "ema_aligned" in actual or "ema_spread_pct" in actual:
+            return "BTC EMA 추세 진입 신호 미충족"
+        return "추세 진입 신호 미충족"
+    if reason == "mean_reversion_lower_reclaim_missing":
+        return "평균회귀 하단 복귀 미확인"
+    if reason == "mean_reversion_range_context_blocked":
+        return "평균회귀 range 위치 부적합"
+    if reason == "mean_reversion_atr_context_blocked":
+        return "평균회귀 ATR 환경 부적합"
+    if reason == "mean_reversion_falling_knife_blocked":
+        return "평균회귀 낙폭 추격 위험"
+    if reason == "entry_signal_unclassified_block":
+        return "진입 신호 최종 미확정"
     if reason == "distance_too_small":
         return "이격도 부족"
     if reason == "distance_too_large":
         return "이격도 과다"
     if reason == "volume_low":
         return "거래량 부족"
+    if reason == "volume_spike_too_high":
+        return "거래량 급등 추격 위험"
     if reason in {"volatility_low", "atr_low", "volatility_out_of_range", "atr_high"}:
         return "변동성 범위 이탈"
+    if reason == "bb_width_out_of_range":
+        return "볼린저 밴드폭 범위 이탈"
     if reason == "higher_timeframe_not_bullish":
         return "상위 타임프레임 불일치"
+    if reason == "macd_filter_blocked":
+        return "MACD 필터 미통과"
+    if reason == "rsi_filter_blocked":
+        return "RSI 필터 미통과"
+    if reason == "symbol_regime_blocks_entry":
+        return "현재 레짐 신규진입 차단"
     if reason == "cooldown_active":
         return "쿨다운"
     if reason == "avg_price_rule_block":
@@ -2144,18 +2192,36 @@ def map_strategy_reason_to_label(
     if reason == "no_exit_signal":
         return "청산 신호 대기"
     if reason == "no_position":
+        if stage == "add_on_position":
+            return "추가매수 대상 포지션 없음"
+        if side == "exit":
+            return "청산 대상 포지션 없음"
         return "포지션 없음"
 
     # reason 코드가 낯설어도 actual/required 값을 보고 최대한 안정적으로 분류한다.
+    if "symbol_regime" in actual and "symbol_regime_allows_entry" in required:
+        return "현재 레짐 신규진입 차단"
     if "volume_ratio" in actual and "min_volume_ratio" in required:
         return "거래량 부족"
+    if "volume_ratio" in actual and "max_volume_ratio" in required:
+        return "거래량 급등 추격 위험"
     if "confirm_bullish" in actual and "confirm_bullish" in required:
         return "상위 타임프레임 불일치"
+    if "rsi_filter_passed" in actual:
+        return "RSI 필터 미통과"
+    if "macd_filter_passed" in actual:
+        return "MACD 필터 미통과"
+    if "bb_width_pct" in actual:
+        return "볼린저 밴드폭 범위 이탈"
     if "atr_pct" in actual or "min_atr_pct" in required:
         return "변동성 범위 이탈"
     if "gap_pct" in actual or "min_gap_pct" in required:
         return "이격도 부족"
-    return "기타"
+    if reason:
+        return f"세부 조건 미충족({reason})"
+    if stage:
+        return f"{stage} 단계 조건 미충족"
+    return "세부 조건 미충족"
 
 
 def summarize_skip_reasons_from_structure(program_name: str) -> dict[str, int]:
@@ -2174,10 +2240,19 @@ def summarize_skip_reasons_from_structure(program_name: str) -> dict[str, int]:
         recorded_local = str(record.get("recorded_at_local", ""))
         if not recorded_local.startswith(today_prefix):
             continue
+        reason = str(record.get("reason", ""))
+        stage = str(record.get("stage", ""))
+        side = str(record.get("side", ""))
+        if side and side != "entry":
+            continue
+        if stage == "add_on_position" and reason == "no_position":
+            continue
         label = map_strategy_reason_to_label(
-            str(record.get("reason", "")),
+            reason,
             record.get("actual") if isinstance(record.get("actual"), dict) else {},
             record.get("required") if isinstance(record.get("required"), dict) else {},
+            stage=stage,
+            side=side,
         )
         counts[label] = counts.get(label, 0) + 1
     return counts
@@ -2185,7 +2260,7 @@ def summarize_skip_reasons_from_structure(program_name: str) -> dict[str, int]:
 
 def build_today_skip_summary_text(limit: int = 6) -> str:
     """오늘 스킵 사유를 거래소별로 요약한다."""
-    sections = ["오늘 스킵 사유 요약"]
+    sections = ["🚦 오늘 진입 스킵 사유 요약", "- 집계 기준: 구조화 전략 로그의 `entry` 차단 사유만 반영합니다."]
 
     for (exchange_name, filename), (_, program_name) in zip(
         PROGRAM_LOG_SOURCES,
@@ -2194,6 +2269,7 @@ def build_today_skip_summary_text(limit: int = 6) -> str:
         counts = summarize_skip_reasons_from_structure(program_name)
         if not counts:
             counts = summarize_skip_reasons(filename)
+        sections.append("")
         sections.append(f"[{exchange_name}]")
         if not counts:
             sections.append("- 오늘 집계된 스킵 사유가 아직 없습니다.")
@@ -2201,7 +2277,7 @@ def build_today_skip_summary_text(limit: int = 6) -> str:
 
         sorted_counts = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
         for label, count in sorted_counts[:limit]:
-            sections.append(f"- {label}: {count}회")
+            sections.append(f"• {label}: {count}회")
 
     return "\n".join(sections)
 

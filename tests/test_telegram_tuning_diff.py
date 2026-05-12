@@ -2,12 +2,16 @@ import unittest
 import tempfile
 import json
 from pathlib import Path
+from unittest.mock import patch
 
+from reporting.listener_runtime import ListenerSettings
 from reporting.telegram_command_listener import (
+    build_backtest_comparison_text,
     build_tuning_diff_rows_from_batch_summaries,
     enrich_summary_metrics_from_result_dir,
     format_tuning_diff_row,
     join_report_sections,
+    map_strategy_reason_to_label,
 )
 
 
@@ -114,6 +118,78 @@ class TelegramTuningDiffTests(unittest.TestCase):
 
             self.assertIsNotNone(metrics["sharpe_ratio"])
             self.assertEqual(2.0, metrics["profit_factor"])
+
+    def test_strategy_reason_mapping_avoids_generic_other_label(self):
+        self.assertEqual(
+            "평균회귀 하단 복귀 미확인",
+            map_strategy_reason_to_label(
+                "mean_reversion_lower_reclaim_missing",
+                {"bb_lower_distance_pct": 0.2},
+                {"lower_near_max_distance_pct": 0.12},
+                stage="raw_entry_signal",
+                side="entry",
+            ),
+        )
+        self.assertNotIn(
+            "기타",
+            map_strategy_reason_to_label(
+                "new_reason_code",
+                {},
+                {},
+                stage="entry_signal_integrity",
+                side="entry",
+            ),
+        )
+
+    def test_backtest_comparison_text_explains_empty_future_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comparison_path = Path(tmp) / "comparison.json"
+            comparison_path.write_text(
+                json.dumps(
+                    {
+                        "filters": {
+                            "symbol": "XRP/KRW",
+                            "exchange_name": "upbit",
+                            "strategy_type": "alt",
+                            "program_name": "upbit_ma_crossover_bot",
+                            "since": "2099-01-01",
+                            "until": "2099-01-02",
+                            "backtest_dir": "reports/backtests/example",
+                        },
+                        "backtest": {"trade_count": 0, "sell_count": 0},
+                        "live": {"trade_count": 0, "sell_count": 0},
+                        "comments": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = ListenerSettings(
+                poll_interval_sec=5,
+                offset_path=Path("logs/test.offset"),
+                report_state_path=Path("logs/test.state"),
+                analysis_log_dir=Path("analysis_logs"),
+                okx_symbols=["BTC/USDT"],
+                upbit_symbols=["XRP/KRW"],
+                recent_log_line_count=5,
+                daily_report_enabled=True,
+                morning_report_hour=8,
+                noon_report_hour=12,
+                evening_report_hour=18,
+                night_report_hour=21,
+                weekly_report_enabled=True,
+                weekly_report_weekday=0,
+                weekly_report_hour=9,
+            )
+
+            with patch(
+                "reporting.telegram_command_listener.iter_files",
+                return_value=[comparison_path],
+            ):
+                text = build_backtest_comparison_text(settings)
+
+        self.assertIn("값 없음", text)
+        self.assertIn("비교 기간이 미래 테스트 기간", text)
+        self.assertNotIn("승률 차이 +0.00%p", text)
 
 
 if __name__ == "__main__":

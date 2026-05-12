@@ -1,6 +1,7 @@
 """
 수정 요약
 - 2026-04-24: analysis_logs 호가 스냅샷을 읽어 best bid/ask 와 depth 기반 부분체결을 반영하는 체결 모델을 추가했다.
+- 2026-05-11: 알트 리플레이가 live volume/gap 상한과 volume spike exit 계약을 반영하도록 보강했다.
 - 2026-04-23: Sharpe ratio, profit factor, 슬리피지/부분체결/지연 실행 모델을 추가해 백테스트 요약과 실행 가정을 강화했다.
 - 2026-04-13: 장시간 걸리던 주간 알트/SOL 백테스트가 배치 요약 파일 생성 전에 사실상 멈추지 않도록 반복 지표 계산 입력을 최근 필요 구간으로 제한해 성능 병목을 줄였다.
 - 2026-04-10: 백테스트 실행 시 추가 override 세트를 임시 적용하고 summary 에 적용 세트 메타데이터를 남기도록 확장했다.
@@ -1003,6 +1004,8 @@ def simulate_alt_strategy(
         min_gap_pct = base_min_gap_pct * noise_gap_multiplier
 
         effective_min_volume_ratio = strategy.get_min_volume_ratio(symbol)
+        effective_max_volume_ratio = strategy.get_max_volume_ratio(symbol)
+        max_entry_gap_pct = strategy.get_max_entry_gap_pct(symbol)
 
         alt_signal_state = compute_alt_signal_state(
             prev_close=prev_close,
@@ -1034,6 +1037,7 @@ def simulate_alt_strategy(
         bullish = bool(alt_signal_state["bullish"])
         bearish = bool(alt_signal_state["bearish"])
         gap_pct = float(alt_signal_state["gap_pct"])
+        gap_within_upper_bound = gap_pct <= max_entry_gap_pct
         signal_is_strong = bool(alt_signal_state["signal_is_strong"])
         signal_score = float(alt_signal_state["signal_score"])
         rsi_filter_passed = bool(alt_signal_state["rsi_filter_passed"])
@@ -1045,6 +1049,11 @@ def simulate_alt_strategy(
             True
             if not strategy.enable_volume_filter
             else volume_ratio is not None and volume_ratio >= effective_min_volume_ratio
+        )
+        volume_within_upper_bound = (
+            True
+            if not strategy.enable_volume_filter or volume_ratio is None
+            else volume_ratio <= effective_max_volume_ratio
         )
         volatility_filter_passed = (
             True
@@ -1188,6 +1197,10 @@ def simulate_alt_strategy(
             break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
             break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
             break_even_guard_max_profit_retrace_pct=strategy.break_even_guard_max_profit_retrace_pct,
+            enable_volume_spike_exit=strategy.enable_volume_spike_exit,
+            volume_spike_exit_min_profit_pct=strategy.volume_spike_exit_min_profit_pct,
+            volume_spike_exit_max_volume_ratio=strategy.volume_spike_exit_max_volume_ratio,
+            volume_ratio=volume_ratio,
             bearish=bearish,
             sell_split_ratio=strategy.sell_split_ratio,
         )
@@ -1195,6 +1208,7 @@ def simulate_alt_strategy(
         stop_loss_triggered = bool(alt_exit_state["stop_loss_triggered"])
         profit_protect_triggered = bool(alt_exit_state["profit_protect_triggered"])
         break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
+        volume_spike_exit_triggered = bool(alt_exit_state["volume_spike_exit_triggered"])
 
         if has_position and avg_entry_price is not None:
             normal_exit_triggered = bearish and take_profit_ready and higher_timeframe_exit_passed
@@ -1215,6 +1229,9 @@ def simulate_alt_strategy(
             elif break_even_guard_triggered:
                 exit_ratio = 1.0
                 exit_reason = "break_even_guard_exit"
+            elif volume_spike_exit_triggered:
+                exit_ratio = 1.0
+                exit_reason = "volume_spike_take_profit"
             elif normal_exit_triggered:
                 if strategy.uses_partial_take_profit(symbol) and not partial_take_profit_done:
                     exit_ratio = strategy.partial_take_profit_ratio
@@ -1342,8 +1359,10 @@ def simulate_alt_strategy(
             and signal_is_strong
             and (not regime_policy.require_strong_signal or signal_is_strong)
             and volume_filter_passed
+            and volume_within_upper_bound
             and volatility_filter_passed
             and higher_timeframe_entry_passed
+            and gap_within_upper_bound
             and not htf_bearish_entry_blocked
             and not correlation_entry_blocked
             and not fill_quality_entry_blocked
@@ -1431,9 +1450,11 @@ def simulate_alt_strategy(
                             "allocation_score": allocation_score_result.allocation_score,
                             "allocation_score_scale": allocation_score_result.score_scale,
                             "gap_pct": gap_pct,
+                            "max_entry_gap_pct": max_entry_gap_pct,
                             "noise_ratio": noise_ratio,
                             "noise_gap_multiplier": noise_gap_multiplier,
                             "volume_ratio": volume_ratio,
+                            "max_volume_ratio": effective_max_volume_ratio,
                             "avg_abs_change_pct": avg_abs_change_pct,
                             "correlation_with_btc": correlation_with_btc,
                             "symbol_regime": regime_snapshot.regime,

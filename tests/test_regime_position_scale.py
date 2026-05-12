@@ -99,7 +99,8 @@ class RegimePositionScaleTests(unittest.TestCase):
         self.assertAlmostEqual(sizing.btc_atr_position_scale, 0.25)
         self.assertAlmostEqual(sizing.alt_atr_position_scale, 0.8)
         self.assertAlmostEqual(sizing.pre_score_position_ratio, 0.049)
-        self.assertAlmostEqual(sizing.position_ratio, 0.0147)
+        self.assertAlmostEqual(sizing.position_ratio, 0.02205)
+        self.assertAlmostEqual(sizing.mean_reversion_lower_near_position_ratio, 0.02205)
         self.assertAlmostEqual(sizing.low_energy_probe_position_ratio, 0.0147)
         self.assertIn(
             "BTC 레짐(LOW_ENERGY) 스케일 0.35x",
@@ -111,6 +112,34 @@ class RegimePositionScaleTests(unittest.TestCase):
                 alt_atr_pct=1.2,
             ),
         )
+        self.assertIn(
+            "하단근접 probe 비중 0.0221",
+            format_alt_position_sizing_log(
+                symbol="ETH/KRW",
+                sizing=sizing,
+                btc_reference_regime="LOW_ENERGY",
+                btc_reference_atr_pct=0.11,
+                alt_atr_pct=1.2,
+            ),
+        )
+
+    def test_lower_near_probe_keeps_small_position_when_symbol_regime_zero(self):
+        sizing = build_alt_position_sizing(
+            strategy=DummyAltStrategy(),
+            symbol="XRP/KRW",
+            base_position_ratio=0.3,
+            symbol_regime="LOW_ENERGY",
+            btc_reference_regime="LOW_ENERGY",
+            btc_reference_atr_pct=0.11,
+            alt_atr_pct=0.4,
+            score_scale=0.75,
+            mean_reversion_lower_near_position_scale=0.35,
+        )
+
+        self.assertAlmostEqual(sizing.regime_position_scale, 0.0)
+        self.assertAlmostEqual(sizing.pre_score_position_ratio, 0.0)
+        self.assertAlmostEqual(sizing.mean_reversion_lower_near_position_ratio, 0.00984375)
+        self.assertAlmostEqual(sizing.position_ratio, 0.00984375)
 
     def test_build_btc_position_sizing_preserves_low_energy_probe_order(self):
         sizing = build_btc_position_sizing(

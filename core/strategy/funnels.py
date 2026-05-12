@@ -1,5 +1,6 @@
 """
 작업 요약
+- 하단 근접 mean_reversion probe 는 전용 낮은 점수 기준을 통과하면 distance 단계에서 소액 후보로 인정
 - mean_reversion 하단 근접 probe 후보는 raw signal 단계에서 reclaim 과 구분해 기록
 - SOL 제한형 probe 신호와 최대 보유 시간 청산 트리거를 알트 퍼널에 노출
 - no_entry_signal 포괄 차단을 raw 신호, squeeze, mean_reversion 컨텍스트, 최종 integrity 단계로 세분화
@@ -65,6 +66,8 @@ def build_alt_entry_steps(
     mean_reversion_lower_near_probe_allowed: bool = False,
     mean_reversion_bb_lower_distance_pct: float | None = None,
     mean_reversion_lower_near_max_distance_pct: float | None = None,
+    mean_reversion_lower_near_min_signal_score: float | None = None,
+    mean_reversion_lower_near_signal_passed: bool = False,
     entry_probe_signal: bool = False,
     entry_probe_reason: str | None = None,
     atr_context_passed: bool = True,
@@ -104,6 +107,10 @@ def build_alt_entry_steps(
             "squeeze_breakout_passed": True,
             "entry_probe_signal": entry_probe_signal,
         }
+
+    distance_passed = signal_is_strong
+    if normalized_strategy in {"mean_reversion", "low_energy_probe"}:
+        distance_passed = signal_is_strong or mean_reversion_lower_near_probe_allowed
 
     steps = [
         FunnelStep(
@@ -148,10 +155,20 @@ def build_alt_entry_steps(
         ),
         FunnelStep(
             stage="distance",
-            passed=signal_is_strong,
+            passed=distance_passed,
             reason="signal_score_low",
-            actual={"gap_pct": gap_pct, "signal_score": signal_score},
-            required={"min_gap_pct": min_gap_pct, "min_signal_score": min_signal_score},
+            actual={
+                "gap_pct": gap_pct,
+                "signal_score": signal_score,
+                "signal_is_strong": signal_is_strong,
+                "lower_near_probe_allowed": mean_reversion_lower_near_probe_allowed,
+                "lower_near_signal_passed": mean_reversion_lower_near_signal_passed,
+            },
+            required={
+                "min_gap_pct": min_gap_pct,
+                "min_signal_score": min_signal_score,
+                "lower_near_min_signal_score": mean_reversion_lower_near_min_signal_score,
+            },
         ),
         FunnelStep(
             stage="distance_cap",

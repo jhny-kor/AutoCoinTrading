@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-12: 하단 근접 mean_reversion probe 전용 낮은 점수 기준과 소액 비중 우회 계산을 업비트 알트 진입 경로에 연결
 - 2026-05-07: SOL 제한형 probe 전략을 연결해 점수 70 이상 소액 진입과 180분 시간 청산을 적용
 - 2026-05-06: 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-06: mean_reversion 하단 근접 후보는 소액 비중과 추가 confirmation 으로만 진입 후보화
@@ -947,6 +948,7 @@ def run_bot():
                         allow_lower_near_probe=strategy.enable_mean_reversion_lower_near_probe,
                         lower_near_max_distance_pct=strategy.mean_reversion_lower_near_max_distance_pct,
                         lower_near_min_headroom_pct=strategy.mean_reversion_lower_near_min_headroom_pct,
+                        lower_near_min_signal_score=strategy.mean_reversion_lower_near_min_signal_score,
                         lower_near_position_scale=strategy.mean_reversion_lower_near_position_scale,
                         lower_near_extra_confirmation_loops=strategy.mean_reversion_lower_near_extra_confirmation_loops,
                     )
@@ -1014,6 +1016,7 @@ def run_bot():
                 effective_symbol_regime_blocks_entry = (
                     symbol_regime_blocks_entry
                     and not low_energy_probe_decision.allowed
+                    and not mean_reversion_lower_near_probe_allowed
                     and not sol_probe_entry_allowed
                 )
                 if low_energy_probe_decision.allowed:
@@ -1023,6 +1026,11 @@ def run_bot():
                         f"signal={signal_score:.1f}, volume={0.0 if volume_ratio is None else volume_ratio:.3f}, "
                         f"position_scale={low_energy_probe_decision.position_scale:.2f}x"
                     )
+                entry_probe_score_override_allowed = (
+                    mean_reversion_lower_near_probe_allowed
+                    or low_energy_probe_decision.allowed
+                    or sol_probe_entry_allowed
+                )
                 overheated_entry_blocked = is_overheated_entry_risk(
                     volume_ratio=volume_ratio,
                     atr_percentile=atr_percentile,
@@ -1337,7 +1345,11 @@ def run_bot():
                         f"[{symbol}] 최근 체결비율: {fill_quality_snapshot.avg_fill_ratio * 100:.1f}% "
                         f"(표본 {fill_quality_snapshot.sample_count}, 차단 기준 {strategy.fill_quality_min_fill_ratio * 100:.1f}%)"
                     )
-                if (entry_signal or bearish) and not signal_is_strong:
+                if (
+                    (entry_signal or bearish)
+                    and not signal_is_strong
+                    and not entry_probe_score_override_allowed
+                ):
                     log(
                         f"[{symbol}] 신호 점수 {signal_score:.1f} 가 기준 {effective_signal_score_min:.1f} 미만이라 이번 신호는 건너뜁니다."
                     )
@@ -2004,6 +2016,15 @@ def run_bot():
                     mean_reversion_lower_near_max_distance_pct=(
                         strategy.mean_reversion_lower_near_max_distance_pct
                     ),
+                    mean_reversion_lower_near_min_signal_score=float(
+                        signal_state.get(
+                            "lower_near_min_signal_score",
+                            strategy.mean_reversion_lower_near_min_signal_score,
+                        )
+                    ),
+                    mean_reversion_lower_near_signal_passed=bool(
+                        signal_state.get("lower_near_signal_passed", False)
+                    ),
                     entry_probe_signal=sol_probe_entry_allowed,
                     entry_probe_reason=sol_probe_entry_decision.reason,
                     atr_context_passed=bool(signal_state.get("atr_context_passed", True)),
@@ -2072,12 +2093,17 @@ def run_bot():
                         ),
                         FunnelStep(
                             stage="regime_signal_strength",
-                            passed=(not symbol_regime_requires_strong_signal or signal_is_strong),
+                            passed=(
+                                not symbol_regime_requires_strong_signal
+                                or signal_is_strong
+                                or entry_probe_score_override_allowed
+                            ),
                             reason="regime_requires_strong_signal",
                             actual={
                                 "symbol_regime": symbol_regime,
                                 "signal_is_strong": signal_is_strong,
                                 "signal_score": signal_score,
+                                "probe_score_override_allowed": entry_probe_score_override_allowed,
                             },
                             required={"strong_signal_required": True, "min_signal_score": effective_signal_score_min},
                         ),

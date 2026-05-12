@@ -250,7 +250,7 @@ class MeanReversionTests(unittest.TestCase):
         self.assertEqual(2, state["lower_near_extra_confirmation_loops"])
         self.assertEqual(0.25, state["lower_near_position_scale"])
 
-    def test_lower_near_probe_still_respects_signal_score_min(self):
+    def test_lower_near_probe_uses_explicit_probe_score_without_global_strong_flag(self):
         state = compute_bollinger_mean_reversion_state(
             prev_close=99.2,
             last_close=99.05,
@@ -275,8 +275,43 @@ class MeanReversionTests(unittest.TestCase):
             allow_lower_near_probe=True,
             lower_near_max_distance_pct=0.12,
             lower_near_min_headroom_pct=0.12,
+            lower_near_min_signal_score=40.0,
         )
 
         self.assertFalse(state["signal_is_strong"])
+        self.assertTrue(state["lower_near_signal_passed"])
+        self.assertTrue(state["lower_near_probe_allowed"])
+        self.assertTrue(state["entry_signal"])
+
+    def test_lower_near_probe_respects_explicit_probe_signal_score_min(self):
+        state = compute_bollinger_mean_reversion_state(
+            prev_close=99.2,
+            last_close=99.05,
+            bb_lower=99.0,
+            bb_mid=101.0,
+            bb_upper=103.0,
+            bb_width_pct=0.5,
+            squeeze_max_bandwidth_pct=3.0,
+            rsi_value=34.0,
+            signal_score_min=90.0,
+            rsi_min=25.0,
+            rsi_max=58.0,
+            macd_histogram=-0.01,
+            prev_macd_histogram=-0.02,
+            allow_negative_macd=True,
+            require_macd_recovering=True,
+            macd_recovery_epsilon=0.0,
+            atr_percentile=30.0,
+            max_atr_percentile=80.0,
+            range_position_pct=20.0,
+            max_range_position_pct=35.0,
+            allow_lower_near_probe=True,
+            lower_near_max_distance_pct=0.12,
+            lower_near_min_headroom_pct=0.12,
+            lower_near_min_signal_score=90.0,
+        )
+
+        self.assertFalse(state["signal_is_strong"])
+        self.assertFalse(state["lower_near_signal_passed"])
         self.assertFalse(state["lower_near_probe_allowed"])
         self.assertFalse(state["entry_signal"])
