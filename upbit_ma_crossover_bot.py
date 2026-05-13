@@ -1,5 +1,11 @@
 """
 수정 요약
+- 2026-05-14: 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮겨 run_bot 단계 분기를 줄임
+- 2026-05-14: 최소 주문 금액 기준 매도 fallback 정책을 공통 alt_exit helper 로 옮김
+- 2026-05-14: 주문 요청/체결 구조화 로그 입력을 공통 helper 로 옮김
+- 2026-05-14: 텔레그램 체결 알림 본문을 공통 formatter 로 옮김
+- 2026-05-14: 매도 체결 후 내부 포지션 상태 갱신을 공통 lifecycle helper 로 옮김
+- 2026-05-14: 매수 체결 후 내부 포지션 상태 갱신을 공통 lifecycle helper 로 옮김
 - 2026-05-13: 매도 주문 직전 청산 비율/reason 결정 로직을 공통 alt_exit helper 로 옮김
 - 2026-05-13: 알트 진입 후반부 가드 퍼널 단계를 공통 helper 로 옮겨 OKX 봇과 중복을 줄임
 - 2026-05-13: 무포지션 기본 지표와 부분청산 pending 계산을 공통 alt_exit helper 로 옮김
@@ -92,6 +98,7 @@ from dotenv import load_dotenv
 
 from bot_logger import BLUE, RED, BotLogger
 from core.execution.common import log_order_failure
+from core.execution.order_logging import log_order_filled, log_order_requested
 from core.execution.upbit import (
     apply_upbit_buy_order_buffer as apply_upbit_buy_order_buffer_core,
     create_upbit_market_data_provider as create_upbit_market_data_provider_core,
@@ -111,7 +118,16 @@ from core.execution.upbit import (
 )
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.logging.metrics import build_alt_common_metrics
-from core.positions.lifecycle import clear_alt_position_state
+from core.notifications.trade_messages import (
+    UPBIT_TRADE_MESSAGE_FORMAT,
+    format_buy_fill_message,
+    format_sell_fill_message,
+)
+from core.positions.lifecycle import (
+    apply_alt_buy_fill_state,
+    apply_alt_sell_fill_state,
+    clear_alt_position_state,
+)
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import (
     build_alt_allocation,
@@ -129,6 +145,7 @@ from core.risk.alt_exit import (
     compute_alt_exit_decisions,
     compute_alt_position_metrics,
     resolve_alt_partial_exit_policy,
+    resolve_alt_sell_order_by_min_value,
     resolve_alt_sell_intent,
 )
 from core.runtime.bootstrap import build_alt_runtime_state
@@ -142,6 +159,7 @@ from core.strategy.entry_committee import (
     load_entry_committee_settings,
     record_entry_committee_result,
 )
+from core.strategy.exit_reasons import resolve_alt_exit_ready_reason
 from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_btc_regime_correlation_volatility_risk,
@@ -2173,18 +2191,12 @@ def run_bot():
                     steps=exit_steps,
                     metrics=common_metrics,
                     ready_stage="sell_ready",
-                    ready_reason=(
-                        "stop_loss_triggered"
-                        if stop_loss_triggered
-                        else "profit_protect_triggered"
-                        if profit_protect_triggered
-                        else "break_even_guard_triggered"
-                        if break_even_guard_triggered
-                        else "volume_spike_exit_triggered"
-                        if volume_spike_exit_triggered
-                        else "sol_probe_time_exit_triggered"
-                        if sol_probe_time_exit_triggered
-                        else "take_profit_conditions_met"
+                    ready_reason=resolve_alt_exit_ready_reason(
+                        stop_loss_triggered=stop_loss_triggered,
+                        profit_protect_triggered=profit_protect_triggered,
+                        break_even_guard_triggered=break_even_guard_triggered,
+                        volume_spike_exit_triggered=volume_spike_exit_triggered,
+                        sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                     ),
                 )
 
@@ -2199,11 +2211,10 @@ def run_bot():
                         amount = executable_krw_to_use / last_close
                         amount = safe_amount_to_precision(exchange, symbol, amount)
                         cost_to_spend = executable_krw_to_use
-                        structured_logger.log_strategy(
+                        log_order_requested(
+                            structured_logger=structured_logger,
                             symbol=symbol,
                             side="entry",
-                            stage="order_requested",
-                            result="requested",
                             reason="market_buy_requested",
                             actual={
                                 "order_value_quote": cost_to_spend,
@@ -2242,52 +2253,36 @@ def run_bot():
                         )
                         invalidate_upbit_balance_cache(exchange)
                         invalidate_upbit_orderbook_cache(exchange, symbol)
-                        # 시장가 주문 특성상 실제 체결가 대신 현재가로 평균 진입가를 추정
-                        if has_position and avg_entry_price and base_free > 0:
-                            total_cost = (avg_entry_price * base_free) + (last_close * amount)
-                            total_size = base_free + amount
-                            entry_price[symbol] = total_cost / total_size
-                        else:
-                            entry_price[symbol] = last_close
-                        entry_count[symbol] = current_entry_count + 1
-                        if not has_position:
-                            entry_opened_at[symbol] = time.time()
-                        highest_price_since_entry[symbol] = max(
-                            highest_price_since_entry.get(symbol, last_close),
-                            last_close,
-                        )
-                        lowest_price_since_entry[symbol] = min(
-                            lowest_price_since_entry.get(symbol, last_close),
-                            last_close,
+                        buy_fill_state = apply_alt_buy_fill_state(
+                            symbol=symbol,
+                            bought_amount=amount,
+                            last_close=last_close,
+                            has_position=has_position,
+                            avg_entry_price=avg_entry_price,
+                            base_free=base_free,
+                            current_entry_count=current_entry_count,
+                            now_ts=time.time(),
+                            entry_price=entry_price,
+                            entry_count=entry_count,
+                            entry_opened_at=entry_opened_at,
+                            highest_price_since_entry=highest_price_since_entry,
+                            lowest_price_since_entry=lowest_price_since_entry,
                         )
                         last_trade_at[symbol] = time.time()
-                        structured_logger.log_strategy(
+                        log_order_filled(
+                            structured_logger=structured_logger,
                             symbol=symbol,
-                            side="entry",
-                            stage="filled",
-                            result="filled",
-                            reason="buy_filled",
+                            strategy_side="entry",
+                            trade_side="buy",
+                            strategy_reason="buy_filled",
+                            trade_reason="entry",
                             actual={
                                 "filled_amount": amount,
                                 "order_value_quote": cost_to_spend,
                             },
                             metrics={
                                 **common_metrics,
-                                "estimated_entry_price_after": entry_price[symbol],
-                            },
-                        )
-                        structured_logger.log_trade_event(
-                            symbol=symbol,
-                            side="buy",
-                            reason="entry",
-                            result="filled",
-                            actual={
-                                "filled_amount": amount,
-                                "order_value_quote": cost_to_spend,
-                            },
-                            metrics={
-                                **common_metrics,
-                                "estimated_entry_price_after": entry_price[symbol],
+                                "estimated_entry_price_after": buy_fill_state.entry_price_after,
                             },
                         )
                         logger.log_trade_banner(
@@ -2302,7 +2297,7 @@ def run_bot():
                             requested_order_value_quote=cost_to_spend,
                             fallback_amount=amount,
                             fallback_order_value_quote=cost_to_spend,
-                            fallback_price=entry_price[symbol],
+                            fallback_price=buy_fill_state.entry_price_after,
                         )
                         executed_ratio_pct = 0.0
                         if quote_free > 0 and buy_summary["executed_order_value_quote"] not in (None, 0):
@@ -2312,13 +2307,16 @@ def run_bot():
                         notifier.notify_buy_fill(
                             "UPBIT",
                             symbol,
-                            f"현재 레짐: {symbol_regime}\n"
-                            f"매수 금액: {buy_summary['executed_order_value_quote']:.0f} {quote}\n"
-                            f"매수 단가: {buy_summary['executed_price']:.0f}\n"
-                            f"체결 수량: {buy_summary['executed_amount']:.8f} {base}\n"
-                            f"기본 비중: {base_position_ratio * 100:.2f}%\n"
-                            f"최종 비중: {position_ratio * 100:.2f}%\n"
-                            f"실행 비중: {executed_ratio_pct:.2f}%",
+                            format_buy_fill_message(
+                                symbol_regime=symbol_regime,
+                                quote=quote,
+                                base=base,
+                                buy_summary=buy_summary,
+                                base_position_ratio=base_position_ratio,
+                                position_ratio=position_ratio,
+                                executed_ratio_pct=executed_ratio_pct,
+                                fmt=UPBIT_TRADE_MESSAGE_FORMAT,
+                            ),
                         )
                         trade_history.log_fill(
                             exchange_name="UPBIT",
@@ -2332,11 +2330,11 @@ def run_bot():
                             amount=amount,
                             order_value_quote=cost_to_spend,
                             reference_price=last_close,
-                            estimated_entry_price=entry_price[symbol],
-                            entry_count_after=entry_count[symbol],
+                            estimated_entry_price=buy_fill_state.entry_price_after,
+                            entry_count_after=buy_fill_state.entry_count_after,
                             base_free_before=base_free,
                             quote_free_before=quote_free,
-                            remaining_base_after_estimate=base_free + amount,
+                            remaining_base_after_estimate=buy_fill_state.remaining_base_after_estimate,
                             timeframe=timeframe,
                             ma_period=ma_period,
                             request_started_at=order_request_started_at,
@@ -2372,10 +2370,10 @@ def run_bot():
                             },
                         )
                         log(
-                            f"[{symbol}] 분할 매수 진행: {entry_count[symbol]}/{effective_max_entry_count}회"
+                            f"[{symbol}] 분할 매수 진행: {buy_fill_state.entry_count_after}/{effective_max_entry_count}회"
                         )
                         log(
-                            f"[{symbol}] 갱신된 평균 진입가: {entry_price[symbol]:.0f}"
+                            f"[{symbol}] 갱신된 평균 진입가: {buy_fill_state.entry_price_after:.0f}"
                         )
 
                 # 매도 신호 발생 시, 분할 청산 + 최소 익절률 조건을 만족하면 청산
@@ -2403,35 +2401,33 @@ def run_bot():
                     sell_order_value_quote = amount * sell_price_reference
                     full_sell_amount = safe_amount_to_precision(exchange, symbol, base_free)
                     full_sell_order_value_quote = full_sell_amount * sell_price_reference
-                    if (
-                        amount > 0
-                        and sell_order_value_quote <= strategy.min_buy_order_value
-                        and full_sell_order_value_quote > strategy.min_buy_order_value
-                    ):
-                        log(
-                            f"[{symbol}] 부분/분할 매도 금액이 최소 주문 금액보다 작아 전량 청산으로 전환합니다."
-                        )
-                        amount = full_sell_amount
-                        sell_order_value_quote = full_sell_order_value_quote
-                        sell_ratio = 1.0
-                        if exit_reason_key == "partial_take_profit":
-                            exit_reason_key = "take_profit"
-                            sell_reason = "익절"
-                        elif exit_reason_key == "partial_stop_loss":
-                            exit_reason_key = "stop_loss"
-                            sell_reason = "손절"
-                    if amount <= 0:
-                        log(f"[{symbol}] 매도할 {base} 수량이 없습니다.")
-                    elif sell_order_value_quote <= strategy.min_buy_order_value:
-                        log(
-                            f"[{symbol}] 예상 매도 금액이 {strategy.min_buy_order_value} {quote} 이하라 매도 주문을 생략합니다."
-                        )
+                    sell_order_plan = resolve_alt_sell_order_by_min_value(
+                        symbol=symbol,
+                        base=base,
+                        quote=quote,
+                        amount=amount,
+                        full_sell_amount=full_sell_amount,
+                        sell_order_value_quote=sell_order_value_quote,
+                        full_sell_order_value_quote=full_sell_order_value_quote,
+                        sell_ratio=sell_ratio,
+                        exit_reason_key=exit_reason_key,
+                        sell_reason=sell_reason,
+                        min_sell_order_value=strategy.min_buy_order_value,
+                    )
+                    amount = sell_order_plan.amount
+                    sell_order_value_quote = sell_order_plan.order_value_quote or sell_order_value_quote
+                    sell_ratio = sell_order_plan.sell_ratio
+                    exit_reason_key = sell_order_plan.exit_reason_key
+                    sell_reason = sell_order_plan.sell_reason
+                    if sell_order_plan.log_message:
+                        log(sell_order_plan.log_message)
+                    if not sell_order_plan.should_order:
+                        pass
                     else:
-                        structured_logger.log_strategy(
+                        log_order_requested(
+                            structured_logger=structured_logger,
                             symbol=symbol,
                             side="exit",
-                            stage="order_requested",
-                            result="requested",
                             reason="market_sell_requested",
                             actual={"sell_amount": amount},
                             metrics=common_metrics,
@@ -2460,15 +2456,25 @@ def run_bot():
                         )
                         invalidate_upbit_balance_cache(exchange)
                         invalidate_upbit_orderbook_cache(exchange, symbol)
-                        last_trade_at[symbol] = time.time()
-                        if exit_reason_key in {"stop_loss", "partial_stop_loss"}:
-                            last_stop_loss_at[symbol] = time.time()
-                            last_stop_loss_context[symbol] = dict(current_entry_risk_context)
-                        remaining_base = max(base_free - amount, 0.0)
-                        if remaining_base <= 0.00000001:
-                            entry_count[symbol] = 0
-                        else:
-                            entry_count[symbol] = max(current_entry_count - 1, 0)
+                        sell_fill_state = apply_alt_sell_fill_state(
+                            symbol=symbol,
+                            sold_amount=amount,
+                            base_free=base_free,
+                            current_entry_count=current_entry_count,
+                            exit_reason_key=exit_reason_key,
+                            full_clear_threshold=0.00000001,
+                            now_ts=time.time(),
+                            entry_count=entry_count,
+                            entry_opened_at=entry_opened_at,
+                            last_trade_at=last_trade_at,
+                            last_stop_loss_at=last_stop_loss_at,
+                            last_stop_loss_context=last_stop_loss_context,
+                            current_entry_risk_context=current_entry_risk_context,
+                            partial_take_profit_done=partial_take_profit_done,
+                            partial_take_profit_last_at=partial_take_profit_last_at,
+                            partial_stop_loss_done=partial_stop_loss_done,
+                        )
+                        remaining_base = sell_fill_state.remaining_base
                         # 손익 계산
                         entry = entry_price.get(symbol)
                         if entry:
@@ -2486,32 +2492,14 @@ def run_bot():
                                 realized_pnl_quote=realized_pnl_quote,
                             )
                             daily_realized_pnl_quote += realized_pnl_quote
-                            holding_seconds = None
-                            if symbol in entry_opened_at:
-                                holding_seconds = max(
-                                    0.0, time.time() - entry_opened_at[symbol]
-                                )
-                            structured_logger.log_strategy(
+                            holding_seconds = sell_fill_state.holding_seconds
+                            log_order_filled(
+                                structured_logger=structured_logger,
                                 symbol=symbol,
-                                side="exit",
-                                stage="filled",
-                                result="filled",
-                                reason=f"{exit_reason_key}_filled",
-                                actual={
-                                    "filled_amount": amount,
-                                    "realized_pnl_pct": realized_pnl_pct,
-                                    "realized_pnl_quote": realized_pnl_quote,
-                                },
-                                metrics={
-                                    **common_metrics,
-                                    "holding_seconds": holding_seconds,
-                                },
-                            )
-                            structured_logger.log_trade_event(
-                                symbol=symbol,
-                                side="sell",
-                                reason=exit_reason_key,
-                                result="filled",
+                                strategy_side="exit",
+                                trade_side="sell",
+                                strategy_reason=f"{exit_reason_key}_filled",
+                                trade_reason=exit_reason_key,
                                 actual={
                                     "filled_amount": amount,
                                     "realized_pnl_pct": realized_pnl_pct,
@@ -2540,23 +2528,29 @@ def run_bot():
                                 notifier.notify_stop_loss_fill(
                                     "UPBIT",
                                     symbol,
-                                    f"현재 레짐: {symbol_regime}\n"
-                                    f"매도 금액: {sell_summary['executed_order_value_quote']:.0f} {quote}\n"
-                                    f"매도 단가: {sell_summary['executed_price']:.0f}\n"
-                                    f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
-                                    f"수익률: {realized_pnl_pct:.2f}%\n"
-                                    f"실현 손익: {realized_pnl_quote:.2f} {quote}",
+                                    format_sell_fill_message(
+                                        symbol_regime=symbol_regime,
+                                        quote=quote,
+                                        base=base,
+                                        sell_summary=sell_summary,
+                                        realized_pnl_pct=realized_pnl_pct,
+                                        realized_pnl_quote=realized_pnl_quote,
+                                        fmt=UPBIT_TRADE_MESSAGE_FORMAT,
+                                    ),
                                 )
                             else:
                                 notifier.notify_sell_fill(
                                     "UPBIT",
                                     symbol,
-                                    f"현재 레짐: {symbol_regime}\n"
-                                    f"매도 금액: {sell_summary['executed_order_value_quote']:.0f} {quote}\n"
-                                    f"매도 단가: {sell_summary['executed_price']:.0f}\n"
-                                    f"체결 수량: {sell_summary['executed_amount']:.8f} {base}\n"
-                                    f"수익률: {realized_pnl_pct:.2f}%\n"
-                                    f"실현 손익: {realized_pnl_quote:.2f} {quote}",
+                                    format_sell_fill_message(
+                                        symbol_regime=symbol_regime,
+                                        quote=quote,
+                                        base=base,
+                                        sell_summary=sell_summary,
+                                        realized_pnl_pct=realized_pnl_pct,
+                                        realized_pnl_quote=realized_pnl_quote,
+                                        fmt=UPBIT_TRADE_MESSAGE_FORMAT,
+                                    ),
                                 )
                             log(
                                 f"[{symbol}] 실현 손익: {realized_pnl_quote:.2f} {quote} | "
@@ -2578,7 +2572,7 @@ def run_bot():
                                 realized_pnl_pct=realized_pnl_pct,
                                 realized_pnl_quote=realized_pnl_quote,
                                 daily_realized_pnl_quote_after=daily_realized_pnl_quote,
-                                entry_count_after=entry_count.get(symbol, 0),
+                                entry_count_after=sell_fill_state.entry_count_after,
                                 base_free_before=base_free,
                                 quote_free_before=quote_free,
                                 remaining_base_after_estimate=remaining_base,
@@ -2616,13 +2610,8 @@ def run_bot():
                                     "holding_seconds": holding_seconds,
                                 },
                             )
-                            if exit_reason_key == "partial_take_profit" and remaining_base > 0.00000001:
-                                partial_take_profit_done[symbol] = True
-                                partial_take_profit_last_at[symbol] = time.time()
-                            if exit_reason_key == "partial_stop_loss" and remaining_base > 0.00000001:
-                                partial_stop_loss_done[symbol] = True
                             # 포지션 청산 후 진입가 제거
-                            if remaining_base <= 0.00000001:
+                            if sell_fill_state.should_clear_position:
                                 clear_alt_position_state(
                                     symbol=symbol,
                                     entry_price=entry_price,
@@ -2635,20 +2624,13 @@ def run_bot():
                                     unrecoverable_position_warned=unrecoverable_position_warned,
                                 )
                         else:
-                            structured_logger.log_strategy(
+                            log_order_filled(
+                                structured_logger=structured_logger,
                                 symbol=symbol,
-                                side="exit",
-                                stage="filled",
-                                result="filled",
-                                reason="sell_filled_entry_unknown",
-                                actual={"filled_amount": amount},
-                                metrics=common_metrics,
-                            )
-                            structured_logger.log_trade_event(
-                                symbol=symbol,
-                                side="sell",
-                                reason="unknown_entry_sell",
-                                result="filled",
+                                strategy_side="exit",
+                                trade_side="sell",
+                                strategy_reason="sell_filled_entry_unknown",
+                                trade_reason="unknown_entry_sell",
                                 actual={"filled_amount": amount},
                                 metrics=common_metrics,
                             )
@@ -2670,7 +2652,7 @@ def run_bot():
                                 order_value_quote=amount * last_close,
                                 reference_price=last_close,
                                 daily_realized_pnl_quote_after=daily_realized_pnl_quote,
-                                entry_count_after=entry_count.get(symbol, 0),
+                                entry_count_after=sell_fill_state.entry_count_after,
                                 base_free_before=base_free,
                                 quote_free_before=quote_free,
                                 remaining_base_after_estimate=remaining_base,
@@ -2699,7 +2681,7 @@ def run_bot():
                                     "htf_bearish": htf_bearish,
                                 },
                             )
-                            if remaining_base <= 0.00000001:
+                            if sell_fill_state.should_clear_position:
                                 entry_opened_at.pop(symbol, None)
                                 partial_take_profit_done.pop(symbol, None)
                                 partial_stop_loss_done.pop(symbol, None)

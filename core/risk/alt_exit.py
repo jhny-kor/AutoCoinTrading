@@ -1,5 +1,6 @@
 """
 작업 요약
+- 최소 주문 경계에서 알트 부분청산을 전량청산으로 승격하거나 주문을 스킵하는 정책을 공통화했다.
 - 알트 매도 사유별 청산 비율과 reason key 결정을 공통화했다.
 - 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 공통화했다.
 - 익절 구간에서 거래량 급감 시 조기 청산하는 Volume Spike Exit 트리거를 추가
@@ -32,6 +33,23 @@ class AltSellIntent:
     sell_ratio: float
     exit_reason_key: str
     sell_reason: str
+
+
+@dataclass(frozen=True)
+class AltSellOrderPlan:
+    """최소 주문 정책 반영 후 실제 제출할 알트 매도 주문 상태를 나타낸다."""
+
+    amount: float
+    sell_ratio: float
+    exit_reason_key: str
+    sell_reason: str
+    order_value_quote: float | None = None
+    skip_reason: str | None = None
+    log_message: str | None = None
+
+    @property
+    def should_order(self) -> bool:
+        return self.skip_reason is None
 
 
 def build_empty_position_runtime_metrics() -> dict[str, float | None]:
@@ -179,6 +197,149 @@ def resolve_alt_sell_intent(
         sell_ratio=sell_split_ratio,
         exit_reason_key="take_profit",
         sell_reason="익절",
+    )
+
+
+def _promote_partial_exit_reason(
+    *,
+    exit_reason_key: str,
+    sell_reason: str,
+) -> tuple[str, str]:
+    if exit_reason_key == "partial_take_profit":
+        return "take_profit", "익절"
+    if exit_reason_key == "partial_stop_loss":
+        return "stop_loss", "손절"
+    return exit_reason_key, sell_reason
+
+
+def resolve_alt_sell_order_by_min_amount(
+    *,
+    symbol: str,
+    base: str,
+    amount: float,
+    full_sell_amount: float,
+    sell_ratio: float,
+    exit_reason_key: str,
+    sell_reason: str,
+    min_order_amount: float,
+) -> AltSellOrderPlan:
+    """수량 기준 최소 주문 정책을 반영한 OKX 알트 매도 주문 계획을 만든다."""
+    if (
+        amount > 0
+        and min_order_amount > 0
+        and amount < min_order_amount
+        and full_sell_amount >= min_order_amount
+    ):
+        promoted_exit_reason_key, promoted_sell_reason = _promote_partial_exit_reason(
+            exit_reason_key=exit_reason_key,
+            sell_reason=sell_reason,
+        )
+        return AltSellOrderPlan(
+            amount=full_sell_amount,
+            sell_ratio=1.0,
+            exit_reason_key=promoted_exit_reason_key,
+            sell_reason=promoted_sell_reason,
+            log_message=(
+                f"[{symbol}] 부분/분할 매도 수량이 최소 주문 수량보다 작아 전량 청산으로 전환합니다."
+            ),
+        )
+
+    if amount <= 0:
+        return AltSellOrderPlan(
+            amount=amount,
+            sell_ratio=sell_ratio,
+            exit_reason_key=exit_reason_key,
+            sell_reason=sell_reason,
+            skip_reason="no_sell_amount",
+            log_message=f"[{symbol}] 매도할 {base} 수량이 없습니다.",
+        )
+
+    if min_order_amount > 0 and amount < min_order_amount:
+        return AltSellOrderPlan(
+            amount=amount,
+            sell_ratio=sell_ratio,
+            exit_reason_key=exit_reason_key,
+            sell_reason=sell_reason,
+            skip_reason="sell_amount_below_min_order_amount",
+            log_message=(
+                f"[{symbol}] 매도 수량 {amount:.8f} {base} 가 거래소 최소 주문 수량 "
+                f"{min_order_amount:.8f} {base} 보다 작아 매도를 생략합니다."
+            ),
+        )
+
+    return AltSellOrderPlan(
+        amount=amount,
+        sell_ratio=sell_ratio,
+        exit_reason_key=exit_reason_key,
+        sell_reason=sell_reason,
+    )
+
+
+def resolve_alt_sell_order_by_min_value(
+    *,
+    symbol: str,
+    base: str,
+    quote: str,
+    amount: float,
+    full_sell_amount: float,
+    sell_order_value_quote: float,
+    full_sell_order_value_quote: float,
+    sell_ratio: float,
+    exit_reason_key: str,
+    sell_reason: str,
+    min_sell_order_value: float,
+) -> AltSellOrderPlan:
+    """금액 기준 최소 주문 정책을 반영한 업비트 알트 매도 주문 계획을 만든다."""
+    if (
+        amount > 0
+        and sell_order_value_quote <= min_sell_order_value
+        and full_sell_order_value_quote > min_sell_order_value
+    ):
+        promoted_exit_reason_key, promoted_sell_reason = _promote_partial_exit_reason(
+            exit_reason_key=exit_reason_key,
+            sell_reason=sell_reason,
+        )
+        return AltSellOrderPlan(
+            amount=full_sell_amount,
+            sell_ratio=1.0,
+            exit_reason_key=promoted_exit_reason_key,
+            sell_reason=promoted_sell_reason,
+            order_value_quote=full_sell_order_value_quote,
+            log_message=(
+                f"[{symbol}] 부분/분할 매도 금액이 최소 주문 금액보다 작아 전량 청산으로 전환합니다."
+            ),
+        )
+
+    if amount <= 0:
+        return AltSellOrderPlan(
+            amount=amount,
+            sell_ratio=sell_ratio,
+            exit_reason_key=exit_reason_key,
+            sell_reason=sell_reason,
+            order_value_quote=sell_order_value_quote,
+            skip_reason="no_sell_amount",
+            log_message=f"[{symbol}] 매도할 {base} 수량이 없습니다.",
+        )
+
+    if sell_order_value_quote <= min_sell_order_value:
+        return AltSellOrderPlan(
+            amount=amount,
+            sell_ratio=sell_ratio,
+            exit_reason_key=exit_reason_key,
+            sell_reason=sell_reason,
+            order_value_quote=sell_order_value_quote,
+            skip_reason="sell_value_below_min_order_value",
+            log_message=(
+                f"[{symbol}] 예상 매도 금액이 {min_sell_order_value} {quote} 이하라 매도 주문을 생략합니다."
+            ),
+        )
+
+    return AltSellOrderPlan(
+        amount=amount,
+        sell_ratio=sell_ratio,
+        exit_reason_key=exit_reason_key,
+        sell_reason=sell_reason,
+        order_value_quote=sell_order_value_quote,
     )
 
 

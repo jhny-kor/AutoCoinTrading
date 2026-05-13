@@ -175,6 +175,7 @@
   - 수수료 반영 순익 보호, 브레이크이븐, 거래량 급감 청산 판단
   - 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산
   - 매도 주문 직전 청산 비율과 reason key 결정
+  - OKX 최소 수량/업비트 최소 금액에 걸리는 알트 부분청산의 전량 전환 또는 스킵 정책 결정
   - OKX/업비트 알트 봇의 청산 준비 상태 공통화
 
 - [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)
@@ -188,6 +189,10 @@
   - 알트 진입 기본 단계와 SOL/레짐/상관/체결/타이밍 가드 단계 공통화
   - OKX/업비트 알트 봇은 거래소별 주문 단계만 각 봇에 남기고 공통 가드는 이 모듈을 사용
 
+- [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py)
+  - 알트/BTC 청산 퍼널이 통과했을 때 기록할 대표 `ready_reason` 우선순위 결정
+  - 손절, 부분익절, 순익보호, 트레일링, 시간청산 같은 청산 사유 우선순위를 봇 본문 밖에서 고정
+
 - [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
   - trade_history 기준 평균 진입가와 내부 상태 복구
   - 프로그램별 당일 실현 손익 재계산 helper 제공
@@ -195,6 +200,20 @@
 - [core/runtime/bootstrap.py](/Users/plo/Documents/auto_coin_bot/core/runtime/bootstrap.py)
   - 알트/BTC 봇 초기 런타임 상태 복구 공통 helper
   - `run_bot()` 시작 구간의 중복 상태 구성 로직 축소
+
+- [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py)
+  - 알트 매수 체결 후 평균 진입가, 진입 카운트, 고저가 상태 갱신
+  - 알트 매도 체결 후 남은 수량, 진입 카운트, 손절 컨텍스트, 부분청산 완료 플래그 갱신
+  - 알트/BTC 포지션 종료 후 내부 상태 초기화
+  - OKX/업비트 알트 봇의 포지션 lifecycle 상태 변경 공통화
+
+- [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py)
+  - 알트/BTC 공통 `order_requested` strategy 로그 입력
+  - 체결 후 strategy/trade 로그를 같은 actual/metrics 로 함께 남기는 표준 helper 제공
+
+- [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py)
+  - OKX/업비트 체결 텔레그램 메시지 본문 생성
+  - 매수 금액, 매도 금액, 체결가, 손익 금액의 거래소별 자리수를 설정으로 분리
 
 - [core/runtime/program_registry.py](/Users/plo/Documents/auto_coin_bot/core/runtime/program_registry.py)
   - 관리 대상 프로그램 메타데이터 단일 소스
@@ -283,19 +302,32 @@
   - 예: OKX 공통 helper 일부는 [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
 - 즉 현재 구조는 완전한 레이어 분리라기보다 `전략 본체 + 거래소 공통 helper 일부 포함` 형태입니다.
 
-## 9. 앞으로 모듈 분리하면 좋은 후보
+## 9. 리팩토링 진행 현황과 다음 후보
 
-- 업비트 전용 공통 helper 분리
-  - 예: `upbit_exchange_utils.py`
-- OKX 전용 공통 helper 분리
-  - 예: `okx_exchange_utils.py`
-- 공통 시장 지표 계산 분리
-  - 예: `market_indicators.py`
-- 공통 청산 보조 로직 분리
-  - 예: `exit_helpers.py`
+2026-05-14 기준으로 P1, P2, P3 후보는 운영 전략 값을 바꾸지 않는 범위에서 공통 helper 로 반영했습니다.
 
-현재는 안정 운영이 우선이라 전략 파일 안에 일부 공통 기능이 남아 있지만,
-앞으로 리팩터링할 때는 위 방향으로 나누면 구조가 더 읽기 쉬워집니다.
+| 우선순위 | 완료 항목 | 대상 | 기준 |
+| --- | --- | --- | --- |
+| P1 | 알트 매수/매도 체결 상태 갱신 공통화 | [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) | 매수 평균가/고저가, 매도 잔량/진입 카운트/부분청산 플래그를 helper 로 갱신 |
+| P1 | 체결 알림 문구 formatter 공통화 | [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py) | OKX/업비트 메시지 구조를 공유하고 숫자 자리수만 거래소별 설정 |
+| P2 | 주문 요청/체결 로그 공통화 | [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py) | 알트/BTC `order_requested`, `filled`, `log_trade_event` 입력 조립을 표준화 |
+| P2 | 매도 주문 최소금액/최소수량 fallback 정책 분리 | [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) | OKX 수량 기준과 업비트 금액 기준을 별도 helper 로 처리 |
+| P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py) | 알트/BTC 청산 사유 우선순위를 공통 함수로 고정해 `run_bot()` 분기를 축소 |
+
+현재 알트 봇은 공통 helper 분리 후에도 [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py) 와
+[upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py) 의 루프 본문이 길기 때문에, 다음 리팩토링은 아래 순서가 안전합니다.
+
+| 우선순위 | 다음 후보 | 대상 | 기준 |
+| --- | --- | --- | --- |
+| P1 | 실주문 API 호출 어댑터 정리 | [core/execution](/Users/plo/Documents/auto_coin_bot/core/execution) | 주문 API 호출, 업비트 private 이벤트 보강, 캐시 무효화는 거래소별 차이를 유지하면서 fake exchange 테스트 가능하게 분리 |
+| P2 | BTC 매수/추가매수 lifecycle helper 확대 | [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) | BTC 신규진입/추가매수 평균가, trailing 초기화, add-on 카운트 갱신 테스트 추가 후 분리 |
+| P3 | 알트 루프의 물리적 단계 함수 분할 | [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py), [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py) | 진입 준비, 청산 준비, 주문 실행, 체결 후처리를 함수 단위로 나누되 로그 필드 diff 검증 필요 |
+
+진행 원칙:
+
+- 주문 API 호출, 업비트 private 이벤트 보강, 캐시 무효화, OKX/업비트 최소 주문 판정처럼 거래소별 차이가 명확한 부분은 봇 파일에 유지합니다.
+- 평균 진입가, 진입/청산 카운트, reason key, 구조화 로그 입력처럼 같은 규칙이 반복되는 부분만 공통 모듈로 옮깁니다.
+- 각 패스는 `tests/`에 동작 고정 테스트를 먼저 추가한 뒤, `py_compile`, `compileall`, 전체 `unittest discover`로 검증합니다.
 
 ## 10. 분석 지표 의미
 

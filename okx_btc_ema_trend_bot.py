@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-14: BTC 주문 요청/체결 구조화 로그 입력을 공통 helper 로 옮김
+- 2026-05-14: BTC 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮김
 - 2026-05-07: BTC 포지션 비중 계산과 로그 조립을 공통 allocation helper 로 옮겨 업비트/OKX 구조를 맞춤
 - 2026-05-06: BTC 매수 후보를 전략/리스크/체결/포트폴리오/레짐 위원회로 shadow 검토하도록 연결
 - 2026-05-05: BTC LOW_ENERGY 레짐을 고점수 소액 probe 후보로 보정하고 진입 실패 reason 을 세분화하도록 연결
@@ -67,6 +69,7 @@ from datetime import datetime
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
 from core.execution.common import log_order_failure
+from core.execution.order_logging import log_order_filled, log_order_requested
 from core.execution.okx import (
     create_okx_client,
     fetch_funding_rate_okx,
@@ -106,6 +109,7 @@ from core.strategy.entry_committee import (
     load_entry_committee_settings,
     record_entry_committee_result,
 )
+from core.strategy.exit_reasons import resolve_btc_exit_ready_reason
 from core.strategy.indicators import (
     calc_bollinger_band_width_pct,
     calc_donchian_channel,
@@ -1413,18 +1417,13 @@ def run_bot():
                 steps=exit_steps,
                 metrics=common_metrics,
                 ready_stage="sell_ready",
-                ready_reason=(
-                    "stop_loss_triggered"
-                    if stop_triggered
-                    else "partial_take_profit_triggered"
-                    if partial_take_profit_triggered
-                    else "profit_protect_triggered"
-                    if profit_protect_triggered
-                    else "trailing_stop_triggered"
-                    if trailing_stop_triggered
-                    else "donchian_failure_triggered"
-                    if donchian_failure_triggered
-                    else "trend_exit_triggered"
+                ready_reason=resolve_btc_exit_ready_reason(
+                    stop_loss_triggered=stop_triggered,
+                    partial_take_profit_triggered=partial_take_profit_triggered,
+                    profit_protect_triggered=profit_protect_triggered,
+                    trailing_stop_triggered=trailing_stop_triggered,
+                    donchian_failure_triggered=donchian_failure_triggered,
+                    trend_exit_triggered=trend_exit_triggered,
                 ),
             )
 
@@ -1438,11 +1437,10 @@ def run_bot():
                     )
                 else:
                     order_value = float(f"{order_value:.8f}")
-                    structured_logger.log_strategy(
+                    log_order_requested(
+                        structured_logger=structured_logger,
                         symbol=symbol,
                         side="entry",
-                        stage="order_requested",
-                        result="requested",
                         reason="market_buy_requested",
                         actual={"order_value_quote": order_value},
                         metrics=common_metrics,
@@ -1479,23 +1477,13 @@ def run_bot():
                     trailing_armed_at = None
                     trailing_activation_price = None
                     last_trade_at = time.time()
-                    structured_logger.log_strategy(
+                    log_order_filled(
+                        structured_logger=structured_logger,
                         symbol=symbol,
-                        side="entry",
-                        stage="filled",
-                        result="filled",
-                        reason="buy_filled",
-                        actual={
-                            "filled_amount": estimated_amount,
-                            "order_value_quote": order_value,
-                        },
-                        metrics={**common_metrics, "estimated_entry_price_after": entry_price},
-                    )
-                    structured_logger.log_trade_event(
-                        symbol=symbol,
-                        side="buy",
-                        reason="entry",
-                        result="filled",
+                        strategy_side="entry",
+                        trade_side="buy",
+                        strategy_reason="buy_filled",
+                        trade_reason="entry",
                         actual={
                             "filled_amount": estimated_amount,
                             "order_value_quote": order_value,
@@ -1576,11 +1564,10 @@ def run_bot():
 
             elif add_on_ready:
                 add_on_order_value = float(f"{add_on_order_value:.8f}")
-                structured_logger.log_strategy(
+                log_order_requested(
+                    structured_logger=structured_logger,
                     symbol=symbol,
                     side="entry",
-                    stage="order_requested",
-                    result="requested",
                     reason="market_buy_requested",
                     actual={"order_value_quote": add_on_order_value},
                     metrics={**common_metrics, "entry_type": "add_on_winner"},
@@ -1623,28 +1610,13 @@ def run_bot():
                 highest_price_since_entry = max(highest_price_since_entry or last_close, last_close)
                 lowest_price_since_entry = min(lowest_price_since_entry or last_close, last_close)
 
-                structured_logger.log_strategy(
+                log_order_filled(
+                    structured_logger=structured_logger,
                     symbol=symbol,
-                    side="entry",
-                    stage="filled",
-                    result="filled",
-                    reason="buy_add_on_filled",
-                    actual={
-                        "filled_amount": added_amount,
-                        "order_value_quote": add_on_order_value,
-                    },
-                    metrics={
-                        **common_metrics,
-                        "entry_type": "add_on_winner",
-                        "estimated_entry_price_after": entry_price,
-                        "add_on_count_after": add_on_count,
-                    },
-                )
-                structured_logger.log_trade_event(
-                    symbol=symbol,
-                    side="buy",
-                    reason="add_on_winner",
-                    result="filled",
+                    strategy_side="entry",
+                    trade_side="buy",
+                    strategy_reason="buy_add_on_filled",
+                    trade_reason="add_on_winner",
                     actual={
                         "filled_amount": added_amount,
                         "order_value_quote": add_on_order_value,
@@ -1782,11 +1754,10 @@ def run_bot():
                         notify_fn = notifier.notify_sell_fill
                         title = "BTC EMA 전략 추세 종료 청산"
 
-                    structured_logger.log_strategy(
+                    log_order_requested(
+                        structured_logger=structured_logger,
                         symbol=symbol,
                         side="exit",
-                        stage="order_requested",
-                        result="requested",
                         reason="market_sell_requested",
                         actual={"sell_amount": amount},
                         metrics=common_metrics,
@@ -1862,24 +1833,13 @@ def run_bot():
                             trailing_armed = True
                             trailing_armed_at = time.time()
                             trailing_activation_price = highest_price_since_entry or last_close
-                    structured_logger.log_strategy(
+                    log_order_filled(
+                        structured_logger=structured_logger,
                         symbol=symbol,
-                        side="exit",
-                        stage="filled",
-                        result="filled",
-                        reason=f"{sell_reason}_filled",
-                        actual={
-                            "filled_amount": amount,
-                            "realized_pnl_pct": realized_pnl_pct,
-                            "realized_pnl_quote": realized_pnl_quote,
-                        },
-                        metrics={**common_metrics, "holding_seconds": holding_seconds},
-                    )
-                    structured_logger.log_trade_event(
-                        symbol=symbol,
-                        side="sell",
-                        reason=sell_reason,
-                        result="filled",
+                        strategy_side="exit",
+                        trade_side="sell",
+                        strategy_reason=f"{sell_reason}_filled",
+                        trade_reason=sell_reason,
                         actual={
                             "filled_amount": amount,
                             "realized_pnl_pct": realized_pnl_pct,

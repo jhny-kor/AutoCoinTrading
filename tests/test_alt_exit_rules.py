@@ -1,4 +1,7 @@
-"""알트 청산 보호/부분청산 계산에 대한 개발 테스트."""
+"""
+작업 요약
+- 알트 청산 보호/부분청산 계산과 최소 주문 fallback 정책을 검증한다.
+"""
 
 import unittest
 
@@ -7,6 +10,8 @@ from core.risk.alt_exit import (
     compute_alt_exit_decisions,
     compute_alt_position_metrics,
     resolve_alt_partial_exit_policy,
+    resolve_alt_sell_order_by_min_amount,
+    resolve_alt_sell_order_by_min_value,
     resolve_alt_sell_intent,
 )
 
@@ -241,6 +246,81 @@ class AltExitRuleTests(unittest.TestCase):
         self.assertEqual("partial_take_profit", partial_intent.exit_reason_key)
         self.assertAlmostEqual(0.4, default_intent.sell_ratio)
         self.assertEqual("take_profit", default_intent.exit_reason_key)
+
+    def test_min_amount_policy_promotes_partial_exit_to_full_okx_sell(self):
+        plan = resolve_alt_sell_order_by_min_amount(
+            symbol="SOL/USDT",
+            base="SOL",
+            amount=0.01,
+            full_sell_amount=0.1,
+            sell_ratio=0.5,
+            exit_reason_key="partial_take_profit",
+            sell_reason="부분익절",
+            min_order_amount=0.05,
+        )
+
+        self.assertTrue(plan.should_order)
+        self.assertEqual(0.1, plan.amount)
+        self.assertEqual(1.0, plan.sell_ratio)
+        self.assertEqual("take_profit", plan.exit_reason_key)
+        self.assertEqual("익절", plan.sell_reason)
+        self.assertIn("전량 청산으로 전환", plan.log_message)
+
+    def test_min_amount_policy_skips_dust_okx_sell(self):
+        plan = resolve_alt_sell_order_by_min_amount(
+            symbol="SOL/USDT",
+            base="SOL",
+            amount=0.01,
+            full_sell_amount=0.02,
+            sell_ratio=0.5,
+            exit_reason_key="take_profit",
+            sell_reason="익절",
+            min_order_amount=0.05,
+        )
+
+        self.assertFalse(plan.should_order)
+        self.assertEqual("sell_amount_below_min_order_amount", plan.skip_reason)
+        self.assertIn("매도를 생략", plan.log_message)
+
+    def test_min_value_policy_promotes_partial_exit_to_full_upbit_sell(self):
+        plan = resolve_alt_sell_order_by_min_value(
+            symbol="SOL/KRW",
+            base="SOL",
+            quote="KRW",
+            amount=0.01,
+            full_sell_amount=0.1,
+            sell_order_value_quote=3000.0,
+            full_sell_order_value_quote=30000.0,
+            sell_ratio=0.5,
+            exit_reason_key="partial_stop_loss",
+            sell_reason="부분손절",
+            min_sell_order_value=5000.0,
+        )
+
+        self.assertTrue(plan.should_order)
+        self.assertEqual(0.1, plan.amount)
+        self.assertEqual(30000.0, plan.order_value_quote)
+        self.assertEqual("stop_loss", plan.exit_reason_key)
+        self.assertEqual("손절", plan.sell_reason)
+
+    def test_min_value_policy_skips_small_upbit_sell(self):
+        plan = resolve_alt_sell_order_by_min_value(
+            symbol="SOL/KRW",
+            base="SOL",
+            quote="KRW",
+            amount=0.01,
+            full_sell_amount=0.02,
+            sell_order_value_quote=3000.0,
+            full_sell_order_value_quote=4000.0,
+            sell_ratio=0.5,
+            exit_reason_key="take_profit",
+            sell_reason="익절",
+            min_sell_order_value=5000.0,
+        )
+
+        self.assertFalse(plan.should_order)
+        self.assertEqual("sell_value_below_min_order_value", plan.skip_reason)
+        self.assertIn("예상 매도 금액", plan.log_message)
 
 
 if __name__ == "__main__":

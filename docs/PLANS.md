@@ -11,15 +11,39 @@
 
 현재는 `단타/인트라데이 전용`으로 `BTC 전용 전략`과 `알트 전용 전략`을 나누어 운영합니다.
 
-### 2026-05-13 현재 리팩토링 기준
+### 2026-05-14 현재 리팩토링 기준
 
+- 알트 매수 체결 후 평균 진입가, 진입 카운트, 포지션 시작 시각, 최고/최저가 갱신은 [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) 의 `apply_alt_buy_fill_state()`로 모았습니다.
+- 알트 매도 체결 후 남은 수량, 진입 카운트, 손절 컨텍스트, 부분익절/부분손절 플래그 갱신은 [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) 의 `apply_alt_sell_fill_state()`로 모았습니다.
 - 알트 매도 주문 직전의 청산 비율, `exit_reason_key`, 한글 청산 사유 결정은 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 의 `resolve_alt_sell_intent()`로 모았습니다.
+- OKX 최소 수량/업비트 최소 금액에 걸리는 부분청산은 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 의 `resolve_alt_sell_order_by_min_amount()`와 `resolve_alt_sell_order_by_min_value()`에서 전량 전환 또는 스킵을 결정합니다.
+- 알트/BTC 주문 요청과 체결 strategy/trade 로그 입력은 [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py) 의 `log_order_requested()`와 `log_order_filled()`로 모았습니다.
+- OKX/업비트 체결 텔레그램 메시지 본문은 [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py) 의 formatter 로 만들며, 거래소별 숫자 자리수만 설정으로 분리합니다.
+- 알트/BTC 청산 퍼널의 `ready_reason` 우선순위는 [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py) 로 모아 `run_bot()` 본문의 긴 삼항 분기를 줄였습니다.
 - 알트 진입 후반부의 SOL probe, 상위 시간봉 하락, LOW_ENERGY, 심볼 레짐, BTC 상관/변동성, 체결 품질, 손절 유사 컨텍스트, 진입 타이밍 가드 퍼널 단계를 [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py) 의 `build_alt_entry_guard_steps()`로 모았습니다.
 - 알트 봇의 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 로 모아 OKX/업비트 청산 준비 상태를 같은 방식으로 계산합니다.
 - SOL 제한형 probe 진입 판정, 진입 신호 승격, 단일 포지션 제한, `LOW_ENERGY`/심볼 레짐 우회 보정을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_entry_state()`로 모았습니다.
 - SOL probe 전용 TP/SL 적용, 수수료 기반 최소 익절률, 최대 보유 시간 청산 판단을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_exit_state()`로 모았습니다.
 - OKX/업비트 알트 봇은 같은 helper 를 사용하므로, SOL probe 진입/청산 조건이나 레짐 우회 규칙을 바꿀 때는 각 봇 본문보다 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)를 먼저 수정합니다.
 - 이 리팩토링은 계산 위치와 로그 문구 공통화만 바꾼 것이며, `signal_score >= 70`, 기존 주문금액 25%, TP 0.8%, SL 0.5%, 최대 보유 180분, 같은 심볼 동시 1포지션 조건은 유지합니다.
+
+### 2026-05-14 완료한 리팩토링
+
+| 우선순위 | 완료 항목 | 반영 위치 | 검증 |
+| --- | --- | --- | --- |
+| P1 | 알트 매수/매도 체결 lifecycle 공통화 | [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) | [tests/test_position_lifecycle.py](/Users/plo/Documents/auto_coin_bot/tests/test_position_lifecycle.py) |
+| P1 | 체결 텔레그램 formatter 공통화 | [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py) | [tests/test_trade_messages.py](/Users/plo/Documents/auto_coin_bot/tests/test_trade_messages.py) |
+| P2 | 주문 요청/체결 구조화 로그 입력 공통화 | [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py) | [tests/test_order_logging.py](/Users/plo/Documents/auto_coin_bot/tests/test_order_logging.py) |
+| P2 | 매도 최소 주문 fallback 정책 분리 | [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) | [tests/test_alt_exit_rules.py](/Users/plo/Documents/auto_coin_bot/tests/test_alt_exit_rules.py) |
+| P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py) | [tests/test_exit_reasons.py](/Users/plo/Documents/auto_coin_bot/tests/test_exit_reasons.py) |
+
+### 다음 리팩토링 후보
+
+| 우선순위 | 후보 | 이유 | 검증 기준 |
+| --- | --- | --- | --- |
+| P1 | 실주문 API 호출 어댑터 정리 | 로그/lifecycle/fallback 은 분리됐지만 주문 호출, 업비트 private 이벤트 보강, 캐시 무효화는 아직 봇 본문에 남아 있음 | dry-run 가능한 fake exchange 테스트와 주문 실패 로그 회귀 테스트 |
+| P2 | BTC 포지션 상태 갱신 helper 확대 | BTC 는 `clear_btc_position_state()`와 exit reason helper 를 쓰지만 매수/추가매수 평균가 갱신은 아직 봇 본문에 남아 있음 | BTC 신규진입, 추가매수, 부분익절, 전량청산 상태 테스트 |
+| P3 | 알트 `run_bot()` 물리적 단계 함수 분할 | 공통 helper 적용으로 분기는 줄었지만 루프 본문 자체는 여전히 길어 읽기 부담이 큼 | 봇별 smoke/compile, 핵심 strategy unittest, 로그 필드 diff 검증 |
 
 ### 2026-05-07 현재 리팩토링 기준
 
