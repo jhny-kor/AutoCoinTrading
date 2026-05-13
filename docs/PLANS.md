@@ -11,6 +11,15 @@
 
 현재는 `단타/인트라데이 전용`으로 `BTC 전용 전략`과 `알트 전용 전략`을 나누어 운영합니다.
 
+### 2026-05-13 현재 리팩토링 기준
+
+- 알트 진입 후반부의 SOL probe, 상위 시간봉 하락, LOW_ENERGY, 심볼 레짐, BTC 상관/변동성, 체결 품질, 손절 유사 컨텍스트, 진입 타이밍 가드 퍼널 단계를 [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py) 의 `build_alt_entry_guard_steps()`로 모았습니다.
+- 알트 봇의 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 로 모아 OKX/업비트 청산 준비 상태를 같은 방식으로 계산합니다.
+- SOL 제한형 probe 진입 판정, 진입 신호 승격, 단일 포지션 제한, `LOW_ENERGY`/심볼 레짐 우회 보정을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_entry_state()`로 모았습니다.
+- SOL probe 전용 TP/SL 적용, 수수료 기반 최소 익절률, 최대 보유 시간 청산 판단을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_exit_state()`로 모았습니다.
+- OKX/업비트 알트 봇은 같은 helper 를 사용하므로, SOL probe 진입/청산 조건이나 레짐 우회 규칙을 바꿀 때는 각 봇 본문보다 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)를 먼저 수정합니다.
+- 이 리팩토링은 계산 위치와 로그 문구 공통화만 바꾼 것이며, `signal_score >= 70`, 기존 주문금액 25%, TP 0.8%, SL 0.5%, 최대 보유 180분, 같은 심볼 동시 1포지션 조건은 유지합니다.
+
 ### 2026-05-07 현재 리팩토링 기준
 
 - 운영 전략 동작은 유지하고, 네 개 실거래 봇에 흩어져 있던 신규 진입 비중 계산을 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py) 로 모았습니다.

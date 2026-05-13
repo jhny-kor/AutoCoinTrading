@@ -1,5 +1,6 @@
 """
 작업 요약
+- 알트 진입의 SOL/레짐/상관/체결/타이밍 가드 퍼널 단계를 공통 helper 로 분리했다.
 - 하단 근접 mean_reversion probe 는 전용 낮은 점수 기준을 통과하면 distance 단계에서 소액 후보로 인정
 - mean_reversion 하단 근접 probe 후보는 raw signal 단계에서 reclaim 과 구분해 기록
 - SOL 제한형 probe 신호와 최대 보유 시간 청산 트리거를 알트 퍼널에 노출
@@ -316,6 +317,220 @@ def build_alt_entry_steps(
         ),
     ]
     return steps
+
+
+def build_alt_entry_guard_steps(
+    *,
+    strategy,
+    symbol: str,
+    sol_probe_entry_allowed: bool,
+    sol_probe_entry_decision,
+    has_position: bool,
+    current_entry_count: int,
+    signal_score: float,
+    htf_bearish_entry_blocked: bool,
+    htf_bearish: bool,
+    effective_low_energy_guard_active: bool,
+    low_energy_guard_active: bool,
+    low_energy_probe_decision,
+    low_energy_snapshot,
+    volume_ratio: float | None,
+    orderbook_pressure_score: float | None,
+    atr_percentile: float | None,
+    effective_symbol_regime_blocks_entry: bool,
+    symbol_regime: str | None,
+    symbol_regime_requires_strong_signal: bool,
+    signal_is_strong: bool,
+    entry_probe_score_override_allowed: bool,
+    effective_signal_score_min: float,
+    correlation_entry_blocked: bool,
+    correlation_with_btc: float | None,
+    btc_reference_above_ma: bool,
+    btc_correlation_volatility_blocked: bool,
+    btc_reference_regime: str | None,
+    volume_atr_execution_blocked: bool,
+    fill_quality_snapshot,
+    stop_loss_context_reentry_blocked: bool,
+    seconds_since_last_stop_loss: float,
+    last_stop_loss_ts: float,
+    current_entry_risk_context,
+    last_stop_loss_context,
+    fill_quality_entry_blocked: bool,
+    entry_timing_snapshot,
+):
+    """알트 진입 후반부 안전장치 퍼널 단계를 거래소 봇 간 동일하게 만든다."""
+    return [
+        FunnelStep(
+            stage="sol_probe",
+            passed=(
+                not strategy.allows_sol_probe(symbol)
+                or sol_probe_entry_allowed
+                or has_position
+                or current_entry_count > 0
+            ),
+            reason=sol_probe_entry_decision.reason,
+            actual={
+                "enabled": strategy.enable_sol_probe,
+                "signal_score": signal_score,
+                "has_position": has_position,
+                "entry_count": current_entry_count,
+                "position_scale": sol_probe_entry_decision.position_scale,
+            },
+            required={
+                "symbols": strategy.sol_probe_symbols,
+                "min_signal_score": strategy.sol_probe_min_signal_score,
+                "same_symbol_position_limit": 1,
+            },
+        ),
+        FunnelStep(
+            stage="htf_bearish_entry_guard",
+            passed=not htf_bearish_entry_blocked,
+            reason="higher_timeframe_bearish_entry_blocked",
+            actual={"htf_bearish": htf_bearish},
+            required={"htf_bearish": False},
+        ),
+        FunnelStep(
+            stage="market_regime",
+            passed=not effective_low_energy_guard_active,
+            reason=(
+                low_energy_probe_decision.reason
+                if low_energy_guard_active
+                else "low_energy_market"
+            ),
+            actual={
+                "probe_allowed": low_energy_probe_decision.allowed,
+                "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
+                "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
+                "ready_count": low_energy_snapshot.ready_count,
+                "signal_score": signal_score,
+                "volume_ratio": volume_ratio,
+                "orderbook_pressure_score": orderbook_pressure_score,
+                "atr_percentile": atr_percentile,
+            },
+            required={
+                "low_energy_market_inactive_or_probe_allowed": True,
+                "probe_min_signal_score": strategy.low_energy_probe_min_signal_score,
+                "probe_min_volume_ratio": strategy.low_energy_probe_min_volume_ratio,
+                "probe_min_orderbook_pressure_score": (
+                    strategy.low_energy_probe_min_orderbook_pressure_score
+                ),
+                "probe_max_atr_percentile": strategy.low_energy_probe_max_atr_percentile,
+            },
+        ),
+        FunnelStep(
+            stage="symbol_regime",
+            passed=not effective_symbol_regime_blocks_entry,
+            reason="symbol_regime_blocks_entry",
+            actual={"symbol_regime": symbol_regime},
+            required={"symbol_regime_allows_entry": True},
+        ),
+        FunnelStep(
+            stage="regime_signal_strength",
+            passed=(
+                not symbol_regime_requires_strong_signal
+                or signal_is_strong
+                or entry_probe_score_override_allowed
+            ),
+            reason="regime_requires_strong_signal",
+            actual={
+                "symbol_regime": symbol_regime,
+                "signal_is_strong": signal_is_strong,
+                "signal_score": signal_score,
+                "probe_score_override_allowed": entry_probe_score_override_allowed,
+            },
+            required={
+                "strong_signal_required": True,
+                "min_signal_score": effective_signal_score_min,
+            },
+        ),
+        FunnelStep(
+            stage="correlation_guard",
+            passed=not correlation_entry_blocked,
+            reason="btc_correlation_too_high",
+            actual={
+                "correlation_with_btc": correlation_with_btc,
+                "btc_reference_above_ma": btc_reference_above_ma,
+            },
+            required={"max_correlation_with_btc": strategy.max_correlation_with_btc},
+        ),
+        FunnelStep(
+            stage="btc_regime_correlation_volatility_guard",
+            passed=not btc_correlation_volatility_blocked,
+            reason="btc_risky_regime_high_corr_high_alt_atr",
+            actual={
+                "btc_reference_regime": btc_reference_regime,
+                "correlation_with_btc": correlation_with_btc,
+                "atr_percentile": atr_percentile,
+            },
+            required={
+                "risky_btc_regimes": strategy.btc_correlation_volatility_risky_regimes,
+                "min_correlation": strategy.btc_correlation_volatility_min_corr,
+                "min_alt_atr_percentile": (
+                    strategy.btc_correlation_volatility_min_atr_percentile
+                ),
+            },
+        ),
+        FunnelStep(
+            stage="volume_atr_execution_guard",
+            passed=not volume_atr_execution_blocked,
+            reason="high_volume_high_atr_weak_execution",
+            actual={
+                "volume_ratio": volume_ratio,
+                "atr_percentile": atr_percentile,
+                "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
+                "fill_sample_count": fill_quality_snapshot.sample_count,
+                "orderbook_pressure_score": orderbook_pressure_score,
+            },
+            required={
+                "volume_ratio_threshold": strategy.volume_atr_execution_guard_volume_ratio,
+                "atr_percentile_threshold": (
+                    strategy.volume_atr_execution_guard_atr_percentile
+                ),
+                "min_fill_ratio": strategy.volume_atr_execution_min_fill_ratio,
+                "min_orderbook_pressure_score": (
+                    strategy.volume_atr_execution_min_orderbook_pressure_score
+                ),
+            },
+        ),
+        FunnelStep(
+            stage="stop_loss_context_reentry_guard",
+            passed=not stop_loss_context_reentry_blocked,
+            reason="similar_stop_loss_context_active",
+            actual={
+                "elapsed_since_stop_loss_sec": (
+                    seconds_since_last_stop_loss if last_stop_loss_ts > 0 else None
+                ),
+                "current_context": current_entry_risk_context,
+                "previous_context": last_stop_loss_context.get(symbol),
+            },
+            required={
+                "cooldown_sec": strategy.stop_loss_context_reentry_cooldown_sec,
+                "min_similarity_count": strategy.stop_loss_context_min_similarity_count,
+            },
+        ),
+        FunnelStep(
+            stage="fill_quality_guard",
+            passed=not fill_quality_entry_blocked,
+            reason="fill_quality_low",
+            actual={
+                "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
+                "sample_count": fill_quality_snapshot.sample_count,
+            },
+            required={"min_fill_ratio": strategy.fill_quality_min_fill_ratio},
+        ),
+        FunnelStep(
+            stage="entry_timing",
+            passed=entry_timing_snapshot.ready,
+            reason="entry_confirmation_pending",
+            actual={
+                "phase": entry_timing_snapshot.phase,
+                "confirmation_count": entry_timing_snapshot.confirmation_count,
+            },
+            required={
+                "required_confirmations": entry_timing_snapshot.required_confirmations
+            },
+        ),
+    ]
 
 
 def build_alt_exit_steps(

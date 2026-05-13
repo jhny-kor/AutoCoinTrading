@@ -1,5 +1,6 @@
 """
 작업 요약
+- 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 공통화했다.
 - 익절 구간에서 거래량 급감 시 조기 청산하는 Volume Spike Exit 트리거를 추가
 - 알트 포지션의 수익률/순익률/MFE/MAE 계산과 청산 보호 판단을 공통화했다.
 - 브레이크이븐 가드와 순익 보호 익절 계산을 한 곳으로 모았다.
@@ -8,7 +9,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+
 from trade_history_logger import estimate_round_trip_net_pnl
+
+
+@dataclass(frozen=True)
+class AltPartialExitPolicy:
+    """알트 부분익절/부분손절 적용 상태를 나타낸다."""
+
+    partial_take_profit_pending: bool
+    partial_stop_loss_pending: bool
+    effective_partial_take_profit_ratio: float
+
+
+def build_empty_position_runtime_metrics() -> dict[str, float | None]:
+    """무포지션 경로에서 참조할 기본 포지션 지표를 반환한다."""
+    return {
+        "pnl_pct": None,
+        "mfe_pct": None,
+        "mae_pct": None,
+        "current_net_realized_pnl_quote": None,
+        "current_net_realized_pnl_pct": None,
+    }
 
 
 def compute_alt_position_metrics(
@@ -56,6 +80,33 @@ def compute_alt_position_metrics(
         "net_pnl_quote": current_net_realized_pnl_quote,
         "net_pnl_pct": current_net_realized_pnl_pct,
     }
+
+
+def resolve_alt_partial_exit_policy(
+    *,
+    symbol: str,
+    partial_take_profit_enabled: bool,
+    partial_stop_loss_enabled: bool,
+    partial_take_profit_done: Mapping[str, bool],
+    partial_stop_loss_done: Mapping[str, bool],
+    partial_take_profit_ratio: float,
+    partial_take_profit_ratio_multiplier: float,
+) -> AltPartialExitPolicy:
+    """부분익절/부분손절 pending 상태와 적용 비율을 공통 계산한다."""
+    return AltPartialExitPolicy(
+        partial_take_profit_pending=(
+            partial_take_profit_enabled
+            and not partial_take_profit_done.get(symbol, False)
+        ),
+        partial_stop_loss_pending=(
+            partial_stop_loss_enabled
+            and not partial_stop_loss_done.get(symbol, False)
+        ),
+        effective_partial_take_profit_ratio=min(
+            1.0,
+            partial_take_profit_ratio * partial_take_profit_ratio_multiplier,
+        ),
+    )
 
 
 def compute_alt_exit_decisions(

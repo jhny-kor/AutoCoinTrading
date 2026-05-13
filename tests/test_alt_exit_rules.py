@@ -1,11 +1,30 @@
-"""알트 청산 보호 계산에 대한 개발 테스트."""
+"""알트 청산 보호/부분청산 계산에 대한 개발 테스트."""
 
 import unittest
 
-from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
+from core.risk.alt_exit import (
+    build_empty_position_runtime_metrics,
+    compute_alt_exit_decisions,
+    compute_alt_position_metrics,
+    resolve_alt_partial_exit_policy,
+)
 
 
 class AltExitRuleTests(unittest.TestCase):
+    def test_build_empty_position_runtime_metrics_returns_all_expected_keys(self):
+        metrics = build_empty_position_runtime_metrics()
+        self.assertEqual(
+            set(metrics.keys()),
+            {
+                "pnl_pct",
+                "mfe_pct",
+                "mae_pct",
+                "current_net_realized_pnl_quote",
+                "current_net_realized_pnl_pct",
+            },
+        )
+        self.assertTrue(all(value is None for value in metrics.values()))
+
     def test_position_metrics_calculates_mfe_mae_and_pnl(self):
         metrics = compute_alt_position_metrics(
             has_position=True,
@@ -124,6 +143,36 @@ class AltExitRuleTests(unittest.TestCase):
         )
         self.assertTrue(decisions["volume_spike_exit_triggered"])
         self.assertEqual(decisions["estimated_sell_ratio"], 1.0)
+
+    def test_partial_exit_policy_tracks_pending_flags_and_ratio(self):
+        policy = resolve_alt_partial_exit_policy(
+            symbol="ETH/KRW",
+            partial_take_profit_enabled=True,
+            partial_stop_loss_enabled=True,
+            partial_take_profit_done={"ETH/KRW": False},
+            partial_stop_loss_done={"ETH/KRW": True},
+            partial_take_profit_ratio=0.4,
+            partial_take_profit_ratio_multiplier=1.5,
+        )
+
+        self.assertTrue(policy.partial_take_profit_pending)
+        self.assertFalse(policy.partial_stop_loss_pending)
+        self.assertAlmostEqual(0.6, policy.effective_partial_take_profit_ratio)
+
+    def test_partial_exit_policy_caps_take_profit_ratio(self):
+        policy = resolve_alt_partial_exit_policy(
+            symbol="XRP/KRW",
+            partial_take_profit_enabled=True,
+            partial_stop_loss_enabled=False,
+            partial_take_profit_done={},
+            partial_stop_loss_done={},
+            partial_take_profit_ratio=0.8,
+            partial_take_profit_ratio_multiplier=2.0,
+        )
+
+        self.assertTrue(policy.partial_take_profit_pending)
+        self.assertFalse(policy.partial_stop_loss_pending)
+        self.assertAlmostEqual(1.0, policy.effective_partial_take_profit_ratio)
 
 
 if __name__ == "__main__":

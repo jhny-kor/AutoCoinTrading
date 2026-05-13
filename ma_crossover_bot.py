@@ -1,5 +1,9 @@
 """
 수정 요약
+- 2026-05-13: 알트 진입 후반부 가드 퍼널 단계를 공통 helper 로 옮겨 업비트 봇과 중복을 줄임
+- 2026-05-13: 무포지션 기본 지표와 부분청산 pending 계산을 공통 alt_exit helper 로 옮김
+- 2026-05-13: SOL probe 청산 기준 계산도 공통 helper 로 옮겨 거래소별 중복을 줄임
+- 2026-05-13: SOL probe 진입 승격과 레짐/LOW_ENERGY 우회 보정을 공통 helper 로 옮겨 업비트 알트 봇과 구조를 맞춤
 - 2026-05-12: 하단 근접 mean_reversion probe 전용 낮은 점수 기준과 소액 비중 우회 계산을 OKX 알트 진입 경로에 연결
 - 2026-05-07: SOL 제한형 probe 전략을 연결해 점수 70 이상 소액 진입과 180분 시간 청산을 적용
 - 2026-05-07: 알트 포지션 비중 계산과 로그 조립을 공통 allocation helper 로 옮겨 업비트/OKX 구조를 맞춤
@@ -100,7 +104,12 @@ from core.risk.allocation import (
 )
 from core.risk.execution_guard import ExecutionQualityGuard, FillQualitySnapshot
 from core.risk.shared import is_daily_loss_limit_reached, is_dynamic_bonus_eligible
-from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
+from core.risk.alt_exit import (
+    build_empty_position_runtime_metrics,
+    compute_alt_exit_decisions,
+    compute_alt_position_metrics,
+    resolve_alt_partial_exit_policy,
+)
 from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import (
     compute_alt_signal_state,
@@ -121,13 +130,18 @@ from core.strategy.combined_filters import (
     requires_overheat_confirmation,
     safe_optional_float,
 )
-from core.strategy.funnels import build_alt_entry_steps, build_alt_exit_steps
+from core.strategy.funnels import (
+    build_alt_entry_guard_steps,
+    build_alt_entry_steps,
+    build_alt_exit_steps,
+)
 from core.strategy.low_energy import evaluate_low_energy_probe
 from core.strategy.mean_reversion import compute_bollinger_mean_reversion_state
 from core.strategy.regime_router import route_alt_strategy
 from core.strategy.sol_probe import (
-    evaluate_sol_probe_entry,
-    is_sol_probe_time_exit_triggered,
+    format_sol_probe_entry_log,
+    resolve_sol_probe_exit_state,
+    resolve_sol_probe_entry_state,
 )
 from core.strategy.volume_spike_entry import evaluate_volume_spike_entry_downgrade
 from core.strategy.indicators import (
@@ -859,26 +873,6 @@ def run_bot():
                 mean_reversion_lower_near_extra_confirmation_loops = int(
                     signal_state.get("lower_near_extra_confirmation_loops", 0)
                 )
-                if strategy.allows_sol_probe(symbol):
-                    effective_max_entry_count = 1
-                sol_probe_entry_decision = evaluate_sol_probe_entry(
-                    enabled=strategy.enable_sol_probe,
-                    symbol=symbol,
-                    eligible_symbols=strategy.sol_probe_symbols,
-                    signal_score=signal_score,
-                    min_signal_score=strategy.sol_probe_min_signal_score,
-                    has_position=has_position,
-                    current_entry_count=current_entry_count,
-                    position_scale=strategy.sol_probe_position_scale,
-                )
-                sol_probe_entry_allowed = sol_probe_entry_decision.allowed
-                if sol_probe_entry_allowed:
-                    entry_signal = True
-                    signal_is_strong = True
-                    log(
-                        f"[{symbol}] SOL 제한형 probe 후보로 전환합니다. "
-                        f"signal={signal_score:.1f}, position_scale={sol_probe_entry_decision.position_scale:.2f}x"
-                    )
                 low_energy_probe_decision = evaluate_low_energy_probe(
                     enabled=strategy.enable_low_energy_probe,
                     low_energy_guard_active=low_energy_guard_active,
@@ -896,19 +890,41 @@ def run_bot():
                     position_scale=strategy.low_energy_probe_position_scale,
                     extra_confirmation_loops=strategy.low_energy_probe_extra_confirmation_loops,
                 )
-                effective_low_energy_guard_active = (
-                    low_energy_guard_active
-                    and not low_energy_probe_decision.allowed
-                    and not sol_probe_entry_allowed
+                sol_probe_entry_state = resolve_sol_probe_entry_state(
+                    enabled=strategy.enable_sol_probe,
+                    symbol=symbol,
+                    eligible_symbols=strategy.sol_probe_symbols,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.sol_probe_min_signal_score,
+                    has_position=has_position,
+                    current_entry_count=current_entry_count,
+                    position_scale=strategy.sol_probe_position_scale,
+                    entry_signal=entry_signal,
+                    signal_is_strong=signal_is_strong,
+                    max_entry_count=effective_max_entry_count,
+                    low_energy_guard_active=low_energy_guard_active,
+                    low_energy_probe_allowed=low_energy_probe_decision.allowed,
+                    symbol_regime_blocks_entry=symbol_regime_blocks_entry,
+                    mean_reversion_lower_near_probe_allowed=mean_reversion_lower_near_probe_allowed,
                 )
+                sol_probe_entry_decision = sol_probe_entry_state.decision
+                sol_probe_entry_allowed = sol_probe_entry_decision.allowed
+                entry_signal = sol_probe_entry_state.entry_signal
+                signal_is_strong = sol_probe_entry_state.signal_is_strong
+                effective_max_entry_count = sol_probe_entry_state.max_entry_count
+                effective_low_energy_guard_active = sol_probe_entry_state.low_energy_guard_active
                 effective_symbol_regime_blocks_entry = (
-                    symbol_regime_blocks_entry
-                    and not low_energy_probe_decision.allowed
-                    and not mean_reversion_lower_near_probe_allowed
-                    and not sol_probe_entry_allowed
+                    sol_probe_entry_state.symbol_regime_blocks_entry
                 )
+                if sol_probe_entry_allowed:
+                    log(
+                        format_sol_probe_entry_log(
+                            symbol=symbol,
+                            signal_score=signal_score,
+                            position_scale=sol_probe_entry_decision.position_scale,
+                        )
+                    )
                 if low_energy_probe_decision.allowed:
-                    effective_max_entry_count = max(1, effective_max_entry_count)
                     log(
                         f"[{symbol}] LOW_ENERGY 이지만 고품질 소액 probe 후보로 전환합니다. "
                         f"signal={signal_score:.1f}, volume={0.0 if volume_ratio is None else volume_ratio:.3f}, "
@@ -1452,11 +1468,12 @@ def run_bot():
                         f"{strategy.averaging_down_gap_pct}% 이상 낮지 않습니다."
                     )
 
-                pnl_pct = None
-                current_net_realized_pnl_quote = None
-                current_net_realized_pnl_pct = None
-                mfe_pct = None
-                mae_pct = None
+                position_runtime_metrics = build_empty_position_runtime_metrics()
+                pnl_pct = position_runtime_metrics["pnl_pct"]
+                mfe_pct = position_runtime_metrics["mfe_pct"]
+                mae_pct = position_runtime_metrics["mae_pct"]
+                current_net_realized_pnl_quote = position_runtime_metrics["current_net_realized_pnl_quote"]
+                current_net_realized_pnl_pct = position_runtime_metrics["current_net_realized_pnl_pct"]
                 if has_position and avg_entry_price:
                     position_metrics = compute_alt_position_metrics(
                         has_position=has_position,
@@ -1480,18 +1497,24 @@ def run_bot():
                     lowest_price_since_entry.pop(symbol, None)
 
                 fee_round_trip_pct = config["fee_rate_pct"] * 2
-                effective_min_take_profit_pct = fee_round_trip_pct * 1.1
-                sol_probe_exit_active = strategy.allows_sol_probe(symbol)
-                take_profit_pct = (
-                    strategy.sol_probe_take_profit_pct
-                    if sol_probe_exit_active
-                    else strategy.get_take_profit_pct(symbol)
+                sol_probe_exit_state = resolve_sol_probe_exit_state(
+                    enabled=strategy.enable_sol_probe,
+                    symbol=symbol,
+                    eligible_symbols=strategy.sol_probe_symbols,
+                    has_position=has_position,
+                    opened_at=entry_opened_at.get(symbol),
+                    now_ts=time.time(),
+                    max_hold_minutes=strategy.sol_probe_max_hold_minutes,
+                    base_take_profit_pct=strategy.get_take_profit_pct(symbol),
+                    base_stop_loss_pct=strategy.get_stop_loss_pct(symbol),
+                    stop_loss_multiplier=regime_policy.stop_loss_multiplier,
+                    take_profit_bonus_pct=regime_policy.take_profit_bonus_pct,
+                    fee_round_trip_pct=fee_round_trip_pct,
+                    sol_probe_take_profit_pct=strategy.sol_probe_take_profit_pct,
+                    sol_probe_stop_loss_pct=strategy.sol_probe_stop_loss_pct,
                 )
-                stop_loss_pct = (
-                    strategy.sol_probe_stop_loss_pct
-                    if sol_probe_exit_active
-                    else strategy.get_stop_loss_pct(symbol) * regime_policy.stop_loss_multiplier
-                )
+                take_profit_pct = sol_probe_exit_state.take_profit_pct
+                stop_loss_pct = sol_probe_exit_state.stop_loss_pct
                 fee_protect_min_net_pnl_pct = strategy.get_fee_protect_min_net_pnl_pct(symbol)
                 break_even_guard_min_mfe_pct = strategy.get_break_even_guard_min_mfe_pct(symbol)
                 break_even_guard_floor_net_pnl_pct = (
@@ -1500,36 +1523,24 @@ def run_bot():
                 break_even_guard_max_profit_retrace_pct = (
                     strategy.break_even_guard_max_profit_retrace_pct
                 )
-                partial_take_profit_enabled = strategy.uses_partial_take_profit(symbol)
-                partial_stop_loss_enabled = strategy.uses_partial_stop_loss(symbol)
-                partial_take_profit_pending = (
-                    partial_take_profit_enabled
-                    and not partial_take_profit_done.get(symbol, False)
-                )
-                effective_partial_take_profit_ratio = min(
-                    1.0,
-                    strategy.partial_take_profit_ratio
-                    * regime_policy.partial_take_profit_ratio_multiplier,
-                )
-                partial_stop_loss_pending = (
-                    partial_stop_loss_enabled
-                    and not partial_stop_loss_done.get(symbol, False)
-                )
-                effective_take_profit_pct = max(
-                    take_profit_pct
-                    if sol_probe_exit_active
-                    else take_profit_pct + regime_policy.take_profit_bonus_pct,
-                    effective_min_take_profit_pct,
-                )
-                sol_probe_time_exit_triggered = is_sol_probe_time_exit_triggered(
-                    enabled=strategy.enable_sol_probe,
+                partial_exit_policy = resolve_alt_partial_exit_policy(
                     symbol=symbol,
-                    eligible_symbols=strategy.sol_probe_symbols,
-                    has_position=has_position,
-                    opened_at=entry_opened_at.get(symbol),
-                    now_ts=time.time(),
-                    max_hold_minutes=strategy.sol_probe_max_hold_minutes,
+                    partial_take_profit_enabled=strategy.uses_partial_take_profit(symbol),
+                    partial_stop_loss_enabled=strategy.uses_partial_stop_loss(symbol),
+                    partial_take_profit_done=partial_take_profit_done,
+                    partial_stop_loss_done=partial_stop_loss_done,
+                    partial_take_profit_ratio=strategy.partial_take_profit_ratio,
+                    partial_take_profit_ratio_multiplier=(
+                        regime_policy.partial_take_profit_ratio_multiplier
+                    ),
                 )
+                partial_take_profit_pending = partial_exit_policy.partial_take_profit_pending
+                partial_stop_loss_pending = partial_exit_policy.partial_stop_loss_pending
+                effective_partial_take_profit_ratio = (
+                    partial_exit_policy.effective_partial_take_profit_ratio
+                )
+                effective_take_profit_pct = sol_probe_exit_state.effective_take_profit_pct
+                sol_probe_time_exit_triggered = sol_probe_exit_state.time_exit_triggered
                 if has_position:
                     log(
                         f"[{symbol}] 적용 익절률: {effective_take_profit_pct:.2f}% "
@@ -1890,158 +1901,47 @@ def run_bot():
                     falling_knife_blocked=mean_reversion_falling_knife_blocked,
                 )
                 entry_steps.extend(
+                    build_alt_entry_guard_steps(
+                        strategy=strategy,
+                        symbol=symbol,
+                        sol_probe_entry_allowed=sol_probe_entry_allowed,
+                        sol_probe_entry_decision=sol_probe_entry_decision,
+                        has_position=has_position,
+                        current_entry_count=current_entry_count,
+                        signal_score=signal_score,
+                        htf_bearish_entry_blocked=htf_bearish_entry_blocked,
+                        htf_bearish=htf_bearish,
+                        effective_low_energy_guard_active=effective_low_energy_guard_active,
+                        low_energy_guard_active=low_energy_guard_active,
+                        low_energy_probe_decision=low_energy_probe_decision,
+                        low_energy_snapshot=low_energy_snapshot,
+                        volume_ratio=volume_ratio,
+                        orderbook_pressure_score=orderbook_pressure_score,
+                        atr_percentile=atr_percentile,
+                        effective_symbol_regime_blocks_entry=effective_symbol_regime_blocks_entry,
+                        symbol_regime=symbol_regime,
+                        symbol_regime_requires_strong_signal=symbol_regime_requires_strong_signal,
+                        signal_is_strong=signal_is_strong,
+                        entry_probe_score_override_allowed=entry_probe_score_override_allowed,
+                        effective_signal_score_min=effective_signal_score_min,
+                        correlation_entry_blocked=correlation_entry_blocked,
+                        correlation_with_btc=correlation_with_btc,
+                        btc_reference_above_ma=btc_reference_above_ma,
+                        btc_correlation_volatility_blocked=btc_correlation_volatility_blocked,
+                        btc_reference_regime=btc_reference_regime,
+                        volume_atr_execution_blocked=volume_atr_execution_blocked,
+                        fill_quality_snapshot=fill_quality_snapshot,
+                        stop_loss_context_reentry_blocked=stop_loss_context_reentry_blocked,
+                        seconds_since_last_stop_loss=seconds_since_last_stop_loss,
+                        last_stop_loss_ts=last_stop_loss_ts,
+                        current_entry_risk_context=current_entry_risk_context,
+                        last_stop_loss_context=last_stop_loss_context,
+                        fill_quality_entry_blocked=fill_quality_entry_blocked,
+                        entry_timing_snapshot=entry_timing_snapshot,
+                    )
+                )
+                entry_steps.extend(
                     [
-                        FunnelStep(
-                            stage="sol_probe",
-                            passed=(
-                                not strategy.allows_sol_probe(symbol)
-                                or sol_probe_entry_allowed
-                                or has_position
-                                or current_entry_count > 0
-                            ),
-                            reason=sol_probe_entry_decision.reason,
-                            actual={
-                                "enabled": strategy.enable_sol_probe,
-                                "signal_score": signal_score,
-                                "has_position": has_position,
-                                "entry_count": current_entry_count,
-                                "position_scale": sol_probe_entry_decision.position_scale,
-                            },
-                            required={
-                                "symbols": strategy.sol_probe_symbols,
-                                "min_signal_score": strategy.sol_probe_min_signal_score,
-                                "same_symbol_position_limit": 1,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="htf_bearish_entry_guard",
-                            passed=not htf_bearish_entry_blocked,
-                            reason="higher_timeframe_bearish_entry_blocked",
-                            actual={"htf_bearish": htf_bearish},
-                            required={"htf_bearish": False},
-                        ),
-                        FunnelStep(
-                            stage="market_regime",
-                            passed=not effective_low_energy_guard_active,
-                            reason=low_energy_probe_decision.reason if low_energy_guard_active else "low_energy_market",
-                            actual={
-                                "probe_allowed": low_energy_probe_decision.allowed,
-                                "avg_volume_ratio": low_energy_snapshot.avg_volume_ratio,
-                                "avg_abs_change_pct": low_energy_snapshot.avg_abs_change_pct,
-                                "ready_count": low_energy_snapshot.ready_count,
-                                "signal_score": signal_score,
-                                "volume_ratio": volume_ratio,
-                                "orderbook_pressure_score": orderbook_pressure_score,
-                                "atr_percentile": atr_percentile,
-                            },
-                            required={
-                                "low_energy_market_inactive_or_probe_allowed": True,
-                                "probe_min_signal_score": strategy.low_energy_probe_min_signal_score,
-                                "probe_min_volume_ratio": strategy.low_energy_probe_min_volume_ratio,
-                                "probe_min_orderbook_pressure_score": strategy.low_energy_probe_min_orderbook_pressure_score,
-                                "probe_max_atr_percentile": strategy.low_energy_probe_max_atr_percentile,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="symbol_regime",
-                            passed=not effective_symbol_regime_blocks_entry,
-                            reason="symbol_regime_blocks_entry",
-                            actual={"symbol_regime": symbol_regime},
-                            required={"symbol_regime_allows_entry": True},
-                        ),
-                        FunnelStep(
-                            stage="regime_signal_strength",
-                            passed=(
-                                not symbol_regime_requires_strong_signal
-                                or signal_is_strong
-                                or entry_probe_score_override_allowed
-                            ),
-                            reason="regime_requires_strong_signal",
-                            actual={
-                                "symbol_regime": symbol_regime,
-                                "signal_is_strong": signal_is_strong,
-                                "signal_score": signal_score,
-                                "probe_score_override_allowed": entry_probe_score_override_allowed,
-                            },
-                            required={"strong_signal_required": True, "min_signal_score": effective_signal_score_min},
-                        ),
-                        FunnelStep(
-                            stage="correlation_guard",
-                            passed=not correlation_entry_blocked,
-                            reason="btc_correlation_too_high",
-                            actual={
-                                "correlation_with_btc": correlation_with_btc,
-                                "btc_reference_above_ma": btc_reference_above_ma,
-                            },
-                            required={"max_correlation_with_btc": strategy.max_correlation_with_btc},
-                        ),
-                        FunnelStep(
-                            stage="btc_regime_correlation_volatility_guard",
-                            passed=not btc_correlation_volatility_blocked,
-                            reason="btc_risky_regime_high_corr_high_alt_atr",
-                            actual={
-                                "btc_reference_regime": btc_reference_regime,
-                                "correlation_with_btc": correlation_with_btc,
-                                "atr_percentile": atr_percentile,
-                            },
-                            required={
-                                "risky_btc_regimes": strategy.btc_correlation_volatility_risky_regimes,
-                                "min_correlation": strategy.btc_correlation_volatility_min_corr,
-                                "min_alt_atr_percentile": strategy.btc_correlation_volatility_min_atr_percentile,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="volume_atr_execution_guard",
-                            passed=not volume_atr_execution_blocked,
-                            reason="high_volume_high_atr_weak_execution",
-                            actual={
-                                "volume_ratio": volume_ratio,
-                                "atr_percentile": atr_percentile,
-                                "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
-                                "fill_sample_count": fill_quality_snapshot.sample_count,
-                                "orderbook_pressure_score": orderbook_pressure_score,
-                            },
-                            required={
-                                "volume_ratio_threshold": strategy.volume_atr_execution_guard_volume_ratio,
-                                "atr_percentile_threshold": strategy.volume_atr_execution_guard_atr_percentile,
-                                "min_fill_ratio": strategy.volume_atr_execution_min_fill_ratio,
-                                "min_orderbook_pressure_score": strategy.volume_atr_execution_min_orderbook_pressure_score,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="stop_loss_context_reentry_guard",
-                            passed=not stop_loss_context_reentry_blocked,
-                            reason="similar_stop_loss_context_active",
-                            actual={
-                                "elapsed_since_stop_loss_sec": seconds_since_last_stop_loss if last_stop_loss_ts > 0 else None,
-                                "current_context": current_entry_risk_context,
-                                "previous_context": last_stop_loss_context.get(symbol),
-                            },
-                            required={
-                                "cooldown_sec": strategy.stop_loss_context_reentry_cooldown_sec,
-                                "min_similarity_count": strategy.stop_loss_context_min_similarity_count,
-                            },
-                        ),
-                        FunnelStep(
-                            stage="fill_quality_guard",
-                            passed=not fill_quality_entry_blocked,
-                            reason="fill_quality_low",
-                            actual={
-                                "avg_fill_ratio": fill_quality_snapshot.avg_fill_ratio,
-                                "sample_count": fill_quality_snapshot.sample_count,
-                            },
-                            required={"min_fill_ratio": strategy.fill_quality_min_fill_ratio},
-                        ),
-                        FunnelStep(
-                            stage="entry_timing",
-                            passed=entry_timing_snapshot.ready,
-                            reason="entry_confirmation_pending",
-                            actual={
-                                "phase": entry_timing_snapshot.phase,
-                                "confirmation_count": entry_timing_snapshot.confirmation_count,
-                            },
-                            required={"required_confirmations": entry_timing_snapshot.required_confirmations},
-                        ),
                         FunnelStep(
                             stage="portfolio_budget",
                             passed=allocation_decision.remaining_budget_quote > 0,

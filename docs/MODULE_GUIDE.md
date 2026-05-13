@@ -170,6 +170,23 @@
   - BTC: 심볼 레짐, BTC ATR, score, probe 보정 순서 관리
   - OKX/업비트 봇의 포지션 비중, allocation score, 포트폴리오 예산 로그 문구 공통화
 
+- [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py)
+  - 알트 포지션 PnL/MFE/MAE 계산
+  - 수수료 반영 순익 보호, 브레이크이븐, 거래량 급감 청산 판단
+  - 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산
+  - OKX/업비트 알트 봇의 청산 준비 상태 공통화
+
+- [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)
+  - SOL 제한형 probe 진입 허용 판단
+  - SOL probe 대상 심볼의 단일 포지션/진입 횟수 보정
+  - SOL probe 허용 시 `LOW_ENERGY`와 심볼 레짐 차단 우회 상태 공통 계산
+  - SOL probe 최대 보유 시간 청산 판단과 거래소 공통 로그 문구 제공
+
+- [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py)
+  - 알트/BTC 진입과 청산 퍼널 단계 생성
+  - 알트 진입 기본 단계와 SOL/레짐/상관/체결/타이밍 가드 단계 공통화
+  - OKX/업비트 알트 봇은 거래소별 주문 단계만 각 봇에 남기고 공통 가드는 이 모듈을 사용
+
 - [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
   - trade_history 기준 평균 진입가와 내부 상태 복구
   - 프로그램별 당일 실현 손익 재계산 helper 제공

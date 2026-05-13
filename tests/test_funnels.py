@@ -1,8 +1,10 @@
 """알트/BTC 퍼널 step 생성기 구조에 대한 개발 테스트."""
 
 import unittest
+from types import SimpleNamespace
 
 from core.strategy.funnels import (
+    build_alt_entry_guard_steps,
     build_alt_entry_steps,
     build_alt_exit_steps,
     build_btc_add_on_steps,
@@ -12,6 +14,103 @@ from core.strategy.funnels import (
 
 
 class FunnelBuilderTests(unittest.TestCase):
+    def test_alt_entry_guard_steps_common_shape(self):
+        strategy = SimpleNamespace(
+            allows_sol_probe=lambda symbol: symbol == "SOL/KRW",
+            enable_sol_probe=True,
+            sol_probe_symbols=("SOL/KRW", "SOL/USDT"),
+            sol_probe_min_signal_score=70.0,
+            low_energy_probe_min_signal_score=70.0,
+            low_energy_probe_min_volume_ratio=1.0,
+            low_energy_probe_min_orderbook_pressure_score=0.2,
+            low_energy_probe_max_atr_percentile=0.8,
+            max_correlation_with_btc=0.75,
+            btc_correlation_volatility_risky_regimes=("LOW_ENERGY",),
+            btc_correlation_volatility_min_corr=0.7,
+            btc_correlation_volatility_min_atr_percentile=0.7,
+            volume_atr_execution_guard_volume_ratio=2.0,
+            volume_atr_execution_guard_atr_percentile=0.8,
+            volume_atr_execution_min_fill_ratio=0.8,
+            volume_atr_execution_min_orderbook_pressure_score=0.2,
+            stop_loss_context_reentry_cooldown_sec=600,
+            stop_loss_context_min_similarity_count=2,
+            fill_quality_min_fill_ratio=0.8,
+        )
+
+        steps = build_alt_entry_guard_steps(
+            strategy=strategy,
+            symbol="SOL/KRW",
+            sol_probe_entry_allowed=True,
+            sol_probe_entry_decision=SimpleNamespace(
+                reason="sol_probe_allowed",
+                position_scale=0.25,
+            ),
+            has_position=False,
+            current_entry_count=0,
+            signal_score=72.0,
+            htf_bearish_entry_blocked=False,
+            htf_bearish=False,
+            effective_low_energy_guard_active=False,
+            low_energy_guard_active=True,
+            low_energy_probe_decision=SimpleNamespace(
+                allowed=False,
+                reason="low_energy_probe_signal_score_low",
+            ),
+            low_energy_snapshot=SimpleNamespace(
+                avg_volume_ratio=0.5,
+                avg_abs_change_pct=0.1,
+                ready_count=0,
+            ),
+            volume_ratio=1.1,
+            orderbook_pressure_score=0.3,
+            atr_percentile=0.5,
+            effective_symbol_regime_blocks_entry=False,
+            symbol_regime="LOW_ENERGY",
+            symbol_regime_requires_strong_signal=True,
+            signal_is_strong=False,
+            entry_probe_score_override_allowed=True,
+            effective_signal_score_min=70.0,
+            correlation_entry_blocked=False,
+            correlation_with_btc=0.4,
+            btc_reference_above_ma=True,
+            btc_correlation_volatility_blocked=False,
+            btc_reference_regime="TRENDING",
+            volume_atr_execution_blocked=False,
+            fill_quality_snapshot=SimpleNamespace(avg_fill_ratio=0.95, sample_count=3),
+            stop_loss_context_reentry_blocked=False,
+            seconds_since_last_stop_loss=999.0,
+            last_stop_loss_ts=1.0,
+            current_entry_risk_context={"atr": "mid"},
+            last_stop_loss_context={"SOL/KRW": {"atr": "low"}},
+            fill_quality_entry_blocked=False,
+            entry_timing_snapshot=SimpleNamespace(
+                ready=True,
+                phase="READY",
+                confirmation_count=3,
+                required_confirmations=3,
+            ),
+        )
+
+        self.assertEqual(
+            [
+                "sol_probe",
+                "htf_bearish_entry_guard",
+                "market_regime",
+                "symbol_regime",
+                "regime_signal_strength",
+                "correlation_guard",
+                "btc_regime_correlation_volatility_guard",
+                "volume_atr_execution_guard",
+                "stop_loss_context_reentry_guard",
+                "fill_quality_guard",
+                "entry_timing",
+            ],
+            [step.stage for step in steps],
+        )
+        self.assertTrue(all(step.passed for step in steps))
+        self.assertEqual("sol_probe_allowed", steps[0].reason)
+        self.assertTrue(steps[4].actual["probe_score_override_allowed"])
+
     def test_alt_entry_steps_shape_and_reasons(self):
         steps = build_alt_entry_steps(
             entry_signal=True,
