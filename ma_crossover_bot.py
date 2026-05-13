@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-13: 매도 주문 직전 청산 비율/reason 결정 로직을 공통 alt_exit helper 로 옮김
 - 2026-05-13: 알트 진입 후반부 가드 퍼널 단계를 공통 helper 로 옮겨 업비트 봇과 중복을 줄임
 - 2026-05-13: 무포지션 기본 지표와 부분청산 pending 계산을 공통 alt_exit helper 로 옮김
 - 2026-05-13: SOL probe 청산 기준 계산도 공통 helper 로 옮겨 거래소별 중복을 줄임
@@ -109,6 +110,7 @@ from core.risk.alt_exit import (
     compute_alt_exit_decisions,
     compute_alt_position_metrics,
     resolve_alt_partial_exit_policy,
+    resolve_alt_sell_intent,
 )
 from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import (
@@ -2220,38 +2222,21 @@ def run_bot():
 
                 # 매도 신호 발생 시, 분할 청산 + 최소 익절률 조건을 만족하면 청산
                 elif exit_ready:
-                    sell_ratio = strategy.sell_split_ratio
-                    exit_reason_key = "take_profit"
-                    sell_reason = "익절"
-                    if stop_loss_triggered:
-                        if partial_stop_loss_pending:
-                            sell_ratio = strategy.partial_stop_loss_ratio
-                            exit_reason_key = "partial_stop_loss"
-                            sell_reason = "부분손절"
-                        else:
-                            sell_ratio = 1.0
-                            exit_reason_key = "stop_loss"
-                            sell_reason = "손절"
-                    elif profit_protect_triggered:
-                        sell_ratio = 1.0
-                        exit_reason_key = "profit_protect_take_profit"
-                        sell_reason = "순익보호익절"
-                    elif break_even_guard_triggered:
-                        sell_ratio = 1.0
-                        exit_reason_key = "break_even_guard_take_profit"
-                        sell_reason = "브레이크이븐보호익절"
-                    elif volume_spike_exit_triggered:
-                        sell_ratio = 1.0
-                        exit_reason_key = "volume_spike_take_profit"
-                        sell_reason = "거래량급감익절"
-                    elif sol_probe_time_exit_triggered:
-                        sell_ratio = 1.0
-                        exit_reason_key = "sol_probe_time_exit"
-                        sell_reason = "SOL Probe 시간청산"
-                    elif partial_take_profit_pending:
-                        sell_ratio = effective_partial_take_profit_ratio
-                        exit_reason_key = "partial_take_profit"
-                        sell_reason = "부분익절"
+                    sell_intent = resolve_alt_sell_intent(
+                        sell_split_ratio=strategy.sell_split_ratio,
+                        stop_loss_triggered=stop_loss_triggered,
+                        partial_stop_loss_pending=partial_stop_loss_pending,
+                        partial_stop_loss_ratio=strategy.partial_stop_loss_ratio,
+                        profit_protect_triggered=profit_protect_triggered,
+                        break_even_guard_triggered=break_even_guard_triggered,
+                        volume_spike_exit_triggered=volume_spike_exit_triggered,
+                        sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
+                        partial_take_profit_pending=partial_take_profit_pending,
+                        effective_partial_take_profit_ratio=effective_partial_take_profit_ratio,
+                    )
+                    sell_ratio = sell_intent.sell_ratio
+                    exit_reason_key = sell_intent.exit_reason_key
+                    sell_reason = sell_intent.sell_reason
 
                     sell_amount = base_free * sell_ratio
                     amount = safe_amount_to_precision(

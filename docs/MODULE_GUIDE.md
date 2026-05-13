@@ -174,6 +174,7 @@
   - 알트 포지션 PnL/MFE/MAE 계산
   - 수수료 반영 순익 보호, 브레이크이븐, 거래량 급감 청산 판단
   - 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산
+  - 매도 주문 직전 청산 비율과 reason key 결정
   - OKX/업비트 알트 봇의 청산 준비 상태 공통화
 
 - [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)

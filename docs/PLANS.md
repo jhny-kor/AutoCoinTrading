@@ -13,6 +13,7 @@
 
 ### 2026-05-13 현재 리팩토링 기준
 
+- 알트 매도 주문 직전의 청산 비율, `exit_reason_key`, 한글 청산 사유 결정은 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 의 `resolve_alt_sell_intent()`로 모았습니다.
 - 알트 진입 후반부의 SOL probe, 상위 시간봉 하락, LOW_ENERGY, 심볼 레짐, BTC 상관/변동성, 체결 품질, 손절 유사 컨텍스트, 진입 타이밍 가드 퍼널 단계를 [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py) 의 `build_alt_entry_guard_steps()`로 모았습니다.
 - 알트 봇의 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 로 모아 OKX/업비트 청산 준비 상태를 같은 방식으로 계산합니다.
 - SOL 제한형 probe 진입 판정, 진입 신호 승격, 단일 포지션 제한, `LOW_ENERGY`/심볼 레짐 우회 보정을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_entry_state()`로 모았습니다.

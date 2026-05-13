@@ -1,5 +1,6 @@
 """
 작업 요약
+- 알트 매도 사유별 청산 비율과 reason key 결정을 공통화했다.
 - 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 공통화했다.
 - 익절 구간에서 거래량 급감 시 조기 청산하는 Volume Spike Exit 트리거를 추가
 - 알트 포지션의 수익률/순익률/MFE/MAE 계산과 청산 보호 판단을 공통화했다.
@@ -22,6 +23,15 @@ class AltPartialExitPolicy:
     partial_take_profit_pending: bool
     partial_stop_loss_pending: bool
     effective_partial_take_profit_ratio: float
+
+
+@dataclass(frozen=True)
+class AltSellIntent:
+    """알트 매도 주문 직전 사용할 청산 의도를 나타낸다."""
+
+    sell_ratio: float
+    exit_reason_key: str
+    sell_reason: str
 
 
 def build_empty_position_runtime_metrics() -> dict[str, float | None]:
@@ -106,6 +116,69 @@ def resolve_alt_partial_exit_policy(
             1.0,
             partial_take_profit_ratio * partial_take_profit_ratio_multiplier,
         ),
+    )
+
+
+def resolve_alt_sell_intent(
+    *,
+    sell_split_ratio: float,
+    stop_loss_triggered: bool,
+    partial_stop_loss_pending: bool,
+    partial_stop_loss_ratio: float,
+    profit_protect_triggered: bool,
+    break_even_guard_triggered: bool,
+    volume_spike_exit_triggered: bool,
+    sol_probe_time_exit_triggered: bool,
+    partial_take_profit_pending: bool,
+    effective_partial_take_profit_ratio: float,
+) -> AltSellIntent:
+    """청산 트리거 우선순위에 따라 매도 비율과 reason 코드를 결정한다."""
+    if stop_loss_triggered:
+        if partial_stop_loss_pending:
+            return AltSellIntent(
+                sell_ratio=partial_stop_loss_ratio,
+                exit_reason_key="partial_stop_loss",
+                sell_reason="부분손절",
+            )
+        return AltSellIntent(
+            sell_ratio=1.0,
+            exit_reason_key="stop_loss",
+            sell_reason="손절",
+        )
+    if profit_protect_triggered:
+        return AltSellIntent(
+            sell_ratio=1.0,
+            exit_reason_key="profit_protect_take_profit",
+            sell_reason="순익보호익절",
+        )
+    if break_even_guard_triggered:
+        return AltSellIntent(
+            sell_ratio=1.0,
+            exit_reason_key="break_even_guard_take_profit",
+            sell_reason="브레이크이븐보호익절",
+        )
+    if volume_spike_exit_triggered:
+        return AltSellIntent(
+            sell_ratio=1.0,
+            exit_reason_key="volume_spike_take_profit",
+            sell_reason="거래량급감익절",
+        )
+    if sol_probe_time_exit_triggered:
+        return AltSellIntent(
+            sell_ratio=1.0,
+            exit_reason_key="sol_probe_time_exit",
+            sell_reason="SOL Probe 시간청산",
+        )
+    if partial_take_profit_pending:
+        return AltSellIntent(
+            sell_ratio=effective_partial_take_profit_ratio,
+            exit_reason_key="partial_take_profit",
+            sell_reason="부분익절",
+        )
+    return AltSellIntent(
+        sell_ratio=sell_split_ratio,
+        exit_reason_key="take_profit",
+        sell_reason="익절",
     )
 
 

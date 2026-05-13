@@ -7,6 +7,7 @@ from core.risk.alt_exit import (
     compute_alt_exit_decisions,
     compute_alt_position_metrics,
     resolve_alt_partial_exit_policy,
+    resolve_alt_sell_intent,
 )
 
 
@@ -173,6 +174,73 @@ class AltExitRuleTests(unittest.TestCase):
         self.assertTrue(policy.partial_take_profit_pending)
         self.assertFalse(policy.partial_stop_loss_pending)
         self.assertAlmostEqual(1.0, policy.effective_partial_take_profit_ratio)
+
+    def test_sell_intent_prioritizes_stop_loss_over_other_exits(self):
+        intent = resolve_alt_sell_intent(
+            sell_split_ratio=0.4,
+            stop_loss_triggered=True,
+            partial_stop_loss_pending=False,
+            partial_stop_loss_ratio=0.5,
+            profit_protect_triggered=True,
+            break_even_guard_triggered=True,
+            volume_spike_exit_triggered=True,
+            sol_probe_time_exit_triggered=True,
+            partial_take_profit_pending=True,
+            effective_partial_take_profit_ratio=0.6,
+        )
+
+        self.assertEqual(1.0, intent.sell_ratio)
+        self.assertEqual("stop_loss", intent.exit_reason_key)
+        self.assertEqual("손절", intent.sell_reason)
+
+    def test_sell_intent_uses_partial_stop_loss_when_pending(self):
+        intent = resolve_alt_sell_intent(
+            sell_split_ratio=0.4,
+            stop_loss_triggered=True,
+            partial_stop_loss_pending=True,
+            partial_stop_loss_ratio=0.35,
+            profit_protect_triggered=False,
+            break_even_guard_triggered=False,
+            volume_spike_exit_triggered=False,
+            sol_probe_time_exit_triggered=False,
+            partial_take_profit_pending=False,
+            effective_partial_take_profit_ratio=0.6,
+        )
+
+        self.assertAlmostEqual(0.35, intent.sell_ratio)
+        self.assertEqual("partial_stop_loss", intent.exit_reason_key)
+        self.assertEqual("부분손절", intent.sell_reason)
+
+    def test_sell_intent_uses_partial_take_profit_or_default_split(self):
+        partial_intent = resolve_alt_sell_intent(
+            sell_split_ratio=0.4,
+            stop_loss_triggered=False,
+            partial_stop_loss_pending=False,
+            partial_stop_loss_ratio=0.35,
+            profit_protect_triggered=False,
+            break_even_guard_triggered=False,
+            volume_spike_exit_triggered=False,
+            sol_probe_time_exit_triggered=False,
+            partial_take_profit_pending=True,
+            effective_partial_take_profit_ratio=0.6,
+        )
+        default_intent = resolve_alt_sell_intent(
+            sell_split_ratio=0.4,
+            stop_loss_triggered=False,
+            partial_stop_loss_pending=False,
+            partial_stop_loss_ratio=0.35,
+            profit_protect_triggered=False,
+            break_even_guard_triggered=False,
+            volume_spike_exit_triggered=False,
+            sol_probe_time_exit_triggered=False,
+            partial_take_profit_pending=False,
+            effective_partial_take_profit_ratio=0.6,
+        )
+
+        self.assertAlmostEqual(0.6, partial_intent.sell_ratio)
+        self.assertEqual("partial_take_profit", partial_intent.exit_reason_key)
+        self.assertAlmostEqual(0.4, default_intent.sell_ratio)
+        self.assertEqual("take_profit", default_intent.exit_reason_key)
 
 
 if __name__ == "__main__":
