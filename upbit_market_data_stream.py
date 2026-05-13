@@ -1,5 +1,6 @@
 """
 수정 요약
+- 업비트 private 웹소켓은 거래 이벤트가 없으면 무수신이 정상이라 별도 idle 기준을 두고 기본 재연결을 비활성화했다.
 - 스냅샷 파일 저장 오류가 웹소켓 연결 루프를 끊지 않도록 storage_error health 기록과 제한적 로그를 추가했다.
 - heartbeat health 기록과 max idle 기반 재연결 설정을 추가해 수집기 정상 여부를 운영에서 판단할 수 있게 개선
 - 업비트 private 웹소켓을 추가해 myOrder / myAsset 이벤트를 실시간 수집하고 로컬 latest/jsonl 파일로 저장하도록 확장했다.
@@ -60,6 +61,9 @@ def build_runtime_settings() -> dict[str, float | str | bool]:
             os.getenv("UPBIT_WS_HEARTBEAT_INTERVAL_SEC", "60.0")
         ),
         "max_idle_sec": float(os.getenv("UPBIT_WS_MAX_IDLE_SEC", "120.0")),
+        "private_max_idle_sec": float(
+            os.getenv("UPBIT_PRIVATE_WS_MAX_IDLE_SEC", "0.0")
+        ),
         "enable_trade": os.getenv("UPBIT_WS_ENABLE_TRADE", "true").strip().lower() in {"1", "true", "yes", "y", "on"},
         "enable_orderbook": os.getenv("UPBIT_WS_ENABLE_ORDERBOOK", "true").strip().lower() in {"1", "true", "yes", "y", "on"},
         "enable_candle_1m": os.getenv("UPBIT_WS_ENABLE_CANDLE_1M", "true").strip().lower() in {"1", "true", "yes", "y", "on"},
@@ -215,7 +219,7 @@ def main() -> int:
             reconnect_delay_sec=float(settings["reconnect_delay_sec"]),
             ping_interval_sec=float(settings["ping_interval_sec"]),
             heartbeat_interval_sec=float(settings["heartbeat_interval_sec"]),
-            max_idle_sec=float(settings["max_idle_sec"]),
+            max_idle_sec=float(settings["private_max_idle_sec"]),
             subscription_payload=private_payload,
             headers=private_headers,
             client_label="private",

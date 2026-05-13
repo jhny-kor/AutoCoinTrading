@@ -1,5 +1,7 @@
 """
 작업 요약
+- analysis/structured 로그도 오늘자 파일이 아직 없으면 전날 최신 파일을 fallback 으로 사용한다.
+- 자정 직후 오늘자 로그가 아직 없을 때 전날 최신 로그를 fallback 으로 사용해 log_missing 오탐 재기동을 줄였다.
 - upbit_stream 은 프로그램 로그 대신 `logs/runtime/upbit_ws/health.json` heartbeat 를 우선 기준으로 판단하도록 개선
 - 2026-04-08: 헬스체크를 warning/strict 모드로 분리하고 비핵심 프로그램은 warning 모드에서 전체 실패로 보지 않도록 확장
 - 관리 대상 프로세스와 최신 로그 갱신 상태를 점검하는 운영 헬스체크를 추가했다.
@@ -32,8 +34,21 @@ def file_age_seconds(path: Path | None) -> float | None:
     return max(0.0, time.time() - path.stat().st_mtime)
 
 
-def latest_program_log(script: str) -> Path | None:
-    return latest_file(Path("logs") / current_date_str(), f"{Path(script).stem}.log")
+def latest_dated_file(root: Path, pattern: str, date_text: str | None = None) -> Path | None:
+    """오늘자 파일이 없으면 날짜별 디렉터리 전체에서 가장 최근 파일을 찾는다."""
+    today_log = latest_file(root / (date_text or current_date_str()), pattern)
+    if today_log is not None:
+        return today_log
+
+    candidates = [path for path in root.glob(f"*/{pattern}") if path.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def latest_program_log(script: str, date_text: str | None = None) -> Path | None:
+    """오늘자 로그가 없으면 전체 날짜 로그 중 가장 최근 파일을 사용한다."""
+    return latest_dated_file(Path("logs"), f"{Path(script).stem}.log", date_text)
 
 
 def read_json_file(path: Path) -> dict:
@@ -77,15 +92,20 @@ def build_health_report(max_log_age_sec: int, mode: str = "warning") -> dict:
     results: dict[str, dict] = {}
     overall_ok = True
     warning_detected = False
-    analysis_file = latest_file(Path("analysis_logs") / current_date_str(), "*.jsonl")
-    structured_file = latest_file(Path("structured_logs") / "live" / current_date_str(), "*.jsonl")
+    date_text = current_date_str()
+    analysis_file = latest_dated_file(Path("analysis_logs"), "*.jsonl", date_text)
+    structured_file = latest_dated_file(
+        Path("structured_logs") / "live",
+        "*/*.jsonl",
+        date_text,
+    )
     analysis_age = file_age_seconds(analysis_file)
     structured_age = file_age_seconds(structured_file)
 
     for name, script in PROGRAMS.items():
         pid = read_pid_file(name)
         alive = pid is not None and is_pid_alive(pid)
-        log_path = latest_program_log(script)
+        log_path = latest_program_log(script, date_text)
         log_age = file_age_seconds(log_path)
         severity = "warning" if name in WARNING_PROGRAMS else "strict"
         if name == "collector":

@@ -1057,6 +1057,28 @@
   - `tests/test_auto_recovery_watchdog.py`
   - `tests/test_entry_committee.py`
 
+### 47. ETH/KRW 한정 빠른 수익보호 적용 (2026-05-13)
+
+- 변경 배경:
+  - 90일 지표 민감도 백테스트에서 진입 필터 완화는 대부분 거래 수와 수익률을 바꾸지 못했다.
+  - `profit_take_quicker` 세트는 `upbit ETH/KRW`에서만 수익률, PF, Sharpe, MDD가 함께 개선됐고 `upbit XRP/KRW`는 악화됐다.
+- 변경 내용:
+  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+    - `ETH/KRW min_take_profit_pct: 0.75 -> 0.55`
+    - `ETH/KRW fee_protect_min_net_pnl_pct: 0.06` 추가
+  - [config/runtime.local.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.toml)
+    - 실제 운영 override 에 동일 값 반영
+  - [config/sets/mixed.toml](/Users/plo/Documents/auto_coin_bot/config/sets/mixed.toml)
+    - 세트 재적용 시에도 ETH/KRW 빠른 수익보호와 XRP 빠른익절 보류 기준이 유지되도록 정리
+- 보류한 변경:
+  - BTC ATR/거래량 완화는 OKX BTC 거래수만 늘리고 수익률을 악화시켜 미적용
+  - XRP 빠른 익절 전역 적용은 `XRP/KRW` 악화가 확인되어 미적용
+- 기대 효과:
+  - ETH/KRW 수익 구간의 되돌림을 더 빨리 보호한다.
+  - BTC와 XRP는 검증되지 않은 완화로 손실성 거래가 늘어나는 것을 막는다.
+- 검증:
+  - `reports/backtest_batches/20260513_indicator_sensitivity_90d/sensitivity_summary.md`
+
 ### 46. 포지션 비중 계산 공통화 리팩토링 (2026-05-07, runtime refactor)
 
 - 변경 배경:

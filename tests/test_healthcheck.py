@@ -125,6 +125,50 @@ class HealthcheckTests(unittest.TestCase):
             self.assertEqual("OK", report["programs"]["upbit_stream"]["status"])
             self.assertTrue(report["programs"]["upbit_stream"]["ws_health"]["connected"])
 
+    def test_health_report_uses_previous_day_files_when_today_files_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prev_logs_dir = root / "logs" / "2026-03-28"
+            analysis_dir = root / "analysis_logs" / "2026-03-28"
+            structured_dir = root / "structured_logs" / "live" / "2026-03-28" / "x"
+            prev_logs_dir.mkdir(parents=True)
+            analysis_dir.mkdir(parents=True)
+            structured_dir.mkdir(parents=True)
+
+            prev_log = prev_logs_dir / "ma_crossover_bot.log"
+            prev_log.write_text("recent previous day log", encoding="utf-8")
+            (analysis_dir / "okx__ETH_USDT.jsonl").write_text("{}", encoding="utf-8")
+            (structured_dir / "strategy.jsonl").write_text("{}", encoding="utf-8")
+
+            programs = {"okx": "run/ma_crossover_bot.py"}
+
+            def fake_path(path_str=""):
+                return root / path_str if path_str else root
+
+            with patch("tools.healthcheck.PROGRAMS", programs), \
+                 patch("tools.healthcheck.current_date_str", return_value="2026-03-29"), \
+                 patch("tools.healthcheck.read_pid_file", return_value=123), \
+                 patch("tools.healthcheck.is_pid_alive", return_value=True), \
+                 patch("tools.healthcheck.Path", side_effect=fake_path):
+                report = build_health_report(1800)
+
+            self.assertEqual("OK", report["programs"]["okx"]["status"])
+            self.assertTrue(
+                report["programs"]["okx"]["latest_log"].endswith(
+                    "logs/2026-03-28/ma_crossover_bot.log"
+                )
+            )
+            self.assertTrue(
+                report["analysis_logs_latest"].endswith(
+                    "analysis_logs/2026-03-28/okx__ETH_USDT.jsonl"
+                )
+            )
+            self.assertTrue(
+                report["structured_logs_latest"].endswith(
+                    "structured_logs/live/2026-03-28/x/strategy.jsonl"
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 """
 수정 요약
+- stop/stale 재연결 시 현재 WebSocketApp 을 직접 닫아 run loop 가 남아 자동복구 재시작을 반복하지 않도록 보강했다.
 - heartbeat 상태 이벤트와 최대 무수신 시간 초과 시 세션 재연결을 요청하는 watchdog 을 추가
 - 업비트 private 웹소켓도 같은 클라이언트로 처리할 수 있도록 사용자 지정 구독 payload, 헤더, 라벨을 지원하도록 확장했다.
 - 업비트 시세용 공개 웹소켓 연결, 재연결, 구독 메시지 전송, payload 디코딩을 담당하는 경량 클라이언트를 추가했다.
@@ -64,6 +65,8 @@ class UpbitWebSocketClient:
         self.connection_started_at = 0.0
         self.reconnect_count = 0
         self.last_heartbeat_at = 0.0
+        self._active_app: websocket.WebSocketApp | None = None
+        self._active_app_lock = threading.Lock()
 
     def build_subscription_payload(self) -> list[dict[str, Any]]:
         """업비트 웹소켓 구독 payload 를 생성한다."""
@@ -114,6 +117,7 @@ class UpbitWebSocketClient:
     def stop(self) -> None:
         """수집기 종료를 요청한다."""
         self.stop_event.set()
+        self._close_active_app()
 
     def run_forever(self) -> None:
         """종료 요청 전까지 연결/재연결을 반복한다."""
@@ -163,6 +167,7 @@ class UpbitWebSocketClient:
             on_close=on_close,
         )
         app_holder["app"] = app
+        self._set_active_app(app)
         watchdog_thread = threading.Thread(
             target=self._watchdog_loop,
             args=(app_holder,),
@@ -170,12 +175,15 @@ class UpbitWebSocketClient:
             daemon=True,
         )
         watchdog_thread.start()
-        app.run_forever(
-            ping_interval=self.ping_interval_sec,
-            ping_timeout=max(5.0, self.ping_interval_sec / 2),
-            sslopt={"cert_reqs": ssl.CERT_REQUIRED},
-        )
-        watchdog_thread.join(timeout=1.0)
+        try:
+            app.run_forever(
+                ping_interval=self.ping_interval_sec,
+                ping_timeout=max(5.0, self.ping_interval_sec / 2),
+                sslopt={"cert_reqs": ssl.CERT_REQUIRED},
+            )
+        finally:
+            self._clear_active_app(app)
+            watchdog_thread.join(timeout=1.0)
 
     def _emit_state(self, event: str, **extra: Any) -> None:
         if self.on_state is None:
@@ -208,8 +216,34 @@ class UpbitWebSocketClient:
             self._emit_state("stale_reconnect", idle_sec=idle_sec)
             app = app_holder.get("app")
             if app is not None:
-                app.close()
+                self._close_app(app)
             break
+
+    def _set_active_app(self, app: websocket.WebSocketApp) -> None:
+        with self._active_app_lock:
+            self._active_app = app
+
+    def _clear_active_app(self, app: websocket.WebSocketApp) -> None:
+        with self._active_app_lock:
+            if self._active_app is app:
+                self._active_app = None
+
+    def _close_active_app(self) -> None:
+        with self._active_app_lock:
+            app = self._active_app
+        if app is not None:
+            self._close_app(app)
+
+    @staticmethod
+    def _close_app(app: websocket.WebSocketApp) -> None:
+        try:
+            app.keep_running = False
+        except Exception:
+            pass
+        try:
+            app.close()
+        except Exception:
+            pass
 
 
 def _decode_message(message: str | bytes) -> dict[str, Any] | None:
