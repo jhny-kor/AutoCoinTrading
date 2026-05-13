@@ -5,9 +5,9 @@
 기준 시점:
 - 작성일: `2026-04-01`
 - 현재 운영 코드 기준 파일:
-  - [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)
-  - [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
-  - [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+  - [core/execution/upbit.py](core/execution/upbit.py)
+  - [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
+  - [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
 
 참고한 공식 문서:
 - [Upbit WebSocket Orderbook](https://docs.upbit.com/reference/websocket-orderbook)
@@ -158,47 +158,47 @@ stale 이면:
 
 ### 새로 추가할 파일
 
-- [run/upbit_market_data_stream.py](/Users/plo/Documents/auto_coin_bot/run/upbit_market_data_stream.py)
+- [run/upbit_market_data_stream.py](run/upbit_market_data_stream.py)
   - 업비트 WebSocket 수집기 실행 진입점
 
-- [core/market_data/upbit_ws_client.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_ws_client.py)
+- [core/market_data/upbit_ws_client.py](core/market_data/upbit_ws_client.py)
   - WebSocket 연결/재연결/구독/메시지 파싱
 
-- [core/market_data/upbit_market_state.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_market_state.py)
+- [core/market_data/upbit_market_state.py](core/market_data/upbit_market_state.py)
   - 심볼별 최신 상태 메모리 모델
 
-- [core/market_data/upbit_snapshot_store.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_snapshot_store.py)
+- [core/market_data/upbit_snapshot_store.py](core/market_data/upbit_snapshot_store.py)
   - 로컬 JSON/JSONL 스냅샷 저장과 읽기
 
-- [core/market_data/upbit_provider.py](/Users/plo/Documents/auto_coin_bot/core/market_data/upbit_provider.py)
+- [core/market_data/upbit_provider.py](core/market_data/upbit_provider.py)
   - 전략 봇에서 읽는 공통 provider
   - WebSocket snapshot 우선, stale 시 REST fallback
 
-- [tests/test_upbit_snapshot_store.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_snapshot_store.py)
+- [tests/test_upbit_snapshot_store.py](tests/test_upbit_snapshot_store.py)
   - 파일 저장/복구 단위 테스트
 
-- [tests/test_upbit_market_state.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_market_state.py)
+- [tests/test_upbit_market_state.py](tests/test_upbit_market_state.py)
   - 실시간 시장 상태 갱신 단위 테스트
 
-- [tests/test_upbit_provider.py](/Users/plo/Documents/auto_coin_bot/tests/test_upbit_provider.py)
+- [tests/test_upbit_provider.py](tests/test_upbit_provider.py)
   - provider 우선 조회와 fallback 경로 단위 테스트
 
 ### 기존 파일 수정 후보
 
-- [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)
+- [core/execution/upbit.py](core/execution/upbit.py)
   - REST fallback helper 유지
   - provider 초기화 helper 추가 가능
 
-- [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+- [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
   - 시세/호가/캔들 조회를 provider 경유로 교체
 
-- [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+- [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
   - 시세/호가/캔들 조회를 provider 경유로 교체
 
-- [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)
+- [bot_manager.py](bot_manager.py)
   - `upbit_stream` 같은 새 관리 대상 추가
 
-- [README.md](/Users/plo/Documents/auto_coin_bot/README.md)
+- [README.md](README.md)
   - 운영 흐름 문서 갱신
 
 ## 7. 단계별 전환 계획
@@ -321,10 +321,10 @@ provider는 심볼별 상태를 아래처럼 봅니다.
 
 ## 12. 혼합 아키텍처 다이어그램
 
-![upbit-hybrid-architecture](/Users/plo/Documents/auto_coin_bot/docs/upbit_hybrid_architecture.svg)
+![upbit-hybrid-architecture](docs/upbit_hybrid_architecture.svg)
 
 원본 파일:
-- [docs/upbit_hybrid_architecture.svg](/Users/plo/Documents/auto_coin_bot/docs/upbit_hybrid_architecture.svg)
+- [docs/upbit_hybrid_architecture.svg](docs/upbit_hybrid_architecture.svg)
 
 ```mermaid
 flowchart LR

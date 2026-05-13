@@ -749,7 +749,7 @@
 
 - 변경 내용:
   - 신호 점수 고도화
-    - [core/strategy/indicators.py](/Users/plo/Documents/auto_coin_bot/core/strategy/indicators.py)에 `calc_weighted_signal_score` 추가
+    - [core/strategy/indicators.py](core/strategy/indicators.py)에 `calc_weighted_signal_score` 추가
     - 알트/ BTC 신호 점수는 이제 단순 고정 합산이 아니라 레짐별 가중치로 계산
     - 의도:
       - `TRENDING*` 에서는 slope / trend / spread 비중 확대
@@ -764,7 +764,7 @@
       - `Donchian breakout failure` 즉시 청산 추가
       - `donchian_failure_exit` reason 으로 분리
   - 코인별 자동 튜닝
-    - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)에서 최근 7일 final exit 기준 rolling 성과 분석
+    - [settings/strategy_settings.py](settings/strategy_settings.py)에서 최근 7일 final exit 기준 rolling 성과 분석
     - 사용 지표:
       - win-rate
       - profit-factor
@@ -793,13 +793,13 @@
   - 알트는 수익 구간에서 거래량 급감 후 빠르게 이익을 반납하는 경우가 있어 거래량 붕괴 기반 조기 청산이 필요하다고 판단
   - BTC는 `Donchian breakout` 성격의 진입 이후 실패 시 더 빠른 실패 인식이 필요했고, 기존 퍼센트 trailing 만으로는 늦는 구간이 있어 ATR trailing 을 추가
 - 구현 범위:
-  - [core/strategy/indicators.py](/Users/plo/Documents/auto_coin_bot/core/strategy/indicators.py)
-  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
-  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
-  - [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py)
-  - [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py)
-  - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
-  - [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
+  - [core/strategy/indicators.py](core/strategy/indicators.py)
+  - [core/strategy/alt.py](core/strategy/alt.py)
+  - [core/strategy/btc.py](core/strategy/btc.py)
+  - [core/risk/alt_exit.py](core/risk/alt_exit.py)
+  - [core/strategy/funnels.py](core/strategy/funnels.py)
+  - [settings/strategy_settings.py](settings/strategy_settings.py)
+  - [settings/btc_trend_settings.py](settings/btc_trend_settings.py)
   - 알트/ BTC 봇 4개 연결
 - 검증:
   - `unittest discover -s tests -v` 통과
@@ -810,21 +810,21 @@
 
 - 변경 내용:
   - `mean_reversion` 전략 모듈 추가
-    - [core/strategy/mean_reversion.py](/Users/plo/Documents/auto_coin_bot/core/strategy/mean_reversion.py)
+    - [core/strategy/mean_reversion.py](core/strategy/mean_reversion.py)
     - Bollinger 하단 이탈 후 복귀와 중단 회귀 여지를 기준으로 진입 점수 계산
     - 기존 `signal_score_min`, RSI, MACD 필터 결과를 그대로 전달받아 우회하지 않도록 설계
   - 레짐 라우터 확장
-    - [core/strategy/regime_router.py](/Users/plo/Documents/auto_coin_bot/core/strategy/regime_router.py)
+    - [core/strategy/regime_router.py](core/strategy/regime_router.py)
     - `CHOPPY_LOW_VOL`, `CHOPPY_HIGH_VOL` 알트 경로를 `mean_reversion` 으로 전환
-    - [settings/market_regime_guard.py](/Users/plo/Documents/auto_coin_bot/settings/market_regime_guard.py)
+    - [settings/market_regime_guard.py](settings/market_regime_guard.py)
     - 알트 CHOPPY 정책은 mean reversion 이 실제로 작동하도록 신규 진입 일시정지를 완화
   - 알트 ATR position sizing 직접 연결
-    - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
-    - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
-    - [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+    - [settings/strategy_settings.py](settings/strategy_settings.py)
+    - [ma_crossover_bot.py](ma_crossover_bot.py)
+    - [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
     - 알트 자체 `atr_pct` 로 포지션 비중 scale 을 직접 조정
   - Sharpe 기반 후보 랭킹
-    - [tools/discover_untracked_symbols.py](/Users/plo/Documents/auto_coin_bot/tools/discover_untracked_symbols.py)
+    - [tools/discover_untracked_symbols.py](tools/discover_untracked_symbols.py)
     - 최근 N일 일봉 수익률 평균 / 변동성 기반 Sharpe 유사 점수로 미등록 심볼 후보 정렬
     - 실거래 심볼 목록은 자동 변경하지 않고 discovery 출력만 제공
 - 기본 설정:
@@ -867,11 +867,11 @@
   - 손절 억제의 우선순위는 손절폭 확대가 아니라 `약한 상위 추세`와 `ATR 이 약한 거래량 급증`을 보너스 신호에서 제외하는 것
   - 즉 확인 추세는 더 좁게, 거래량 보너스는 더 늦게 인정하는 쪽이 현재 표본과 맞다고 판단
 - 구현 범위:
-  - [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
-  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
-  - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
-  - [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
-  - [tests/test_btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/tests/test_btc_trend_settings.py)
+  - [settings/btc_trend_settings.py](settings/btc_trend_settings.py)
+  - [config/runtime.toml](config/runtime.toml)
+  - [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py)
+  - [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
+  - [tests/test_btc_trend_settings.py](tests/test_btc_trend_settings.py)
 - 검증:
   - `python -m unittest tests.test_btc_trend_settings -v`
   - `py_compile`
@@ -884,15 +884,15 @@
   - 실거래 자동매매에서 LLM 이 직접 주문을 결정하는 방식은 비결정성과 지연이 커서 채택하지 않았다.
   - 대신 안전하게 흡수 가능한 decision log, risk review, reflection 개념을 기존 deterministic 전략 위에 감사 레이어로 적용했다.
 - 변경 내용:
-  - [core/risk/review.py](/Users/plo/Documents/auto_coin_bot/core/risk/review.py)
+  - [core/risk/review.py](core/risk/review.py)
     - 체결 레코드의 `signal_score`, volume/volatility filter, HTF, PnL, MFE, 보유시간을 기반으로 `allow_candidate / reduce_candidate / block_candidate` 성격의 사후 risk review 를 생성
     - 주문 gate 를 직접 바꾸지 않고 체결 품질 분석과 다음 튜닝 후보 식별에 사용
-  - [reporting/decision_journal.py](/Users/plo/Documents/auto_coin_bot/reporting/decision_journal.py)
+  - [reporting/decision_journal.py](reporting/decision_journal.py)
     - 체결마다 `reports/decision_journal/YYYY-MM-DD/decision_journal.jsonl` 에 risk review 와 reflection 을 누적
     - journal 이 비어 있으면 최근 `trade_history` 에서 같은 review 를 임시 생성해 리포트 공백을 줄임
-  - [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
+  - [trade_history_logger.py](trade_history_logger.py)
     - OKX/업비트, BTC/알트 공통 체결 로깅 경로에서 decision journal 을 함께 기록
-  - [reporting/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/reporting/telegram_command_listener.py)
+  - [reporting/telegram_command_listener.py](reporting/telegram_command_listener.py)
     - `/analysis`, `/weekly` 에 최근 의사결정 리뷰와 reflection 요약을 추가
 - 채택하지 않은 것:
   - LLM multi-agent 가 실시간 `buy/sell` 을 직접 결정하는 구조는 미채택
@@ -912,17 +912,17 @@
   - 최근 7일 실거래 분석에서 `volume_ratio`, `signal_score`, `RSI/MACD`, `HTF bullish` 는 단독으로 손절을 충분히 구분하지 못했다.
   - 특히 BTC 손절 거래는 거래량과 신호가 강했지만 `ATR percentile 100`, `RSI 73`, range 상단 추격 성격이 겹쳤다.
 - 변경 내용:
-  - [core/strategy/combined_filters.py](/Users/plo/Documents/auto_coin_bot/core/strategy/combined_filters.py)
+  - [core/strategy/combined_filters.py](core/strategy/combined_filters.py)
     - 최근 range 위치, 최근 고점/저점 거리 계산 helper 추가
     - `volume_ratio + ATR percentile + RSI` 가 동시에 과열이면 신규 진입 리스크로 판정
     - 신호가 강해도 range 상단 또는 최근 고점 근접이면 entry confirmation 을 추가 요구
-  - [core/strategy/mean_reversion.py](/Users/plo/Documents/auto_coin_bot/core/strategy/mean_reversion.py)
+  - [core/strategy/mean_reversion.py](core/strategy/mean_reversion.py)
     - mean reversion 완화 경로에 `ATR percentile <= 80`, `range position <= 35` 조건을 결합
     - RSI/MACD 완화가 고변동 추격 진입으로 변질되지 않게 제한
   - OKX/업비트 알트, OKX/업비트 BTC 봇
     - 고거래량+고ATR+RSI 과열 조합은 신규 진입 후보에서 제외
     - 강한 신호라도 최근 range 상단 추격이면 confirmation loop 를 1회 추가
-  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+  - [config/runtime.toml](config/runtime.toml)
     - 결합 필터 임계값을 canonical 설정으로 추가
 - 현재 적용 기준:
   - `overheat_guard_volume_ratio = 2.0`
@@ -949,7 +949,7 @@
   - 최근 손절 분석에서 단순 거래량 증가, 높은 신호 점수, HTF 상승 여부만으로는 손절을 충분히 막지 못했다.
   - 손절 방지에는 단독 지표보다 `BTC 상태`, `알트 변동성`, `체결/호가 우위`, `직전 손절 조건 반복 여부`를 함께 보는 쪽이 더 직접적이라고 판단했다.
 - 변경 내용:
-  - [core/strategy/combined_filters.py](/Users/plo/Documents/auto_coin_bot/core/strategy/combined_filters.py)
+  - [core/strategy/combined_filters.py](core/strategy/combined_filters.py)
     - `BTC 위험 레짐 + BTC 상관계수 + 알트 ATR percentile` 조합 가드 추가
     - `거래량 급증 + 고ATR + 약한 체결비율/호가 압력` 조합 가드 추가
     - 손절 직후 이전 손절과 유사한 조건이면 재진입을 막는 context similarity 가드 추가
@@ -957,7 +957,7 @@
     - 세 조합이 켜지면 신규 진입 후보에서 제외
     - 구조화 로그와 entry funnel 에 `btc_regime_correlation_volatility_guard`, `volume_atr_execution_guard`, `stop_loss_context_reentry_guard` 단계 기록
     - 손절 체결 시점의 위험 context 를 런타임에 저장해 이후 재진입 조건과 비교
-  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+  - [config/runtime.toml](config/runtime.toml)
     - 손절 방지 결합 가드 임계값을 canonical 설정으로 추가
 - 현재 적용 기준:
   - BTC 위험 레짐: `LOW_ENERGY, OVERHEATED, EXHAUSTION_RISK, CHOPPY_HIGH_VOL`
@@ -976,17 +976,17 @@
   - 최근 실거래와 `public_buy_ready` 후보 분석에서 `HTF bullish`, `signal_is_strong`, `volume_ratio`, `gap_pct`, `range_position_pct`, `correlation_with_btc` 는 단독으로 손절을 잘 구분하지 못했다.
   - 특히 BTC 손절은 `confirm_bullish=True` 와 매우 높은 `volume_ratio` 상태에서도 발생했고, 후보 로그에서는 `htf_bullish=True` 전체 후보 중 불리한 흐름이 절반 이상이었다.
 - 변경 내용:
-  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
+  - [core/strategy/alt.py](core/strategy/alt.py)
     - 알트 신호 점수에서 `volume` 과 `gap` 단독 가중치를 낮춤
     - `slope`, `MACD`, `RSI`, `squeeze` 같이 후속 탄력/회복을 설명하는 지표 비중을 상대적으로 높임
-  - [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+  - [core/risk/allocation.py](core/risk/allocation.py)
     - 거래량 단독 가산을 축소
     - `volume_ratio >= 2.0` 이면서 `ATR percentile >= 70`이면 allocation market score 감점
     - `orderbook_pressure_score < 50`이면 execution score 추가 감점
     - BTC 상관계수 단독 페널티를 완화하고, 위험 조합은 별도 결합 가드가 맡도록 분리
   - OKX/업비트 알트 봇
     - `correlation_with_btc` 단독 차단은 결합 손절방지 가드가 꺼진 경우의 fallback 으로만 사용
-  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+  - [config/runtime.toml](config/runtime.toml)
     - allocation score 가중치를 `signal 0.30 / market 0.30 / execution 0.25 / diversification 0.15` 로 조정
 - 판단:
   - 단독 지표를 삭제하지는 않는다.
@@ -998,14 +998,14 @@
   - 최근 전략 변경이 많아졌지만, 변경 직후 `진입이 더 막혔는지`, `손절이 줄었는지`, `막힌 후보가 실제로는 수익 기회였는지`를 한 번에 비교하는 루프가 부족했다.
   - 손절 방지 목표에서는 필터를 추가하는 것보다, 차단된 후보의 사후 가격 흐름을 계속 검증하는 장치가 먼저 필요하다고 판단했다.
 - 변경 내용:
-  - [reporting/change_effect_report.py](/Users/plo/Documents/auto_coin_bot/reporting/change_effect_report.py)
+  - [reporting/change_effect_report.py](reporting/change_effect_report.py)
     - 최신 git 변경 시각 또는 지정 시각 기준으로 전후 `scan`, `ready`, `order_requested`, `filled`, 주요 차단 사유, 손절 수, 평균 순손익을 비교
     - CLI: `.venv/bin/python tools/change_effect_report.py --hours 12`
-  - [reporting/shadow_candidate_tracker.py](/Users/plo/Documents/auto_coin_bot/reporting/shadow_candidate_tracker.py)
+  - [reporting/shadow_candidate_tracker.py](reporting/shadow_candidate_tracker.py)
     - 실제 매수되지 않은 entry scan 후보를 이후 scan 가격으로 가상 추적
     - 후보별 `MFE`, `MAE`, 최종 수익률, 가상 TP/SL 도달 여부, 첫 차단 사유를 기록
     - CLI: `.venv/bin/python tools/shadow_candidate_tracker.py --hours 6 --horizon-minutes 60`
-  - [reporting/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/reporting/telegram_command_listener.py)
+  - [reporting/telegram_command_listener.py](reporting/telegram_command_listener.py)
     - `/change`, `/shadow` 명령 추가
     - `/analysis` 에 변경 효과와 미체결 후보 요약을 함께 표시
 - 운영 원칙:
@@ -1021,13 +1021,13 @@
   - 텔레그램 리포트에 `아직 데이터가 없습니다`, `ready 0 / filled 0` 같은 저신호 문구가 반복되면 실제 판단에 방해가 된다.
   - 변경 효과와 미체결 후보 리포트는 숫자보다 `현재 조정이 개선인지, 표본 부족인지, 위험 신호인지`가 먼저 보여야 한다.
 - 변경 내용:
-  - [reporting/telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/reporting/telegram_command_listener.py)
+  - [reporting/telegram_command_listener.py](reporting/telegram_command_listener.py)
     - `/analysis`, 일일 리포트, 주간 리포트에서 빈 보조 섹션을 자동 숨김
     - 전략 퍼널/병목/체결 변화 문구를 진입 기준으로 정리하고 ready율, 병목 비중을 함께 표시
     - 심볼별 결론은 원자료 나열보다 행동 판단 문구 중심으로 표시
-  - [reporting/change_effect_report.py](/Users/plo/Documents/auto_coin_bot/reporting/change_effect_report.py)
+  - [reporting/change_effect_report.py](reporting/change_effect_report.py)
     - 변경 전후 비교에 `판정` 문구와 시간당 scan 흐름을 추가
-  - [reporting/shadow_candidate_tracker.py](/Users/plo/Documents/auto_coin_bot/reporting/shadow_candidate_tracker.py)
+  - [reporting/shadow_candidate_tracker.py](reporting/shadow_candidate_tracker.py)
     - 미체결 후보 요약에 가상 익절/손절 비율 기반 판정 문구를 추가
 - 운영 원칙:
   - 직접 명령(`/pnl`, `/last` 등)은 데이터 없음도 그대로 알려준다.
@@ -1039,16 +1039,16 @@
   - 장애가 반복될 때 운영자가 로그를 보고 수동 재기동하는 시간이 길면 실제 거래 기회와 로그 연속성이 함께 손상된다.
   - 매수 신호도 단일 점수만 보지 말고 전략/리스크/체결/포트폴리오/레짐 관점을 분리해, 어떤 관점이 반대했는지 기록할 필요가 있었다.
 - 변경 내용:
-  - [tools/auto_recovery_watchdog.py](/Users/plo/Documents/auto_coin_bot/tools/auto_recovery_watchdog.py)
-    - [tools/healthcheck.py](/Users/plo/Documents/auto_coin_bot/tools/healthcheck.py) 결과에서 `FAIL` 또는 기본 설정상 `WARN` 프로그램을 감지
+  - [tools/auto_recovery_watchdog.py](tools/auto_recovery_watchdog.py)
+    - [tools/healthcheck.py](tools/healthcheck.py) 결과에서 `FAIL` 또는 기본 설정상 `WARN` 프로그램을 감지
     - 쿨다운 `300초`, 시간당 최대 `3회` 제한을 둔 뒤 `bot_manager` 경로로 재기동
     - 복구 성공/실패/보류를 `logs/runtime/auto_recovery/events.jsonl` 과 `logs/YYYY-MM-DD/auto_recovery_watchdog.log` 에 기록
     - 복구 성공 시 텔레그램에 `장애 발생하여 해결완료` 형식으로 원인, 조치, 새 PID를 전송
-  - [core/runtime/program_registry.py](/Users/plo/Documents/auto_coin_bot/core/runtime/program_registry.py)
+  - [core/runtime/program_registry.py](core/runtime/program_registry.py)
     - `auto_recovery` 를 관리 대상 프로그램과 `start all` 순서에 추가
-  - [core/strategy/entry_committee.py](/Users/plo/Documents/auto_coin_bot/core/strategy/entry_committee.py)
+  - [core/strategy/entry_committee.py](core/strategy/entry_committee.py)
     - `strategy`, `risk`, `execution`, `portfolio`, `regime` 5개 관점으로 매수 후보를 독립 평가
-    - 현재 [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)은 `mode = "shadow"` 로 두어 실제 진입을 추가 차단하지 않고 구조화 로그만 남김
+    - 현재 [config/runtime.toml](config/runtime.toml)은 `mode = "shadow"` 로 두어 실제 진입을 추가 차단하지 않고 구조화 로그만 남김
     - 향후 표본이 쌓이면 `mode = "active"` 로 전환해 위원회 거절을 entry funnel 단계로 연결 가능
 - 운영 원칙:
   - 자동복구는 프로세스 재기동까지만 수행하고, 코드 수정이나 설정 변경은 자동으로 하지 않는다.
@@ -1063,12 +1063,12 @@
   - 90일 지표 민감도 백테스트에서 진입 필터 완화는 대부분 거래 수와 수익률을 바꾸지 못했다.
   - `profit_take_quicker` 세트는 `upbit ETH/KRW`에서만 수익률, PF, Sharpe, MDD가 함께 개선됐고 `upbit XRP/KRW`는 악화됐다.
 - 변경 내용:
-  - [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+  - [config/runtime.toml](config/runtime.toml)
     - `ETH/KRW min_take_profit_pct: 0.75 -> 0.55`
     - `ETH/KRW fee_protect_min_net_pnl_pct: 0.06` 추가
-  - [config/runtime.local.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.toml)
+  - [config/runtime.local.toml](config/runtime.local.toml)
     - 실제 운영 override 에 동일 값 반영
-  - [config/sets/mixed.toml](/Users/plo/Documents/auto_coin_bot/config/sets/mixed.toml)
+  - [config/sets/mixed.toml](config/sets/mixed.toml)
     - 세트 재적용 시에도 ETH/KRW 빠른 수익보호와 XRP 빠른익절 보류 기준이 유지되도록 정리
 - 보류한 변경:
   - BTC ATR/거래량 완화는 OKX BTC 거래수만 늘리고 수익률을 악화시켜 미적용
@@ -1085,15 +1085,15 @@
   - 최근 레짐, BTC 레짐, BTC ATR, ALT ATR, allocation score, probe 보정이 추가되면서 OKX/업비트 알트 봇과 OKX/업비트 BTC 봇에 같은 계산 순서가 반복됐다.
   - 전략값은 유지하되, 계산 순서가 거래소별로 갈라질 가능성을 줄여야 했다.
 - 변경 내용:
-  - [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+  - [core/risk/allocation.py](core/risk/allocation.py)
     - `AltPositionSizingResult`, `BtcPositionSizingResult` 추가
     - `build_alt_position_sizing(...)`, `build_btc_position_sizing(...)` 추가
     - OKX/업비트가 같은 포지션 비중, allocation score, 포트폴리오 예산, 동적 보너스 로그 문구를 쓰도록 formatter 추가
-  - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py), [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+  - [ma_crossover_bot.py](ma_crossover_bot.py), [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
     - 알트 신규 진입 비중 계산을 공통 helper 로 대체
-  - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py), [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+  - [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py), [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
     - BTC 신규 진입 비중 계산을 공통 helper 로 대체
-  - [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)
+  - [bot_manager.py](bot_manager.py)
     - 재기동 중 남은 defunct PID 를 실행 중인 봇으로 오판하지 않도록 `ps stat` 기반 pidfile 정리를 추가
 - 해석:
   - 이번 변경은 전략 조정이 아니라 런타임 리팩토링이다.
@@ -1107,7 +1107,7 @@
   - `tests/test_upbit_provider.py`
   - `tests/test_bot_manager.py`
   - `python -m unittest discover -s tests -p 'test_*.py'`
-  - `py_compile` 대상: 네 개 실거래 봇과 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+  - `py_compile` 대상: 네 개 실거래 봇과 [core/risk/allocation.py](core/risk/allocation.py)
 
 ### 45. 장기 과거 시장 데이터 수집 기준 추가 (2026-05-06)
 
@@ -1115,14 +1115,14 @@
   - 손절 방지 목표를 검증하려면 최근 며칠 체결 로그만으로는 표본이 부족하다.
   - BTC/ETH 는 여러 레짐을 포함해야 하므로 3년치가 필요하고, 알트는 상장/유동성 구조가 자주 바뀌므로 최근 1년 중심이 더 실용적이다.
 - 변경 내용:
-  - [tools/historical_market_collector.py](/Users/plo/Documents/auto_coin_bot/tools/historical_market_collector.py)
+  - [tools/historical_market_collector.py](tools/historical_market_collector.py)
     - BTC/ETH 는 3년, 그 외 알트는 1년으로 자동 기간을 나누는 수집 도구 추가
     - `1m` OHLCV 를 백테스트 호환 JSONL 로 저장
     - OKX 는 spot 대응 SWAP `funding-rate-history` 도 함께 수집 가능
     - 중복 timestamp 는 건너뛰도록 구성해 중간 중단 후 같은 명령으로 이어받을 수 있게 함
     - 장시간 수집은 `launch/status` 로 백그라운드 실행과 PID 확인이 가능하게 함
     - `launch` 완료/실패 텔레그램 알림과 기존 PID 감시용 `launch-watch` 를 추가
-  - [docs/HISTORICAL_MARKET_DATA.md](/Users/plo/Documents/auto_coin_bot/docs/HISTORICAL_MARKET_DATA.md)
+  - [docs/HISTORICAL_MARKET_DATA.md](docs/HISTORICAL_MARKET_DATA.md)
     - 수집 대상, 저장 경로, OHLCV/funding 필드, 제한 사항 문서화
 - 수집 필드:
   - 공통 OHLCV: `timestamp_ms`, `open`, `high`, `low`, `close`, `volume_base`, `quote_volume`

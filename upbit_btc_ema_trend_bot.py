@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-14: BTC 신규진입/추가매수 후 내부 상태 갱신을 공통 lifecycle helper 로 옮김
+- 2026-05-14: 업비트 BTC 시장가 주문 제출, private 이벤트 보강, 캐시 무효화를 공통 order adapter 로 옮김
 - 2026-05-14: BTC 주문 요청/체결 구조화 로그 입력을 공통 helper 로 옮김
 - 2026-05-14: BTC 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮김
 - 2026-05-07: BTC 포지션 비중 계산과 로그 조립을 공통 allocation helper 로 옮겨 업비트/OKX 구조를 맞춤
@@ -75,27 +77,30 @@ from datetime import datetime
 from bot_logger import BLUE, RED, BotLogger
 from btc_trend_settings import load_btc_trend_settings
 from core.execution.common import log_order_failure
+from core.execution.order_adapters import (
+    submit_upbit_market_buy,
+    submit_upbit_market_sell,
+)
 from core.execution.order_logging import log_order_filled, log_order_requested
 from core.execution.upbit import (
     apply_upbit_buy_order_buffer,
     create_upbit_market_data_provider,
-    create_market_buy_order_upbit,
-    create_market_sell_order_upbit,
     create_upbit_client,
-    enrich_upbit_order_with_private_event,
     fetch_best_bid_upbit,
     fetch_ohlcv_upbit_with_provider,
     fetch_ohlcv_upbit,
     get_spot_balances_upbit_with_provider,
-    invalidate_upbit_balance_cache,
-    invalidate_upbit_orderbook_cache,
     load_upbit_config,
     safe_amount_to_precision_upbit,
     should_refresh_best_bid_upbit,
 )
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.logging.metrics import build_btc_common_metrics
-from core.positions.lifecycle import clear_btc_position_state
+from core.positions.lifecycle import (
+    apply_btc_add_on_fill_state,
+    apply_btc_entry_fill_state,
+    clear_btc_position_state,
+)
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import (
     build_btc_allocations,
@@ -1460,9 +1465,13 @@ def run_bot():
                         },
                         metrics=common_metrics,
                     )
-                    order_request_started_at = time.time()
                     try:
-                        order = create_market_buy_order_upbit(exchange, symbol, cost_to_spend)
+                        order_submission = submit_upbit_market_buy(
+                            exchange=exchange,
+                            symbol=symbol,
+                            order_value_quote=cost_to_spend,
+                            market_data_provider=market_data_provider,
+                        )
                     except Exception as order_error:
                         log_order_failure(
                             structured_logger=structured_logger,
@@ -1478,23 +1487,25 @@ def run_bot():
                             extra={"strategy_version": settings.version},
                         )
                         continue
-                    order_response_received_at = time.time()
-                    order = enrich_upbit_order_with_private_event(
-                        order,
+                    order = order_submission.order
+                    order_request_started_at = order_submission.request_started_at
+                    order_response_received_at = order_submission.response_received_at
+                    entry_fill_state = apply_btc_entry_fill_state(
                         symbol=symbol,
-                        market_data_provider=market_data_provider,
+                        bought_amount=amount,
+                        last_close=last_close,
+                        now_ts=time.time(),
                     )
-                    invalidate_upbit_balance_cache(exchange)
-                    invalidate_upbit_orderbook_cache(exchange, symbol)
-                    entry_price = last_close
-                    entry_opened_at = time.time()
-                    position_id = f"{symbol}:{int(entry_opened_at)}"
-                    highest_price_since_entry = last_close
-                    lowest_price_since_entry = last_close
-                    trailing_armed = False
-                    trailing_armed_at = None
-                    trailing_activation_price = None
-                    last_trade_at = time.time()
+                    entry_price = entry_fill_state.entry_price_after
+                    entry_opened_at = entry_fill_state.entry_opened_at
+                    position_id = entry_fill_state.position_id
+                    highest_price_since_entry = entry_fill_state.highest_price_since_entry
+                    lowest_price_since_entry = entry_fill_state.lowest_price_since_entry
+                    trailing_armed = entry_fill_state.trailing_armed
+                    trailing_armed_at = entry_fill_state.trailing_armed_at
+                    trailing_activation_price = entry_fill_state.trailing_activation_price
+                    last_trade_at = entry_fill_state.last_trade_at
+                    add_on_count = entry_fill_state.add_on_count_after
                     log_order_filled(
                         structured_logger=structured_logger,
                         symbol=symbol,
@@ -1607,9 +1618,13 @@ def run_bot():
                     },
                     metrics={**common_metrics, "entry_type": "add_on_winner"},
                 )
-                order_request_started_at = time.time()
                 try:
-                    order = create_market_buy_order_upbit(exchange, symbol, cost_to_spend)
+                    order_submission = submit_upbit_market_buy(
+                        exchange=exchange,
+                        symbol=symbol,
+                        order_value_quote=cost_to_spend,
+                        market_data_provider=market_data_provider,
+                    )
                 except Exception as order_error:
                     log_order_failure(
                         structured_logger=structured_logger,
@@ -1625,29 +1640,28 @@ def run_bot():
                         extra={"strategy_version": settings.version},
                     )
                     continue
-                order_response_received_at = time.time()
-                order = enrich_upbit_order_with_private_event(
-                    order,
-                    symbol=symbol,
-                    market_data_provider=market_data_provider,
-                )
-                invalidate_upbit_balance_cache(exchange)
-                invalidate_upbit_orderbook_cache(exchange, symbol)
+                order = order_submission.order
+                order_request_started_at = order_submission.request_started_at
+                order_response_received_at = order_submission.response_received_at
 
                 previous_amount = base_free
                 added_amount = amount
-                total_amount = previous_amount + added_amount
-                previous_entry_price = entry_price or last_close
-                if total_amount > 0:
-                    entry_price = (
-                        (previous_entry_price * previous_amount) + (last_close * added_amount)
-                    ) / total_amount
-                else:
-                    entry_price = last_close
-                add_on_count += 1
-                last_trade_at = time.time()
-                highest_price_since_entry = max(highest_price_since_entry or last_close, last_close)
-                lowest_price_since_entry = min(lowest_price_since_entry or last_close, last_close)
+                add_on_fill_state = apply_btc_add_on_fill_state(
+                    previous_amount=previous_amount,
+                    added_amount=added_amount,
+                    previous_entry_price=entry_price,
+                    last_close=last_close,
+                    current_add_on_count=add_on_count,
+                    highest_price_since_entry=highest_price_since_entry,
+                    lowest_price_since_entry=lowest_price_since_entry,
+                    now_ts=time.time(),
+                )
+                total_amount = add_on_fill_state.total_amount
+                entry_price = add_on_fill_state.entry_price_after
+                add_on_count = add_on_fill_state.add_on_count_after
+                last_trade_at = add_on_fill_state.last_trade_at
+                highest_price_since_entry = add_on_fill_state.highest_price_since_entry
+                lowest_price_since_entry = add_on_fill_state.lowest_price_since_entry
 
                 log_order_filled(
                     structured_logger=structured_logger,
@@ -1809,9 +1823,13 @@ def run_bot():
                         actual={"sell_amount": amount},
                         metrics=common_metrics,
                     )
-                    order_request_started_at = time.time()
                     try:
-                        order = create_market_sell_order_upbit(exchange, symbol, amount)
+                        order_submission = submit_upbit_market_sell(
+                            exchange=exchange,
+                            symbol=symbol,
+                            amount=amount,
+                            market_data_provider=market_data_provider,
+                        )
                     except Exception as order_error:
                         log_order_failure(
                             structured_logger=structured_logger,
@@ -1824,14 +1842,9 @@ def run_bot():
                             extra={"strategy_version": settings.version},
                         )
                         continue
-                    order_response_received_at = time.time()
-                    order = enrich_upbit_order_with_private_event(
-                        order,
-                        symbol=symbol,
-                        market_data_provider=market_data_provider,
-                    )
-                    invalidate_upbit_balance_cache(exchange)
-                    invalidate_upbit_orderbook_cache(exchange, symbol)
+                    order = order_submission.order
+                    order_request_started_at = order_submission.request_started_at
+                    order_response_received_at = order_submission.response_received_at
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
                     holding_seconds = None

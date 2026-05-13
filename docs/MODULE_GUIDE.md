@@ -7,116 +7,116 @@
 기준 원칙:
 
 - 현재 폴더는 `단타/인트라데이 전용`입니다.
-- 장타/스윙 전용 설계는 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 에서 관리합니다.
+- 장타/스윙 전용 설계는 별도 폴더 `../auto_coin_bot_swing` 에서 관리합니다.
 - 같은 기능이라도 `공통 모듈`, `거래소별 모듈`, `전략별 모듈`을 구분해서 봅니다.
 
 ## 1. 공통 설정 / 전략 로더
 
 ### 공통 전략 설정
 
-- [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
+- [settings/strategy_settings.py](settings/strategy_settings.py)
   - 알트 공통 전략 설정 로더
   - 공통 전략 값, 심볼별 이격도/익절률/손절률/거래량 기준
   - 감시 심볼 목록과 운영 심볼 목록 로드
 
-- [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
+- [settings/btc_trend_settings.py](settings/btc_trend_settings.py)
   - BTC 전용 EMA 추세추종 설정 로더
   - EMA, ATR, 거래량, 트레일링, 부분 익절, 순익 보호, 피라미딩 설정 관리
 
 ### 환경 변수
 
-- [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml)
+- [config/runtime.toml](config/runtime.toml)
   - canonical 운영 설정 파일
   - 전략, 리스크, 포트폴리오, 텔레그램 일반 설정의 기준값
 
-- [config/runtime.example.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.example.toml)
+- [config/runtime.example.toml](config/runtime.example.toml)
   - canonical 운영 설정 예시 파일
 
-- [config/runtime.local.example.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.local.example.toml)
+- [config/runtime.local.example.toml](config/runtime.local.example.toml)
   - local TOML override 예시 파일
 
-- [config/sets](/Users/plo/Documents/auto_coin_bot/config/sets)
+- [config/sets](config/sets)
   - canonical 전략 세트 TOML 모음
   - 보수형/중간형/혼합형 세트 정의
 
-- [.env.example](/Users/plo/Documents/auto_coin_bot/.env.example)
+- [.env.example](.env.example)
   - legacy 전체 예시 파일
   - split env / TOML 을 쓰지 않는 환경용 호환 예시
 
-- [.env.settings.example](/Users/plo/Documents/auto_coin_bot/.env.settings.example)
+- [.env.settings.example](.env.settings.example)
   - 운영 override 예시 파일
 
-- [.env.secrets.example](/Users/plo/Documents/auto_coin_bot/.env.secrets.example)
+- [.env.secrets.example](.env.secrets.example)
   - 비밀정보 예시 파일
 
 ## 2. 공통 로그 / 분석 모듈
 
 ### 텍스트 로그
 
-- [bot_logger.py](/Users/plo/Documents/auto_coin_bot/bot_logger.py)
+- [bot_logger.py](bot_logger.py)
   - 콘솔 출력 + 날짜별 파일 로그 공통 처리
   - 배너 로그, 색상 로그, 신호 로그 출력
 
-- [log_path_utils.py](/Users/plo/Documents/auto_coin_bot/log_path_utils.py)
+- [log_path_utils.py](log_path_utils.py)
   - 날짜별 로그 경로 생성
   - 최신 파일 탐색, 여러 파일 라인 읽기
 
 ### 구조화 로그
 
-- [structured_log_manager.py](/Users/plo/Documents/auto_coin_bot/structured_log_manager.py)
+- [structured_log_manager.py](structured_log_manager.py)
   - `system / strategy / trade` 구조화 로그 기록
   - 퍼널 단계별 통과/차단 사유 집계
   - `summary_1h` 시간 버킷 요약 생성
 
-- [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
+- [trade_history_logger.py](trade_history_logger.py)
   - 통합 체결 이력 JSONL 기록
   - 실현 손익, 순손익, MFE/MAE, 보유 시간 기록
   - 주문 ID, API 지연, 체결 비율, 슬리피지 등 실행 품질 기록
 
 ### 분석 수집 / 분석 도구
 
-- [analysis_log_collector.py](/Users/plo/Documents/auto_coin_bot/analysis_log_collector.py)
+- [analysis_log_collector.py](analysis_log_collector.py)
   - 시장 상태 분석용 JSONL 수집기
   - 이격도, 변동성, 거래량, RSI, 호가 미시구조 기록
 
-- [upbit_market_data_stream.py](/Users/plo/Documents/auto_coin_bot/upbit_market_data_stream.py)
+- [upbit_market_data_stream.py](upbit_market_data_stream.py)
   - 업비트 공개/인증 웹소켓 시장데이터 수집기
   - 공개: trade / orderbook / candle.1m
   - 인증: myOrder / myAsset
   - 최신 스냅샷, 1분 캔들, private 이벤트 파일 저장
   - 5분/15분은 로컬 1분봉 리샘플을 전략/provider가 재사용
 
-- [analyze_logs.py](/Users/plo/Documents/auto_coin_bot/analyze_logs.py)
+- [analyze_logs.py](analyze_logs.py)
   - 분석용 시장 로그를 거래소/심볼별로 요약
 
-- [analyze_strategy_logs.py](/Users/plo/Documents/auto_coin_bot/analyze_strategy_logs.py)
+- [analyze_strategy_logs.py](analyze_strategy_logs.py)
   - 구조화 전략 로그와 체결 로그를 함께 읽어 퍼널 병목, 거래 품질, 시간대 성과를 집계
 
-- [backtest_replay.py](/Users/plo/Documents/auto_coin_bot/backtest_replay.py)
+- [backtest_replay.py](backtest_replay.py)
   - 공개 OHLCV 저장용 `fetch` 서브커맨드 제공
   - 로컬 OHLCV 파일 기준 오프라인 전략 리플레이 실행
   - 알트 MA 전략과 BTC EMA 전략의 요약/거래 로그 출력
 
-- [backtest_report_runner.py](/Users/plo/Documents/auto_coin_bot/backtest_report_runner.py)
+- [backtest_report_runner.py](backtest_report_runner.py)
   - 주간 배치 백테스트와 설정 변경 전후 비교를 묶어서 실행
   - fetch -> run -> compare 흐름을 심볼별로 자동 수행
   - 배치 요약과 전후 diff 요약 Markdown/JSON 생성
 
-- [tools/apply_strategy_set.py](/Users/plo/Documents/auto_coin_bot/tools/apply_strategy_set.py)
+- [tools/apply_strategy_set.py](tools/apply_strategy_set.py)
   - `config/sets` 아래 TOML 세트를 현재 `config/runtime.local.toml` 에 반영
   - 보수형/중간형/혼합형 별칭 지원
   - dry-run 으로 변경될 `section.key` 미리보기 지원
 
-- [tools/update_backtest_registry.py](/Users/plo/Documents/auto_coin_bot/tools/update_backtest_registry.py)
+- [tools/update_backtest_registry.py](tools/update_backtest_registry.py)
   - `reports/backtest_batches` 아래 batch/diff 결과를 인덱싱
   - `reports/backtest_registry.json` 자동 갱신
   - label, path, symbols, before/after 경로를 한 파일에서 조회 가능
 
-- [update_backtest_registry.py](/Users/plo/Documents/auto_coin_bot/update_backtest_registry.py)
+- [update_backtest_registry.py](update_backtest_registry.py)
   - 루트 호환 실행 진입점
   - `tools.update_backtest_registry` 를 그대로 실행
 
-- [compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/compare_backtest_to_live.py)
+- [compare_backtest_to_live.py](compare_backtest_to_live.py)
   - 백테스트 결과와 실거래 체결 이력을 같은 기준으로 비교
   - 승률, 순손익, 평균 손익률, 종료 사유를 함께 요약
 
@@ -124,7 +124,7 @@
 
 ### 봇 제어
 
-- [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)
+- [bot_manager.py](bot_manager.py)
   - 단타 프로젝트 관리 대상 프로세스 시작/중지/상태 확인
   - PID 파일 기반 보조 상태 추적
   - 부팅 자동시작 시 `ps` 권한 이슈 대응 포함
@@ -132,45 +132,45 @@
 
 ### 텔레그램 운영
 
-- [telegram_notifier.py](/Users/plo/Documents/auto_coin_bot/telegram_notifier.py)
+- [telegram_notifier.py](telegram_notifier.py)
   - 매수/매도/손절/에러/운영 알림 전송
   - 숫자 3자리 쉼표 포맷
   - 에러 인시던트 버튼 메시지 전송
 
-- [telegram_command_listener.py](/Users/plo/Documents/auto_coin_bot/telegram_command_listener.py)
+- [telegram_command_listener.py](telegram_command_listener.py)
   - `/status`, `/positions`, `/pnl`, `/analysis`, `/weekly`, `/last`
   - 일일/주간 리포트 자동 전송
   - 현재 시장 해석과 전략 추천 문구 생성
 
-- [reporting/listener_runtime.py](/Users/plo/Documents/auto_coin_bot/reporting/listener_runtime.py)
+- [reporting/listener_runtime.py](reporting/listener_runtime.py)
   - 텔레그램 리스너 설정 로드
   - polling, offset 저장, 예약 리포트 상태 저장 공통 처리
   - 리스너 본체에서 transport/runtime 보조 역할 분리
 
-- [reporting/position_snapshot.py](/Users/plo/Documents/auto_coin_bot/reporting/position_snapshot.py)
+- [reporting/position_snapshot.py](reporting/position_snapshot.py)
   - `/positions` 응답용 거래소 잔고/평가 요약 공통 처리
   - 최신 추정 진입가와 복구 진입가 합성
   - 거래소 조회 실패 진단 문구 공통 처리
 
-- [incident_manager.py](/Users/plo/Documents/auto_coin_bot/incident_manager.py)
+- [incident_manager.py](incident_manager.py)
   - 에러 인시던트 기록
   - 재기동/상세 보기/수정 요청/무시 상태 관리
 
 ## 4. 공통 포트폴리오 / 계산 모듈
 
-- [portfolio_allocator.py](/Users/plo/Documents/auto_coin_bot/portfolio_allocator.py)
+- [portfolio_allocator.py](portfolio_allocator.py)
   - 목표 비중 기반 신규 매수 예산 제한
   - 누적 투입 원가 기준 포트폴리오 계산
   - 거래량 강세 시 보수적 동적 오버웨이트
 
-- [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+- [core/risk/allocation.py](core/risk/allocation.py)
   - allocation score 계산
   - 알트/BTC 신규 진입 비중 계산 결과 객체 제공
   - 알트: 심볼 레짐, BTC 레짐, BTC ATR, ALT ATR, score, probe 보정 순서 관리
   - BTC: 심볼 레짐, BTC ATR, score, probe 보정 순서 관리
   - OKX/업비트 봇의 포지션 비중, allocation score, 포트폴리오 예산 로그 문구 공통화
 
-- [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py)
+- [core/risk/alt_exit.py](core/risk/alt_exit.py)
   - 알트 포지션 PnL/MFE/MAE 계산
   - 수수료 반영 순익 보호, 브레이크이븐, 거래량 급감 청산 판단
   - 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산
@@ -178,44 +178,53 @@
   - OKX 최소 수량/업비트 최소 금액에 걸리는 알트 부분청산의 전량 전환 또는 스킵 정책 결정
   - OKX/업비트 알트 봇의 청산 준비 상태 공통화
 
-- [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)
+- [core/strategy/sol_probe.py](core/strategy/sol_probe.py)
   - SOL 제한형 probe 진입 허용 판단
   - SOL probe 대상 심볼의 단일 포지션/진입 횟수 보정
   - SOL probe 허용 시 `LOW_ENERGY`와 심볼 레짐 차단 우회 상태 공통 계산
   - SOL probe 최대 보유 시간 청산 판단과 거래소 공통 로그 문구 제공
 
-- [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py)
+- [core/strategy/funnels.py](core/strategy/funnels.py)
   - 알트/BTC 진입과 청산 퍼널 단계 생성
   - 알트 진입 기본 단계와 SOL/레짐/상관/체결/타이밍 가드 단계 공통화
   - OKX/업비트 알트 봇은 거래소별 주문 단계만 각 봇에 남기고 공통 가드는 이 모듈을 사용
 
-- [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py)
+- [core/strategy/alt_loop.py](core/strategy/alt_loop.py)
+  - 알트 봇 루프의 진입/청산 퍼널 실행 stage 공통화
+  - OKX/업비트 알트 봇의 `run_bot()`에서 반복되던 `buy_ready`/`sell_ready` 실행 코드를 분리
+
+- [core/strategy/exit_reasons.py](core/strategy/exit_reasons.py)
   - 알트/BTC 청산 퍼널이 통과했을 때 기록할 대표 `ready_reason` 우선순위 결정
   - 손절, 부분익절, 순익보호, 트레일링, 시간청산 같은 청산 사유 우선순위를 봇 본문 밖에서 고정
 
-- [state_recovery.py](/Users/plo/Documents/auto_coin_bot/state_recovery.py)
+- [state_recovery.py](state_recovery.py)
   - trade_history 기준 평균 진입가와 내부 상태 복구
   - 프로그램별 당일 실현 손익 재계산 helper 제공
 
-- [core/runtime/bootstrap.py](/Users/plo/Documents/auto_coin_bot/core/runtime/bootstrap.py)
+- [core/runtime/bootstrap.py](core/runtime/bootstrap.py)
   - 알트/BTC 봇 초기 런타임 상태 복구 공통 helper
   - `run_bot()` 시작 구간의 중복 상태 구성 로직 축소
 
-- [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py)
+- [core/positions/lifecycle.py](core/positions/lifecycle.py)
   - 알트 매수 체결 후 평균 진입가, 진입 카운트, 고저가 상태 갱신
   - 알트 매도 체결 후 남은 수량, 진입 카운트, 손절 컨텍스트, 부분청산 완료 플래그 갱신
+  - BTC 신규진입/추가매수 후 평균 진입가, 포지션 ID, trailing 초기값, 고저가, add-on count 계산
   - 알트/BTC 포지션 종료 후 내부 상태 초기화
   - OKX/업비트 알트 봇의 포지션 lifecycle 상태 변경 공통화
 
-- [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py)
+- [core/execution/order_adapters.py](core/execution/order_adapters.py)
+  - OKX/업비트 시장가 주문 제출 어댑터
+  - 주문 요청/응답 시각 기록, OKX `tgtCcy` 선택, 업비트 private 이벤트 보강과 캐시 무효화 후처리 공통화
+
+- [core/execution/order_logging.py](core/execution/order_logging.py)
   - 알트/BTC 공통 `order_requested` strategy 로그 입력
   - 체결 후 strategy/trade 로그를 같은 actual/metrics 로 함께 남기는 표준 helper 제공
 
-- [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py)
+- [core/notifications/trade_messages.py](core/notifications/trade_messages.py)
   - OKX/업비트 체결 텔레그램 메시지 본문 생성
   - 매수 금액, 매도 금액, 체결가, 손익 금액의 거래소별 자리수를 설정으로 분리
 
-- [core/runtime/program_registry.py](/Users/plo/Documents/auto_coin_bot/core/runtime/program_registry.py)
+- [core/runtime/program_registry.py](core/runtime/program_registry.py)
   - 관리 대상 프로그램 메타데이터 단일 소스
   - `bot_manager`, 헬스체크, 텔레그램 리포트가 공유하는 이름/스크립트/레이블 정의
 
@@ -223,7 +232,7 @@
 
 ### OKX 공통 기능
 
-- [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
+- [ma_crossover_bot.py](ma_crossover_bot.py)
   - 현재는 `OKX 알트 전략` 본체이면서
   - 동시에 아래 공통 기능도 일부 포함합니다.
   - OKX 클라이언트 생성
@@ -233,7 +242,7 @@
 
 ### 업비트 공통 기능
 
-- [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+- [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
   - 현재는 `업비트 알트 전략` 본체이면서
   - 동시에 아래 공통 기능도 일부 포함합니다.
   - 업비트 클라이언트 생성
@@ -244,13 +253,13 @@
   - 업비트 잔고/호가 짧은 TTL 캐시와 주문 직후 캐시 무효화
   - 업비트 KRW 주문 버퍼
 
-- [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)
+- [core/execution/upbit.py](core/execution/upbit.py)
   - 업비트 공통 실행 유틸
   - 요청 재시도, KRW 주문 버퍼, 시장가 매수/매도 공통 경로
   - 잔고/호가 짧은 캐시, 최소 주문 경계 근처 전용 best bid 재조회
   - 업비트 시장가 매수 공통 helper
 
-- [core/market_data](/Users/plo/Documents/auto_coin_bot/core/market_data)
+- [core/market_data](core/market_data)
   - 업비트 웹소켓 시장데이터 공통 계층
   - 최신 상태 메모리 저장소
   - 최신 스냅샷/1분 캔들 파일 저장
@@ -262,13 +271,13 @@
 
 ### 알트 전략
 
-- [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
+- [ma_crossover_bot.py](ma_crossover_bot.py)
   - OKX 알트 단타 전략
   - 1분봉 MA 돌파
   - 부분 익절 / 부분 손절 / 순익 보호 익절 / 브레이크이븐 가드
   - 포트폴리오 배분 반영
 
-- [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
+- [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
   - 업비트 알트 단타 전략
   - 1분봉 MA 돌파
   - 부분 익절 / 부분 손절 / 순익 보호 익절 / 브레이크이븐 가드
@@ -276,12 +285,12 @@
 
 ### BTC 전략
 
-- [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
+- [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py)
   - OKX BTC EMA 추세추종 전략
   - 5분봉 + 15분봉 확인
   - 부분 익절 / 순익 보호 / 트레일링 / 강한 상방 조정 보유
 
-- [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+- [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
   - 업비트 BTC EMA 추세추종 전략
   - 5분봉 + 15분봉 확인
   - 업비트 전용 주문 버퍼 / 재시도 반영
@@ -289,39 +298,35 @@
 
 ## 7. 로그/운영 보조 스크립트
 
-- [migrate_logs_to_dated_dirs.py](/Users/plo/Documents/auto_coin_bot/migrate_logs_to_dated_dirs.py)
+- [migrate_logs_to_dated_dirs.py](migrate_logs_to_dated_dirs.py)
   - 기존 로그를 날짜별 폴더 구조로 이동
 
-- [log_archive_manager.py](/Users/plo/Documents/auto_coin_bot/log_archive_manager.py)
+- [log_archive_manager.py](log_archive_manager.py)
   - 오래된 로그 압축 보관
 
 ## 8. 현재 구조에서 기억할 점
 
-- 공통 기능이 아직 일부 전략 파일 안에 함께 들어 있습니다.
-  - 예: 업비트 공통 helper 일부는 [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
-  - 예: OKX 공통 helper 일부는 [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
-- 즉 현재 구조는 완전한 레이어 분리라기보다 `전략 본체 + 거래소 공통 helper 일부 포함` 형태입니다.
+- 주문 API 차이, 거래소별 캐시 처리, 실행 순서가 중요한 코드는 의도적으로 각 봇 또는 거래소 실행 모듈에 남깁니다.
+- 반복 로직은 `core/strategy`, `core/risk`, `core/positions`, `core/execution` helper 로 분리했고, 문서화된 리팩토링 후보는 현재 남아 있지 않습니다.
 
-## 9. 리팩토링 진행 현황과 다음 후보
+## 9. 리팩토링 진행 현황
 
-2026-05-14 기준으로 P1, P2, P3 후보는 운영 전략 값을 바꾸지 않는 범위에서 공통 helper 로 반영했습니다.
+2026-05-14 기준으로 문서화된 P1, P2, P3 후보는 운영 전략 값을 바꾸지 않는 범위에서 모두 공통 helper 로 반영했습니다.
 
 | 우선순위 | 완료 항목 | 대상 | 기준 |
 | --- | --- | --- | --- |
-| P1 | 알트 매수/매도 체결 상태 갱신 공통화 | [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) | 매수 평균가/고저가, 매도 잔량/진입 카운트/부분청산 플래그를 helper 로 갱신 |
-| P1 | 체결 알림 문구 formatter 공통화 | [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py) | OKX/업비트 메시지 구조를 공유하고 숫자 자리수만 거래소별 설정 |
-| P2 | 주문 요청/체결 로그 공통화 | [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py) | 알트/BTC `order_requested`, `filled`, `log_trade_event` 입력 조립을 표준화 |
-| P2 | 매도 주문 최소금액/최소수량 fallback 정책 분리 | [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) | OKX 수량 기준과 업비트 금액 기준을 별도 helper 로 처리 |
-| P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py) | 알트/BTC 청산 사유 우선순위를 공통 함수로 고정해 `run_bot()` 분기를 축소 |
+| P1 | 알트 매수/매도 체결 상태 갱신 공통화 | [core/positions/lifecycle.py](core/positions/lifecycle.py) | 매수 평균가/고저가, 매도 잔량/진입 카운트/부분청산 플래그를 helper 로 갱신 |
+| P1 | 체결 알림 문구 formatter 공통화 | [core/notifications/trade_messages.py](core/notifications/trade_messages.py) | OKX/업비트 메시지 구조를 공유하고 숫자 자리수만 거래소별 설정 |
+| P2 | 주문 요청/체결 로그 공통화 | [core/execution/order_logging.py](core/execution/order_logging.py) | 알트/BTC `order_requested`, `filled`, `log_trade_event` 입력 조립을 표준화 |
+| P2 | 실주문 API 호출 어댑터 정리 | [core/execution/order_adapters.py](core/execution/order_adapters.py) | OKX `tgtCcy`, 업비트 private 이벤트 보강/캐시 무효화, 주문 타이밍 기록을 어댑터로 표준화 |
+| P2 | 매도 주문 최소금액/최소수량 fallback 정책 분리 | [core/risk/alt_exit.py](core/risk/alt_exit.py) | OKX 수량 기준과 업비트 금액 기준을 별도 helper 로 처리 |
+| P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](core/strategy/exit_reasons.py) | 알트/BTC 청산 사유 우선순위를 공통 함수로 고정해 `run_bot()` 분기를 축소 |
+| P3 | 알트 루프 진입/청산 퍼널 단계 helper 적용 | [core/strategy/alt_loop.py](core/strategy/alt_loop.py) | 알트 `run_bot()`의 `buy_ready`/`sell_ready` 퍼널 실행 코드를 공통화 |
+| P3 | BTC 매수/추가매수 lifecycle helper 확대 | [core/positions/lifecycle.py](core/positions/lifecycle.py) | BTC 신규진입/추가매수 후 평균가, trailing 초기값, add-on count 계산을 공통화 |
 
-현재 알트 봇은 공통 helper 분리 후에도 [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py) 와
-[upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py) 의 루프 본문이 길기 때문에, 다음 리팩토링은 아래 순서가 안전합니다.
+현재 남은 리팩토링 후보:
 
-| 우선순위 | 다음 후보 | 대상 | 기준 |
-| --- | --- | --- | --- |
-| P1 | 실주문 API 호출 어댑터 정리 | [core/execution](/Users/plo/Documents/auto_coin_bot/core/execution) | 주문 API 호출, 업비트 private 이벤트 보강, 캐시 무효화는 거래소별 차이를 유지하면서 fake exchange 테스트 가능하게 분리 |
-| P2 | BTC 매수/추가매수 lifecycle helper 확대 | [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) | BTC 신규진입/추가매수 평균가, trailing 초기화, add-on 카운트 갱신 테스트 추가 후 분리 |
-| P3 | 알트 루프의 물리적 단계 함수 분할 | [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py), [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py) | 진입 준비, 청산 준비, 주문 실행, 체결 후처리를 함수 단위로 나누되 로그 필드 diff 검증 필요 |
+- 없음. 새 후보는 실거래 로그, 테스트 중복, 또는 같은 파일을 반복 수정해야 하는 근거가 생길 때 추가합니다.
 
 진행 원칙:
 
@@ -397,7 +402,7 @@
 
 현재 단타 프로젝트는 심볼별 최신 분석 로그 기준으로 아래 보수형 8단계 레짐을 분류합니다.
 
-BTC 와 알트는 [core/strategy/regime_router.py](/Users/plo/Documents/auto_coin_bot/core/strategy/regime_router.py) 에서 먼저
+BTC 와 알트는 [core/strategy/regime_router.py](core/strategy/regime_router.py) 에서 먼저
 - `skip`
 - `breakout`
 - `trend_follow`

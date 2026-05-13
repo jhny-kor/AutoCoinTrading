@@ -6,23 +6,23 @@
 
 작업을 시작할 때는 아래 순서로 보는 것이 가장 빠릅니다.
 
-1. [README.md](/Users/plo/Documents/auto_coin_bot/README.md)
+1. [README.md](README.md)
    현재 운영 기준, 실행 방법, 로그 위치를 먼저 확인합니다.
-2. [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md)
+2. [docs/PLANS.md](docs/PLANS.md)
    지금 적용 중인 전략과 다음 조정 계획을 확인합니다.
-3. [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
+3. [docs/STRATEGY_DECISIONS.md](docs/STRATEGY_DECISIONS.md)
    왜 이 값으로 바뀌었는지, 최근 조정 근거를 확인합니다.
-4. [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)
+4. [docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md)
    모듈 역할을 빠르게 찾습니다.
 
 ## 2. 디렉토리 구조 그림
 
 아래 그림 파일이 현재 소스 디렉토리 구조를 요약합니다.
 
-![worker-directory-map](/Users/plo/Documents/auto_coin_bot/docs/worker_directory_map.svg)
+![worker-directory-map](docs/worker_directory_map.svg)
 
 원본 파일:
-- [docs/worker_directory_map.svg](/Users/plo/Documents/auto_coin_bot/docs/worker_directory_map.svg)
+- [docs/worker_directory_map.svg](docs/worker_directory_map.svg)
 
 ## 3. 디렉토리별 역할
 
@@ -40,21 +40,21 @@
 ### `core/`
 
 - 거래소 공통 실행, 전략 계산, 리스크 계산, 포지션 수명주기, 공통 메트릭을 둡니다.
-- 최근 업비트 지연 완화는 [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)에 들어갔습니다.
-- 프로그램 메타데이터와 런타임 bootstrap 은 [core/runtime](/Users/plo/Documents/auto_coin_bot/core/runtime)에 있습니다.
+- 최근 업비트 지연 완화는 [core/execution/upbit.py](core/execution/upbit.py)에 들어갔습니다.
+- 프로그램 메타데이터와 런타임 bootstrap 은 [core/runtime](core/runtime)에 있습니다.
 - 새로운 공통 규칙은 먼저 `core/`로 내릴 수 있는지 확인하는 편이 좋습니다.
 
 ### `settings/`
 
 - `config/runtime.toml` + override / secrets 레이어를 실제 구조체로 읽는 본체입니다.
-- 알트 공통 전략은 [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py), BTC 전략은 [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)에서 읽습니다.
+- 알트 공통 전략은 [settings/strategy_settings.py](settings/strategy_settings.py), BTC 전략은 [settings/btc_trend_settings.py](settings/btc_trend_settings.py)에서 읽습니다.
 
 ### 전략 본체 파일
 
-- OKX 알트: [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
-- 업비트 알트: [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
-- OKX BTC: [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
-- 업비트 BTC: [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+- OKX 알트: [ma_crossover_bot.py](ma_crossover_bot.py)
+- 업비트 알트: [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
+- OKX BTC: [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py)
+- 업비트 BTC: [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
 
 작업 기준:
 - 진입/청산 조건 조정은 전략 본체와 `core/strategy`, `core/risk`를 같이 봅니다.
@@ -64,9 +64,9 @@
 ### `reporting/`
 
 - 분석/비교/텔레그램 리포트 본체입니다.
-- 텔레그램 리스너 설정/offset/polling 은 [reporting/listener_runtime.py](/Users/plo/Documents/auto_coin_bot/reporting/listener_runtime.py)에 분리되어 있습니다.
-- `/positions`용 거래소 스냅샷은 [reporting/position_snapshot.py](/Users/plo/Documents/auto_coin_bot/reporting/position_snapshot.py)에 있습니다.
-- 백테스트 대 실거래 비교는 [reporting/compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/reporting/compare_backtest_to_live.py)를 봅니다.
+- 텔레그램 리스너 설정/offset/polling 은 [reporting/listener_runtime.py](reporting/listener_runtime.py)에 분리되어 있습니다.
+- `/positions`용 거래소 스냅샷은 [reporting/position_snapshot.py](reporting/position_snapshot.py)에 있습니다.
+- 백테스트 대 실거래 비교는 [reporting/compare_backtest_to_live.py](reporting/compare_backtest_to_live.py)를 봅니다.
 
 ### `tools/`
 
@@ -77,18 +77,18 @@
 
 - 현재 운영 기준 문서는 모두 여기 있습니다.
 - 작업자 기준 핵심 문서는 다음 네 개입니다.
-  - [docs/WORKER_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/WORKER_GUIDE.md)
-  - [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md)
-  - [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
-  - [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)
+  - [docs/WORKER_GUIDE.md](docs/WORKER_GUIDE.md)
+  - [docs/PLANS.md](docs/PLANS.md)
+  - [docs/STRATEGY_DECISIONS.md](docs/STRATEGY_DECISIONS.md)
+  - [docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md)
 
 ## 4. 작업 종류별 시작 파일
 
 ### 전략 수치 조정
 
-- 먼저 [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md), [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
-- 실제 값 반영: [config/runtime.example.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.example.toml), [config/runtime.toml](/Users/plo/Documents/auto_coin_bot/config/runtime.toml), [`.env.secrets.example`](/Users/plo/Documents/auto_coin_bot/.env.secrets.example), [`.env.secrets`](/Users/plo/Documents/auto_coin_bot/.env.secrets)
-- 로더 확인: [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py), [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
+- 먼저 [docs/PLANS.md](docs/PLANS.md), [docs/STRATEGY_DECISIONS.md](docs/STRATEGY_DECISIONS.md)
+- 실제 값 반영: [config/runtime.example.toml](config/runtime.example.toml), [config/runtime.toml](config/runtime.toml), [`.env.secrets.example`](.env.secrets.example), [`.env.secrets`](.env.secrets)
+- 로더 확인: [settings/strategy_settings.py](settings/strategy_settings.py), [settings/btc_trend_settings.py](settings/btc_trend_settings.py)
 
 세부 순서:
 1. 최근 실거래와 백테스트 비교를 먼저 확인합니다.
@@ -99,10 +99,10 @@
 
 ### 진입/청산 로직 변경
 
-- 알트: [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py), [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
-- BTC: [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py), [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
-- 공통 계산: [core/strategy](/Users/plo/Documents/auto_coin_bot/core/strategy), [core/risk](/Users/plo/Documents/auto_coin_bot/core/risk)
-- 신규 진입 비중 계산: [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+- 알트: [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py), [ma_crossover_bot.py](ma_crossover_bot.py)
+- BTC: [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py), [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py)
+- 공통 계산: [core/strategy](core/strategy), [core/risk](core/risk)
+- 신규 진입 비중 계산: [core/risk/allocation.py](core/risk/allocation.py)
 
 세부 순서:
 1. 먼저 어느 거래소/전략 파일에서 실제 조건문을 쓰는지 찾습니다.
@@ -111,13 +111,13 @@
 4. 변경 후 `trade_history_logger.py` 와 `structured_log_manager.py` 에 남는 로그 필드가 부족하지 않은지 확인합니다.
 5. 실거래 영향을 주는 경우 최근 로그 해석과 기대 효과를 문서에 남깁니다.
 
-포지션 비중, allocation score, 포트폴리오 예산 로그를 바꿀 때는 먼저 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)의 sizing/log formatter 와 [tests/test_regime_position_scale.py](/Users/plo/Documents/auto_coin_bot/tests/test_regime_position_scale.py)를 확인합니다.
+포지션 비중, allocation score, 포트폴리오 예산 로그를 바꿀 때는 먼저 [core/risk/allocation.py](core/risk/allocation.py)의 sizing/log formatter 와 [tests/test_regime_position_scale.py](tests/test_regime_position_scale.py)를 확인합니다.
 
 ### 업비트/OKX 주문 지연 문제
 
-- 업비트: [core/execution/upbit.py](/Users/plo/Documents/auto_coin_bot/core/execution/upbit.py)
-- OKX: [core/execution/okx.py](/Users/plo/Documents/auto_coin_bot/core/execution/okx.py)
-- 체결 품질 확인: [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
+- 업비트: [core/execution/upbit.py](core/execution/upbit.py)
+- OKX: [core/execution/okx.py](core/execution/okx.py)
+- 체결 품질 확인: [trade_history_logger.py](trade_history_logger.py)
 
 세부 순서:
 1. `trade_history.jsonl` 의 `api_latency_ms`, `exchange_ack_latency_ms`, `fill_ratio`, `slippage_bps` 를 먼저 확인합니다.
@@ -128,9 +128,9 @@
 
 ### 로그/백테스트/비교
 
-- 로그 구조: [structured_log_manager.py](/Users/plo/Documents/auto_coin_bot/structured_log_manager.py), [trade_history_logger.py](/Users/plo/Documents/auto_coin_bot/trade_history_logger.py)
-- 백테스트 실행: [tools/backtest_replay.py](/Users/plo/Documents/auto_coin_bot/tools/backtest_replay.py), [tools/backtest_report_runner.py](/Users/plo/Documents/auto_coin_bot/tools/backtest_report_runner.py)
-- 실거래 비교: [reporting/compare_backtest_to_live.py](/Users/plo/Documents/auto_coin_bot/reporting/compare_backtest_to_live.py)
+- 로그 구조: [structured_log_manager.py](structured_log_manager.py), [trade_history_logger.py](trade_history_logger.py)
+- 백테스트 실행: [tools/backtest_replay.py](tools/backtest_replay.py), [tools/backtest_report_runner.py](tools/backtest_report_runner.py)
+- 실거래 비교: [reporting/compare_backtest_to_live.py](reporting/compare_backtest_to_live.py)
 
 세부 순서:
 1. 먼저 비교 대상 기간을 명확히 정합니다.
@@ -141,10 +141,10 @@
 
 ### 문서 정리
 
-- 운영 기준: [README.md](/Users/plo/Documents/auto_coin_bot/README.md)
-- 현재 계획: [docs/PLANS.md](/Users/plo/Documents/auto_coin_bot/docs/PLANS.md)
-- 변경 근거: [docs/STRATEGY_DECISIONS.md](/Users/plo/Documents/auto_coin_bot/docs/STRATEGY_DECISIONS.md)
-- 모듈 안내: [docs/MODULE_GUIDE.md](/Users/plo/Documents/auto_coin_bot/docs/MODULE_GUIDE.md)
+- 운영 기준: [README.md](README.md)
+- 현재 계획: [docs/PLANS.md](docs/PLANS.md)
+- 변경 근거: [docs/STRATEGY_DECISIONS.md](docs/STRATEGY_DECISIONS.md)
+- 모듈 안내: [docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md)
 
 세부 순서:
 1. 현재 상태를 바꿨으면 `docs/PLANS.md`를 갱신합니다.
@@ -154,20 +154,20 @@
 
 ### 운영 재기동
 
-- 프로세스 상태/재기동: [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)
-- launchd 관련 파일: [launchd](/Users/plo/Documents/auto_coin_bot/launchd)
+- 프로세스 상태/재기동: [bot_manager.py](bot_manager.py)
+- launchd 관련 파일: [launchd](launchd)
 
 세부 순서:
 1. 현재 실행 상태를 먼저 확인합니다.
 2. 설정 변경이 크면 `stop all` 후 `start all` 로 재기동합니다.
 3. 일부 프로세스만 남으면 개별 `stop --force` 로 정리합니다.
-4. `PPID 0`, 실행시간 `?` 처럼 pidfile 기준 stale 상태가 보이면 [bot_manager.py](/Users/plo/Documents/auto_coin_bot/bot_manager.py)의 defunct pidfile 정리가 동작하는지 `status` 를 다시 확인합니다.
+4. `PPID 0`, 실행시간 `?` 처럼 pidfile 기준 stale 상태가 보이면 [bot_manager.py](bot_manager.py)의 defunct pidfile 정리가 동작하는지 `status` 를 다시 확인합니다.
 5. 재기동 후 PID 와 실행시간을 다시 확인합니다.
 6. 설정 반영 여부는 최신 로그 첫 구간에서 확인합니다.
 
 ### 테스트와 검증
 
-- 단위 테스트: [tests](/Users/plo/Documents/auto_coin_bot/tests)
+- 단위 테스트: [tests](tests)
 - 빠른 문법 확인: `py_compile`
 
 세부 순서:

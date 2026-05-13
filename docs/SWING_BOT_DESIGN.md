@@ -15,7 +15,7 @@
 
 추천 새 폴더:
 
-- `/Users/plo/Documents/auto_coin_bot_swing`
+- `../auto_coin_bot_swing`
 
 추천 내부 구조:
 

@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-14: 알트 진입/청산 퍼널 실행 단계를 공통 alt_loop helper 로 옮김
+- 2026-05-14: OKX 시장가 주문 제출과 타이밍 기록을 공통 order adapter 로 옮김
 - 2026-05-14: 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮겨 run_bot 단계 분기를 줄임
 - 2026-05-14: 최소 주문 수량 기준 매도 fallback 정책을 공통 alt_exit helper 로 옮김
 - 2026-05-14: 주문 요청/체결 구조화 로그 입력을 공통 helper 로 옮김
@@ -95,8 +97,11 @@ from core.execution.okx import (
     fetch_ohlcv_okx as fetch_ohlcv_okx_core,
     get_spot_balances_okx as get_spot_balances_okx_core,
     load_okx_config as load_okx_config_core,
-    place_market_order_okx as place_market_order_okx_core,
     safe_amount_to_precision_okx as safe_amount_to_precision_okx_core,
+)
+from core.execution.order_adapters import (
+    submit_okx_market_buy,
+    submit_okx_market_sell,
 )
 from core.logging.metrics import build_alt_common_metrics
 from core.notifications.trade_messages import (
@@ -140,7 +145,7 @@ from core.strategy.entry_committee import (
     load_entry_committee_settings,
     record_entry_committee_result,
 )
-from core.strategy.exit_reasons import resolve_alt_exit_ready_reason
+from core.strategy.alt_loop import run_alt_entry_funnel, run_alt_exit_funnel
 from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_btc_regime_correlation_volatility_risk,
@@ -326,12 +331,6 @@ def calc_avg_abs_change_pct(closes, lookback: int) -> float | None:
     if not changes:
         return None
     return sum(changes) / len(changes)
-
-
-def place_market_order_okx(
-    exchange: ccxt.okx, symbol: str, side: str, size: float, tgt_ccy: str | None = None
-):
-    return place_market_order_okx_core(exchange, symbol, side, size, tgt_ccy=tgt_ccy)
 
 
 def run_bot():
@@ -1988,13 +1987,11 @@ def run_bot():
                     entry_steps=entry_steps,
                     result=entry_committee_result,
                 )
-                entry_ready, _ = structured_logger.run_funnel(
+                entry_ready = run_alt_entry_funnel(
+                    structured_logger=structured_logger,
                     symbol=symbol,
-                    side="entry",
-                    steps=entry_steps,
+                    entry_steps=entry_steps,
                     metrics=common_metrics,
-                    ready_stage="buy_ready",
-                    ready_reason="entry_conditions_met",
                 )
 
                 exit_steps = build_alt_exit_steps(
@@ -2039,19 +2036,16 @@ def run_bot():
                         required={"sell_amount_gt": 0, "min_order_amount": min_order_amount},
                     )
                 )
-                exit_ready, _ = structured_logger.run_funnel(
+                exit_ready = run_alt_exit_funnel(
+                    structured_logger=structured_logger,
                     symbol=symbol,
-                    side="exit",
-                    steps=exit_steps,
+                    exit_steps=exit_steps,
                     metrics=common_metrics,
-                    ready_stage="sell_ready",
-                    ready_reason=resolve_alt_exit_ready_reason(
-                        stop_loss_triggered=stop_loss_triggered,
-                        profit_protect_triggered=profit_protect_triggered,
-                        break_even_guard_triggered=break_even_guard_triggered,
-                        volume_spike_exit_triggered=volume_spike_exit_triggered,
-                        sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
-                    ),
+                    stop_loss_triggered=stop_loss_triggered,
+                    profit_protect_triggered=profit_protect_triggered,
+                    break_even_guard_triggered=break_even_guard_triggered,
+                    volume_spike_exit_triggered=volume_spike_exit_triggered,
+                    sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                 )
 
                 # 매수 신호 발생 시, 분할 횟수/쿨다운/추가 매수 가격 조건을 모두 만족하면 진입
@@ -2073,14 +2067,11 @@ def run_bot():
                         log(
                             f"[매수] 시장가 매수 시도: {symbol}, 사용 금액={order_value} {quote}"
                         )
-                        order_request_started_at = time.time()
                         try:
-                            order = place_market_order_okx(
-                                exchange,
-                                symbol,
-                                "buy",
-                                order_value,
-                                tgt_ccy="quote_ccy",
+                            order_submission = submit_okx_market_buy(
+                                exchange=exchange,
+                                symbol=symbol,
+                                order_value_quote=order_value,
                             )
                         except Exception as order_error:
                             log_order_failure(
@@ -2093,7 +2084,9 @@ def run_bot():
                                 error=order_error,
                             )
                             continue
-                        order_response_received_at = time.time()
+                        order = order_submission.order
+                        order_request_started_at = order_submission.request_started_at
+                        order_response_received_at = order_submission.response_received_at
                         estimated_bought_amount = order_value / last_close
                         buy_fill_state = apply_alt_buy_fill_state(
                             symbol=symbol,
@@ -2267,14 +2260,11 @@ def run_bot():
                             metrics=common_metrics,
                         )
                         log(f"[매도] 시장가 매도 시도: {symbol}, 수량={amount} {base}")
-                        order_request_started_at = time.time()
                         try:
-                            order = place_market_order_okx(
-                                exchange,
-                                symbol,
-                                "sell",
-                                amount,
-                                tgt_ccy="base_ccy",
+                            order_submission = submit_okx_market_sell(
+                                exchange=exchange,
+                                symbol=symbol,
+                                amount=amount,
                             )
                         except Exception as order_error:
                             log_order_failure(
@@ -2287,7 +2277,9 @@ def run_bot():
                                 error=order_error,
                             )
                             continue
-                        order_response_received_at = time.time()
+                        order = order_submission.order
+                        order_request_started_at = order_submission.request_started_at
+                        order_response_received_at = order_submission.response_received_at
                         sell_fill_state = apply_alt_sell_fill_state(
                             symbol=symbol,
                             sold_amount=amount,

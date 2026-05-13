@@ -1,14 +1,60 @@
 """
 작업 요약
+- BTC 신규진입/추가매수 lifecycle 공통 helper 동작을 검증한다.
 - 알트 매수/매도 체결 후 포지션 lifecycle 공통 helper 동작을 검증한다.
 """
 
 import unittest
 
-from core.positions.lifecycle import apply_alt_buy_fill_state, apply_alt_sell_fill_state
+from core.positions.lifecycle import (
+    apply_alt_buy_fill_state,
+    apply_alt_sell_fill_state,
+    apply_btc_add_on_fill_state,
+    apply_btc_entry_fill_state,
+)
 
 
 class PositionLifecycleTests(unittest.TestCase):
+    def test_apply_btc_entry_fill_state_initializes_position(self):
+        state = apply_btc_entry_fill_state(
+            symbol="BTC/USDT",
+            bought_amount=0.01,
+            last_close=100000.0,
+            now_ts=1234.0,
+        )
+
+        self.assertEqual(100000.0, state.entry_price_after)
+        self.assertEqual(1234.0, state.entry_opened_at)
+        self.assertEqual("BTC/USDT:1234", state.position_id)
+        self.assertEqual(100000.0, state.highest_price_since_entry)
+        self.assertEqual(100000.0, state.lowest_price_since_entry)
+        self.assertFalse(state.trailing_armed)
+        self.assertIsNone(state.trailing_armed_at)
+        self.assertIsNone(state.trailing_activation_price)
+        self.assertEqual(1234.0, state.last_trade_at)
+        self.assertEqual(0, state.add_on_count_after)
+        self.assertEqual(0.01, state.remaining_base_after_estimate)
+
+    def test_apply_btc_add_on_fill_state_averages_position(self):
+        state = apply_btc_add_on_fill_state(
+            previous_amount=0.02,
+            added_amount=0.01,
+            previous_entry_price=90000.0,
+            last_close=120000.0,
+            current_add_on_count=0,
+            highest_price_since_entry=110000.0,
+            lowest_price_since_entry=85000.0,
+            now_ts=1300.0,
+        )
+
+        self.assertEqual(0.01, state.added_amount)
+        self.assertAlmostEqual(0.03, state.total_amount)
+        self.assertAlmostEqual(100000.0, state.entry_price_after)
+        self.assertEqual(120000.0, state.highest_price_since_entry)
+        self.assertEqual(85000.0, state.lowest_price_since_entry)
+        self.assertEqual(1300.0, state.last_trade_at)
+        self.assertEqual(1, state.add_on_count_after)
+
     def test_apply_alt_buy_fill_state_initializes_new_position(self):
         entry_price = {}
         entry_count = {}

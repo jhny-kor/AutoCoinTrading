@@ -228,7 +228,7 @@ score 기반 동적 배분은 아래를 만족해야 합니다.
 
 ### 1. 설정
 
-- [settings/portfolio_allocator.py](/Users/plo/Documents/auto_coin_bot/settings/portfolio_allocator.py)
+- [settings/portfolio_allocator.py](settings/portfolio_allocator.py)
 
 추가 후보:
 
@@ -242,7 +242,7 @@ score 기반 동적 배분은 아래를 만족해야 합니다.
 
 ### 2. 계산 helper
 
-- [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)
+- [core/risk/allocation.py](core/risk/allocation.py)
 
 추가 후보 함수:
 
@@ -251,10 +251,10 @@ score 기반 동적 배분은 아래를 만족해야 합니다.
 
 ### 3. 실제 호출 위치
 
-- [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
-- [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
-- [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
-- [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
+- [ma_crossover_bot.py](ma_crossover_bot.py)
+- [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
+- [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py)
+- [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
 
 기존 `base_position_ratio -> regime_scale -> btc_scale`
 뒤에 `score_scale`을 마지막으로 곱하는 방식이 가장 안전합니다.

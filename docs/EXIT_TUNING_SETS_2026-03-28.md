@@ -8,15 +8,15 @@
 
 - 적용 세트: `혼합형`
 - 보관 기준선:
-  - [conservative_exit_set_full](/Users/plo/Documents/auto_coin_bot/reports/backtest_batches/20260328_003929__conservative_exit_set_full)
-  - [medium_exit_set_full](/Users/plo/Documents/auto_coin_bot/reports/backtest_batches/20260328_004605__medium_exit_set_full)
-  - [diff 요약](/Users/plo/Documents/auto_coin_bot/reports/backtest_batches/20260328_005001__diff/diff_summary.md)
+  - [conservative_exit_set_full](reports/backtest_batches/20260328_003929__conservative_exit_set_full)
+  - [medium_exit_set_full](reports/backtest_batches/20260328_004605__medium_exit_set_full)
+  - [diff 요약](reports/backtest_batches/20260328_005001__diff/diff_summary.md)
 
 ## 비교 근거
 
-- [ETH/USDT 비교](/Users/plo/Documents/auto_coin_bot/reports/backtest_batches/20260328_002434__weekly/results/alt__okx__ETH_USDT/comparison.md)
-- [ETH/KRW 비교](/Users/plo/Documents/auto_coin_bot/reports/backtest_batches/20260328_002434__weekly/results/alt__upbit__ETH_KRW/comparison.md)
-- [XRP/KRW 비교](/Users/plo/Documents/auto_coin_bot/reports/backtest_batches/20260328_002434__weekly/results/alt__upbit__XRP_KRW/comparison.md)
+- [ETH/USDT 비교](reports/backtest_batches/20260328_002434__weekly/results/alt__okx__ETH_USDT/comparison.md)
+- [ETH/KRW 비교](reports/backtest_batches/20260328_002434__weekly/results/alt__upbit__ETH_KRW/comparison.md)
+- [XRP/KRW 비교](reports/backtest_batches/20260328_002434__weekly/results/alt__upbit__XRP_KRW/comparison.md)
 
 ## 보수형 세트
 
@@ -48,7 +48,7 @@
 
 partial env 파일:
 
-- [env_overrides/medium.env](/Users/plo/Documents/auto_coin_bot/env_overrides/medium.env)
+- [env_overrides/medium.env](env_overrides/medium.env)
 
 - `STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT=0.12`
 - `STRATEGY_MIN_TAKE_PROFIT_PCT_MAP`
@@ -103,7 +103,7 @@ partial env 파일:
 
 2. 중간형 값을 `.env` 에 적용
 
-- 새로운 비교 세트를 만들 때는 [env_overrides/medium.env](/Users/plo/Documents/auto_coin_bot/env_overrides/medium.env) 같은 partial env 파일을 기준으로 필요한 키만 `.env` 에 덮어씁니다.
+- 새로운 비교 세트를 만들 때는 [env_overrides/medium.env](env_overrides/medium.env) 같은 partial env 파일을 기준으로 필요한 키만 `.env` 에 덮어씁니다.
 
 3. 알트 봇 재시작
 

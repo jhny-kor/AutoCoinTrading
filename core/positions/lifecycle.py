@@ -1,5 +1,6 @@
 """
 작업 요약
+- BTC 신규진입/추가매수 후 평균 진입가와 trailing 초기 상태 갱신을 공통 함수로 분리했다.
 - 알트 매도 체결 후 남은 수량/진입 카운트/손절 컨텍스트/부분청산 플래그 갱신을 공통 함수로 분리했다.
 - 알트 매수 체결 후 평균 진입가/진입 카운트/고저가 상태 갱신을 공통 함수로 분리했다.
 - 알트/BTC 포지션 종료 후 내부 상태 초기화를 공통 함수로 분리했다.
@@ -29,6 +30,36 @@ class AltSellFillState:
     entry_count_after: int
     holding_seconds: float | None
     should_clear_position: bool
+
+
+@dataclass(frozen=True)
+class BtcEntryFillState:
+    """BTC 신규 진입 체결 후 갱신된 내부 포지션 상태를 나타낸다."""
+
+    entry_price_after: float
+    entry_opened_at: float
+    position_id: str
+    highest_price_since_entry: float
+    lowest_price_since_entry: float
+    trailing_armed: bool
+    trailing_armed_at: float | None
+    trailing_activation_price: float | None
+    last_trade_at: float
+    add_on_count_after: int
+    remaining_base_after_estimate: float
+
+
+@dataclass(frozen=True)
+class BtcAddOnFillState:
+    """BTC 추가매수 체결 후 갱신된 내부 포지션 상태를 나타낸다."""
+
+    added_amount: float
+    total_amount: float
+    entry_price_after: float
+    highest_price_since_entry: float
+    lowest_price_since_entry: float
+    last_trade_at: float
+    add_on_count_after: int
 
 
 def clear_alt_position_state(
@@ -144,6 +175,61 @@ def apply_alt_sell_fill_state(
         entry_count_after=entry_count_after,
         holding_seconds=holding_seconds,
         should_clear_position=should_clear_position,
+    )
+
+
+def apply_btc_entry_fill_state(
+    *,
+    symbol: str,
+    bought_amount: float,
+    last_close: float,
+    now_ts: float,
+) -> BtcEntryFillState:
+    """BTC 신규 진입 체결 후 공통 내부 상태를 계산한다."""
+    return BtcEntryFillState(
+        entry_price_after=last_close,
+        entry_opened_at=now_ts,
+        position_id=f"{symbol}:{int(now_ts)}",
+        highest_price_since_entry=last_close,
+        lowest_price_since_entry=last_close,
+        trailing_armed=False,
+        trailing_armed_at=None,
+        trailing_activation_price=None,
+        last_trade_at=now_ts,
+        add_on_count_after=0,
+        remaining_base_after_estimate=bought_amount,
+    )
+
+
+def apply_btc_add_on_fill_state(
+    *,
+    previous_amount: float,
+    added_amount: float,
+    previous_entry_price: float | None,
+    last_close: float,
+    current_add_on_count: int,
+    highest_price_since_entry: float | None,
+    lowest_price_since_entry: float | None,
+    now_ts: float,
+) -> BtcAddOnFillState:
+    """BTC 추가매수 체결 후 평균 진입가와 고저가 상태를 계산한다."""
+    total_amount = previous_amount + added_amount
+    entry_price_before = previous_entry_price or last_close
+    if total_amount > 0:
+        entry_price_after = (
+            (entry_price_before * previous_amount) + (last_close * added_amount)
+        ) / total_amount
+    else:
+        entry_price_after = last_close
+
+    return BtcAddOnFillState(
+        added_amount=added_amount,
+        total_amount=total_amount,
+        entry_price_after=entry_price_after,
+        highest_price_since_entry=max(highest_price_since_entry or last_close, last_close),
+        lowest_price_since_entry=min(lowest_price_since_entry or last_close, last_close),
+        last_trade_at=now_ts,
+        add_on_count_after=current_add_on_count + 1,
     )
 
 

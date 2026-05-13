@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-14: 알트 진입/청산 퍼널 실행 단계를 공통 alt_loop helper 로 옮김
+- 2026-05-14: 업비트 시장가 주문 제출, private 이벤트 보강, 캐시 무효화를 공통 order adapter 로 옮김
 - 2026-05-14: 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮겨 run_bot 단계 분기를 줄임
 - 2026-05-14: 최소 주문 금액 기준 매도 fallback 정책을 공통 alt_exit helper 로 옮김
 - 2026-05-14: 주문 요청/체결 구조화 로그 입력을 공통 helper 로 옮김
@@ -102,19 +104,18 @@ from core.execution.order_logging import log_order_filled, log_order_requested
 from core.execution.upbit import (
     apply_upbit_buy_order_buffer as apply_upbit_buy_order_buffer_core,
     create_upbit_market_data_provider as create_upbit_market_data_provider_core,
-    create_market_buy_order_upbit as create_market_buy_order_upbit_core,
-    create_market_sell_order_upbit as create_market_sell_order_upbit_core,
     create_upbit_client as create_upbit_client_core,
-    enrich_upbit_order_with_private_event as enrich_upbit_order_with_private_event_core,
     fetch_best_bid_upbit as fetch_best_bid_upbit_core,
     fetch_ohlcv_upbit_with_provider as fetch_ohlcv_upbit_with_provider_core,
     fetch_ohlcv_upbit as fetch_ohlcv_upbit_core,
     get_spot_balances_upbit_with_provider as get_spot_balances_upbit_with_provider_core,
-    invalidate_upbit_balance_cache as invalidate_upbit_balance_cache_core,
-    invalidate_upbit_orderbook_cache as invalidate_upbit_orderbook_cache_core,
     load_upbit_config as load_upbit_config_core,
     safe_amount_to_precision_upbit as safe_amount_to_precision_upbit_core,
     should_refresh_best_bid_upbit as should_refresh_best_bid_upbit_core,
+)
+from core.execution.order_adapters import (
+    submit_upbit_market_buy,
+    submit_upbit_market_sell,
 )
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from core.logging.metrics import build_alt_common_metrics
@@ -159,7 +160,7 @@ from core.strategy.entry_committee import (
     load_entry_committee_settings,
     record_entry_committee_result,
 )
-from core.strategy.exit_reasons import resolve_alt_exit_ready_reason
+from core.strategy.alt_loop import run_alt_entry_funnel, run_alt_exit_funnel
 from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_btc_regime_correlation_volatility_risk,
@@ -279,37 +280,6 @@ def apply_upbit_buy_order_buffer(
     )
 
 
-def create_market_buy_order_upbit(
-    exchange: ccxt.upbit,
-    symbol: str,
-    cost_to_spend: float,
-):
-    return create_market_buy_order_upbit_core(exchange, symbol, cost_to_spend)
-
-
-def create_market_sell_order_upbit(
-    exchange: ccxt.upbit,
-    symbol: str,
-    amount: float,
-):
-    """업비트 시장가 매도 공통 helper."""
-    return create_market_sell_order_upbit_core(exchange, symbol, amount)
-
-
-def enrich_upbit_order_with_private_event(
-    raw_order,
-    *,
-    symbol: str,
-    market_data_provider: UpbitMarketDataProvider | None = None,
-):
-    """최근 myOrder private 이벤트를 주문 응답에 보강한다."""
-    return enrich_upbit_order_with_private_event_core(
-        raw_order,
-        symbol=symbol,
-        market_data_provider=market_data_provider,
-    )
-
-
 def fetch_ohlcv(
     exchange: ccxt.upbit,
     symbol: str,
@@ -381,16 +351,6 @@ def safe_amount_to_precision(exchange: ccxt.upbit, symbol: str, amount: float) -
 
 def fetch_best_bid(exchange: ccxt.upbit, symbol: str) -> float | None:
     return fetch_best_bid_upbit_core(exchange, symbol)
-
-
-def invalidate_upbit_balance_cache(exchange: ccxt.upbit) -> None:
-    """업비트 잔고 캐시를 비운다."""
-    invalidate_upbit_balance_cache_core(exchange)
-
-
-def invalidate_upbit_orderbook_cache(exchange: ccxt.upbit, symbol: str | None = None) -> None:
-    """업비트 호가 캐시를 비운다."""
-    invalidate_upbit_orderbook_cache_core(exchange, symbol)
 
 
 def should_refresh_best_bid(
@@ -2135,13 +2095,11 @@ def run_bot():
                     entry_steps=entry_steps,
                     result=entry_committee_result,
                 )
-                entry_ready, _ = structured_logger.run_funnel(
+                entry_ready = run_alt_entry_funnel(
+                    structured_logger=structured_logger,
                     symbol=symbol,
-                    side="entry",
-                    steps=entry_steps,
+                    entry_steps=entry_steps,
                     metrics=common_metrics,
-                    ready_stage="buy_ready",
-                    ready_reason="entry_conditions_met",
                 )
 
                 exit_steps = build_alt_exit_steps(
@@ -2185,19 +2143,16 @@ def run_bot():
                         ),
                     ]
                 )
-                exit_ready, _ = structured_logger.run_funnel(
+                exit_ready = run_alt_exit_funnel(
+                    structured_logger=structured_logger,
                     symbol=symbol,
-                    side="exit",
-                    steps=exit_steps,
+                    exit_steps=exit_steps,
                     metrics=common_metrics,
-                    ready_stage="sell_ready",
-                    ready_reason=resolve_alt_exit_ready_reason(
-                        stop_loss_triggered=stop_loss_triggered,
-                        profit_protect_triggered=profit_protect_triggered,
-                        break_even_guard_triggered=break_even_guard_triggered,
-                        volume_spike_exit_triggered=volume_spike_exit_triggered,
-                        sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
-                    ),
+                    stop_loss_triggered=stop_loss_triggered,
+                    profit_protect_triggered=profit_protect_triggered,
+                    break_even_guard_triggered=break_even_guard_triggered,
+                    volume_spike_exit_triggered=volume_spike_exit_triggered,
+                    sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                 )
 
                 # 매수 신호 발생 시, 분할 횟수/쿨다운/추가 매수 가격 조건을 만족하면 진입
@@ -2223,12 +2178,12 @@ def run_bot():
                             metrics=common_metrics,
                         )
                         log(f"[매수] 시장가 매수 시도: {symbol}, 사용 금액={cost_to_spend:.0f} {quote}, 수량={amount}")
-                        order_request_started_at = time.time()
                         try:
-                            order = create_market_buy_order_upbit(
-                                exchange,
-                                symbol,
-                                cost_to_spend,
+                            order_submission = submit_upbit_market_buy(
+                                exchange=exchange,
+                                symbol=symbol,
+                                order_value_quote=cost_to_spend,
+                                market_data_provider=market_data_provider,
                             )
                         except Exception as order_error:
                             log_order_failure(
@@ -2245,14 +2200,9 @@ def run_bot():
                                 extra={"strategy_version": strategy.version},
                             )
                             continue
-                        order_response_received_at = time.time()
-                        order = enrich_upbit_order_with_private_event(
-                            order,
-                            symbol=symbol,
-                            market_data_provider=market_data_provider,
-                        )
-                        invalidate_upbit_balance_cache(exchange)
-                        invalidate_upbit_orderbook_cache(exchange, symbol)
+                        order = order_submission.order
+                        order_request_started_at = order_submission.request_started_at
+                        order_response_received_at = order_submission.response_received_at
                         buy_fill_state = apply_alt_buy_fill_state(
                             symbol=symbol,
                             bought_amount=amount,
@@ -2433,9 +2383,13 @@ def run_bot():
                             metrics=common_metrics,
                         )
                         log(f"[매도] 시장가 매도 시도: {symbol}, 수량={amount}")
-                        order_request_started_at = time.time()
                         try:
-                            order = create_market_sell_order_upbit(exchange, symbol, amount)
+                            order_submission = submit_upbit_market_sell(
+                                exchange=exchange,
+                                symbol=symbol,
+                                amount=amount,
+                                market_data_provider=market_data_provider,
+                            )
                         except Exception as order_error:
                             log_order_failure(
                                 structured_logger=structured_logger,
@@ -2448,14 +2402,9 @@ def run_bot():
                                 extra={"strategy_version": strategy.version},
                             )
                             continue
-                        order_response_received_at = time.time()
-                        order = enrich_upbit_order_with_private_event(
-                            order,
-                            symbol=symbol,
-                            market_data_provider=market_data_provider,
-                        )
-                        invalidate_upbit_balance_cache(exchange)
-                        invalidate_upbit_orderbook_cache(exchange, symbol)
+                        order = order_submission.order
+                        order_request_started_at = order_submission.request_started_at
+                        order_response_received_at = order_submission.response_received_at
                         sell_fill_state = apply_alt_sell_fill_state(
                             symbol=symbol,
                             sold_amount=amount,

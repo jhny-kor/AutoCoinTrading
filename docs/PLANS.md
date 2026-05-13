@@ -13,41 +13,43 @@
 
 ### 2026-05-14 현재 리팩토링 기준
 
-- 알트 매수 체결 후 평균 진입가, 진입 카운트, 포지션 시작 시각, 최고/최저가 갱신은 [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) 의 `apply_alt_buy_fill_state()`로 모았습니다.
-- 알트 매도 체결 후 남은 수량, 진입 카운트, 손절 컨텍스트, 부분익절/부분손절 플래그 갱신은 [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) 의 `apply_alt_sell_fill_state()`로 모았습니다.
-- 알트 매도 주문 직전의 청산 비율, `exit_reason_key`, 한글 청산 사유 결정은 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 의 `resolve_alt_sell_intent()`로 모았습니다.
-- OKX 최소 수량/업비트 최소 금액에 걸리는 부분청산은 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 의 `resolve_alt_sell_order_by_min_amount()`와 `resolve_alt_sell_order_by_min_value()`에서 전량 전환 또는 스킵을 결정합니다.
-- 알트/BTC 주문 요청과 체결 strategy/trade 로그 입력은 [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py) 의 `log_order_requested()`와 `log_order_filled()`로 모았습니다.
-- OKX/업비트 체결 텔레그램 메시지 본문은 [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py) 의 formatter 로 만들며, 거래소별 숫자 자리수만 설정으로 분리합니다.
-- 알트/BTC 청산 퍼널의 `ready_reason` 우선순위는 [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py) 로 모아 `run_bot()` 본문의 긴 삼항 분기를 줄였습니다.
-- 알트 진입 후반부의 SOL probe, 상위 시간봉 하락, LOW_ENERGY, 심볼 레짐, BTC 상관/변동성, 체결 품질, 손절 유사 컨텍스트, 진입 타이밍 가드 퍼널 단계를 [core/strategy/funnels.py](/Users/plo/Documents/auto_coin_bot/core/strategy/funnels.py) 의 `build_alt_entry_guard_steps()`로 모았습니다.
-- 알트 봇의 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) 로 모아 OKX/업비트 청산 준비 상태를 같은 방식으로 계산합니다.
-- SOL 제한형 probe 진입 판정, 진입 신호 승격, 단일 포지션 제한, `LOW_ENERGY`/심볼 레짐 우회 보정을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_entry_state()`로 모았습니다.
-- SOL probe 전용 TP/SL 적용, 수수료 기반 최소 익절률, 최대 보유 시간 청산 판단을 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py) 의 `resolve_sol_probe_exit_state()`로 모았습니다.
-- OKX/업비트 알트 봇은 같은 helper 를 사용하므로, SOL probe 진입/청산 조건이나 레짐 우회 규칙을 바꿀 때는 각 봇 본문보다 [core/strategy/sol_probe.py](/Users/plo/Documents/auto_coin_bot/core/strategy/sol_probe.py)를 먼저 수정합니다.
+- 알트 매수 체결 후 평균 진입가, 진입 카운트, 포지션 시작 시각, 최고/최저가 갱신은 [core/positions/lifecycle.py](core/positions/lifecycle.py) 의 `apply_alt_buy_fill_state()`로 모았습니다.
+- 알트 매도 체결 후 남은 수량, 진입 카운트, 손절 컨텍스트, 부분익절/부분손절 플래그 갱신은 [core/positions/lifecycle.py](core/positions/lifecycle.py) 의 `apply_alt_sell_fill_state()`로 모았습니다.
+- 알트 매도 주문 직전의 청산 비율, `exit_reason_key`, 한글 청산 사유 결정은 [core/risk/alt_exit.py](core/risk/alt_exit.py) 의 `resolve_alt_sell_intent()`로 모았습니다.
+- OKX 최소 수량/업비트 최소 금액에 걸리는 부분청산은 [core/risk/alt_exit.py](core/risk/alt_exit.py) 의 `resolve_alt_sell_order_by_min_amount()`와 `resolve_alt_sell_order_by_min_value()`에서 전량 전환 또는 스킵을 결정합니다.
+- 알트/BTC 주문 요청과 체결 strategy/trade 로그 입력은 [core/execution/order_logging.py](core/execution/order_logging.py) 의 `log_order_requested()`와 `log_order_filled()`로 모았습니다.
+- OKX/업비트 시장가 주문 제출, 요청/응답 시각 기록, 업비트 private 이벤트 보강과 캐시 무효화는 [core/execution/order_adapters.py](core/execution/order_adapters.py) 의 `submit_*_market_*()` 어댑터로 모았습니다.
+- OKX/업비트 체결 텔레그램 메시지 본문은 [core/notifications/trade_messages.py](core/notifications/trade_messages.py) 의 formatter 로 만들며, 거래소별 숫자 자리수만 설정으로 분리합니다.
+- 알트/BTC 청산 퍼널의 `ready_reason` 우선순위는 [core/strategy/exit_reasons.py](core/strategy/exit_reasons.py) 로 모아 `run_bot()` 본문의 긴 삼항 분기를 줄였습니다.
+- 알트 봇 루프의 진입/청산 퍼널 실행 단계는 [core/strategy/alt_loop.py](core/strategy/alt_loop.py) 의 `run_alt_entry_funnel()`과 `run_alt_exit_funnel()`로 분리했습니다.
+- BTC 신규진입/추가매수 후 평균 진입가, 포지션 ID, trailing 초기값, 고저가, add-on count 계산은 [core/positions/lifecycle.py](core/positions/lifecycle.py) 의 `apply_btc_entry_fill_state()`와 `apply_btc_add_on_fill_state()`로 모았습니다.
+- 알트 진입 후반부의 SOL probe, 상위 시간봉 하락, LOW_ENERGY, 심볼 레짐, BTC 상관/변동성, 체결 품질, 손절 유사 컨텍스트, 진입 타이밍 가드 퍼널 단계를 [core/strategy/funnels.py](core/strategy/funnels.py) 의 `build_alt_entry_guard_steps()`로 모았습니다.
+- 알트 봇의 무포지션 기본 지표와 부분익절/부분손절 pending 정책 계산을 [core/risk/alt_exit.py](core/risk/alt_exit.py) 로 모아 OKX/업비트 청산 준비 상태를 같은 방식으로 계산합니다.
+- SOL 제한형 probe 진입 판정, 진입 신호 승격, 단일 포지션 제한, `LOW_ENERGY`/심볼 레짐 우회 보정을 [core/strategy/sol_probe.py](core/strategy/sol_probe.py) 의 `resolve_sol_probe_entry_state()`로 모았습니다.
+- SOL probe 전용 TP/SL 적용, 수수료 기반 최소 익절률, 최대 보유 시간 청산 판단을 [core/strategy/sol_probe.py](core/strategy/sol_probe.py) 의 `resolve_sol_probe_exit_state()`로 모았습니다.
+- OKX/업비트 알트 봇은 같은 helper 를 사용하므로, SOL probe 진입/청산 조건이나 레짐 우회 규칙을 바꿀 때는 각 봇 본문보다 [core/strategy/sol_probe.py](core/strategy/sol_probe.py)를 먼저 수정합니다.
 - 이 리팩토링은 계산 위치와 로그 문구 공통화만 바꾼 것이며, `signal_score >= 70`, 기존 주문금액 25%, TP 0.8%, SL 0.5%, 최대 보유 180분, 같은 심볼 동시 1포지션 조건은 유지합니다.
 
 ### 2026-05-14 완료한 리팩토링
 
 | 우선순위 | 완료 항목 | 반영 위치 | 검증 |
 | --- | --- | --- | --- |
-| P1 | 알트 매수/매도 체결 lifecycle 공통화 | [core/positions/lifecycle.py](/Users/plo/Documents/auto_coin_bot/core/positions/lifecycle.py) | [tests/test_position_lifecycle.py](/Users/plo/Documents/auto_coin_bot/tests/test_position_lifecycle.py) |
-| P1 | 체결 텔레그램 formatter 공통화 | [core/notifications/trade_messages.py](/Users/plo/Documents/auto_coin_bot/core/notifications/trade_messages.py) | [tests/test_trade_messages.py](/Users/plo/Documents/auto_coin_bot/tests/test_trade_messages.py) |
-| P2 | 주문 요청/체결 구조화 로그 입력 공통화 | [core/execution/order_logging.py](/Users/plo/Documents/auto_coin_bot/core/execution/order_logging.py) | [tests/test_order_logging.py](/Users/plo/Documents/auto_coin_bot/tests/test_order_logging.py) |
-| P2 | 매도 최소 주문 fallback 정책 분리 | [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py) | [tests/test_alt_exit_rules.py](/Users/plo/Documents/auto_coin_bot/tests/test_alt_exit_rules.py) |
-| P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](/Users/plo/Documents/auto_coin_bot/core/strategy/exit_reasons.py) | [tests/test_exit_reasons.py](/Users/plo/Documents/auto_coin_bot/tests/test_exit_reasons.py) |
+| P1 | 알트 매수/매도 체결 lifecycle 공통화 | [core/positions/lifecycle.py](core/positions/lifecycle.py) | [tests/test_position_lifecycle.py](tests/test_position_lifecycle.py) |
+| P1 | 체결 텔레그램 formatter 공통화 | [core/notifications/trade_messages.py](core/notifications/trade_messages.py) | [tests/test_trade_messages.py](tests/test_trade_messages.py) |
+| P2 | 주문 요청/체결 구조화 로그 입력 공통화 | [core/execution/order_logging.py](core/execution/order_logging.py) | [tests/test_order_logging.py](tests/test_order_logging.py) |
+| P2 | 실주문 API 호출 어댑터 정리 | [core/execution/order_adapters.py](core/execution/order_adapters.py) | [tests/test_order_adapters.py](tests/test_order_adapters.py) |
+| P2 | 매도 최소 주문 fallback 정책 분리 | [core/risk/alt_exit.py](core/risk/alt_exit.py) | [tests/test_alt_exit_rules.py](tests/test_alt_exit_rules.py) |
+| P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](core/strategy/exit_reasons.py) | [tests/test_exit_reasons.py](tests/test_exit_reasons.py) |
+| P3 | 알트 루프 진입/청산 퍼널 단계 helper 적용 | [core/strategy/alt_loop.py](core/strategy/alt_loop.py) | [tests/test_alt_loop.py](tests/test_alt_loop.py) |
+| P3 | BTC 매수/추가매수 lifecycle helper 확대 | [core/positions/lifecycle.py](core/positions/lifecycle.py) | [tests/test_position_lifecycle.py](tests/test_position_lifecycle.py) |
 
-### 다음 리팩토링 후보
+### 리팩토링 후보 상태
 
-| 우선순위 | 후보 | 이유 | 검증 기준 |
-| --- | --- | --- | --- |
-| P1 | 실주문 API 호출 어댑터 정리 | 로그/lifecycle/fallback 은 분리됐지만 주문 호출, 업비트 private 이벤트 보강, 캐시 무효화는 아직 봇 본문에 남아 있음 | dry-run 가능한 fake exchange 테스트와 주문 실패 로그 회귀 테스트 |
-| P2 | BTC 포지션 상태 갱신 helper 확대 | BTC 는 `clear_btc_position_state()`와 exit reason helper 를 쓰지만 매수/추가매수 평균가 갱신은 아직 봇 본문에 남아 있음 | BTC 신규진입, 추가매수, 부분익절, 전량청산 상태 테스트 |
-| P3 | 알트 `run_bot()` 물리적 단계 함수 분할 | 공통 helper 적용으로 분기는 줄었지만 루프 본문 자체는 여전히 길어 읽기 부담이 큼 | 봇별 smoke/compile, 핵심 strategy unittest, 로그 필드 diff 검증 |
+현재 문서화된 P1/P2/P3 리팩토링 후보는 모두 반영했습니다. 새 후보는 실거래 로그에서 반복 장애나 중복 수정 지점이 다시 확인될 때 별도 이슈로 추가합니다.
 
 ### 2026-05-07 현재 리팩토링 기준
 
-- 운영 전략 동작은 유지하고, 네 개 실거래 봇에 흩어져 있던 신규 진입 비중 계산을 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py) 로 모았습니다.
+- 운영 전략 동작은 유지하고, 네 개 실거래 봇에 흩어져 있던 신규 진입 비중 계산을 [core/risk/allocation.py](core/risk/allocation.py) 로 모았습니다.
 - 알트 신규 진입 비중은 공통 helper 에서 아래 순서로 계산합니다.
   - `기본 비중`
   - `심볼 레짐 스케일`
@@ -62,7 +64,7 @@
   - `BTC ATR 스케일`
   - `allocation score 스케일`
   - `low energy probe 보정`
-- OKX/업비트 봇은 같은 결과 객체와 같은 로그 formatter 를 사용하므로, 이후 포지션 비중, allocation score, 포트폴리오 예산 로그 관련 수정은 전략 본체보다 [core/risk/allocation.py](/Users/plo/Documents/auto_coin_bot/core/risk/allocation.py)를 먼저 봅니다.
+- OKX/업비트 봇은 같은 결과 객체와 같은 로그 formatter 를 사용하므로, 이후 포지션 비중, allocation score, 포트폴리오 예산 로그 관련 수정은 전략 본체보다 [core/risk/allocation.py](core/risk/allocation.py)를 먼저 봅니다.
 - 이 리팩토링은 계산 위치만 바꾼 것이며, 설정값과 진입/청산 조건은 바꾸지 않았습니다.
 
 ### 2026-04-18 현재 적용 핵심 강화 요약
@@ -174,7 +176,7 @@
     - 최근 3일 업비트 실거래 기준으로는 `BTC LOW_ENERGY`, `낮은 BTC atr_pct` 구간에서 알트 손실 캠페인이 상대적으로 많아, 알트 자체 레짐 외에 `BTC 상태 기반 축소`를 추가 적용
     - `SOL`은 우선 분석 수집만 추가하고, 최근 `volume_ratio`, `avg_abs_change_pct`, `ready 빈도`, `실제 최소 주문 금액 적합성`이 충분히 쌓이면 실거래 후보로 올림
 
-장타/스윙 전용 구조와 초기 전략안은 별도 폴더 `/Users/plo/Documents/auto_coin_bot_swing` 에 정리합니다.
+장타/스윙 전용 구조와 초기 전략안은 별도 폴더 `../auto_coin_bot_swing` 에 정리합니다.
 
 ## 현재 적용 운영 안정화 보완
 
@@ -360,7 +362,7 @@ BTC를 볼 때 핵심 질문
   - 주문 전/후 조회를 역할별로 더 분리하기
   입니다.
 - 이 단계는 현재 캐시 적용 후에도 `api_latency_ms` 나 429 빈도가 체감상 크게 안 줄 때 진행합니다.
-- 상세 설계안은 [docs/UPBIT_WEBSOCKET_TRANSITION_PLAN.md](/Users/plo/Documents/auto_coin_bot/docs/UPBIT_WEBSOCKET_TRANSITION_PLAN.md)에 따로 정리합니다.
+- 상세 설계안은 [docs/UPBIT_WEBSOCKET_TRANSITION_PLAN.md](docs/UPBIT_WEBSOCKET_TRANSITION_PLAN.md)에 따로 정리합니다.
 
 ### 5단계. 레짐별 포지션 비중 2차 설계
 
@@ -535,10 +537,10 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - `BTC_TREND_DONCHIAN_EXIT_LOOKBACK=10`
   - `BTC_TREND_DONCHIAN_CONFIRM_BREAKOUT_CLOSE=true`
 - 코드 시작점
-  - [settings/btc_trend_settings.py](/Users/plo/Documents/auto_coin_bot/settings/btc_trend_settings.py)
-  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
-  - [upbit_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_btc_ema_trend_bot.py)
-  - [okx_btc_ema_trend_bot.py](/Users/plo/Documents/auto_coin_bot/okx_btc_ema_trend_bot.py)
+  - [settings/btc_trend_settings.py](settings/btc_trend_settings.py)
+  - [core/strategy/btc.py](core/strategy/btc.py)
+  - [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py)
+  - [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py)
 - 설계 포인트
   - 현재 EMA 진입과 병렬 실험이 가능하도록 `entry_mode` 를 두는 편이 안전합니다.
   - 청산은 기존 ATR/트레일링/부분익절 구조를 최대한 재사용합니다.
@@ -554,10 +556,10 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - `STRATEGY_SQUEEZE_MAX_BANDWIDTH_PCT=...`
   - `STRATEGY_SQUEEZE_MIN_VOLUME_RATIO=...`
 - 코드 시작점
-  - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
-  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
-  - [upbit_ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/upbit_ma_crossover_bot.py)
-  - [ma_crossover_bot.py](/Users/plo/Documents/auto_coin_bot/ma_crossover_bot.py)
+  - [settings/strategy_settings.py](settings/strategy_settings.py)
+  - [core/strategy/alt.py](core/strategy/alt.py)
+  - [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py)
+  - [ma_crossover_bot.py](ma_crossover_bot.py)
 - 설계 포인트
   - 기존 MA 돌파 전략을 없애지 말고, `entry_mode` 로 병렬 실험하는 게 좋습니다.
   - 최근 손절 원인이 약한 후속 탄력이라, 밴드폭 축소 여부를 진입 전 필수 조건으로 두는 방향이 맞습니다.
@@ -572,9 +574,9 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - `STRATEGY_CHOPPY_ENTRY_MODE=disabled|mean_reversion`
   - `BTC_TREND_CHOPPY_ENTRY_MODE=disabled|conservative`
 - 코드 시작점
-  - [settings/market_regime_guard.py](/Users/plo/Documents/auto_coin_bot/settings/market_regime_guard.py)
-  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
-  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
+  - [settings/market_regime_guard.py](settings/market_regime_guard.py)
+  - [core/strategy/alt.py](core/strategy/alt.py)
+  - [core/strategy/btc.py](core/strategy/btc.py)
 - 설계 포인트
   - 지금은 레짐이 `진입 차단` 용도에 가깝습니다.
   - 다음 단계는 레짐을 `전략 선택` 용도로 승격하는 것입니다.
@@ -589,9 +591,9 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - `ROTATION_TOP_N=3`
   - `ROTATION_MIN_LIQUIDITY_THRESHOLD=...`
 - 코드 시작점
-  - [analysis_log_collector.py](/Users/plo/Documents/auto_coin_bot/analysis_log_collector.py)
-  - [tools/discover_untracked_symbols.py](/Users/plo/Documents/auto_coin_bot/tools/discover_untracked_symbols.py)
-  - [portfolio_allocator.py](/Users/plo/Documents/auto_coin_bot/portfolio_allocator.py)
+  - [analysis_log_collector.py](analysis_log_collector.py)
+  - [tools/discover_untracked_symbols.py](tools/discover_untracked_symbols.py)
+  - [portfolio_allocator.py](portfolio_allocator.py)
 - 설계 포인트
   - 이 후보는 전략 계산보다 `심볼 선택` 레이어가 먼저 필요합니다.
   - 따라서 당장 매수 규칙보다도 `후보 심볼 선정 리포트` 를 먼저 만드는 편이 낫습니다.
@@ -606,8 +608,8 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - `STRATEGY_KAMA_FAST=2`
   - `STRATEGY_KAMA_SLOW=30`
 - 코드 시작점
-  - [core/strategy/alt.py](/Users/plo/Documents/auto_coin_bot/core/strategy/alt.py)
-  - [settings/strategy_settings.py](/Users/plo/Documents/auto_coin_bot/settings/strategy_settings.py)
+  - [core/strategy/alt.py](core/strategy/alt.py)
+  - [settings/strategy_settings.py](settings/strategy_settings.py)
 - 설계 포인트
   - ETH는 최근 손절 억제가 우선이라, 고정 SMA보다 적응형 평균이 가짜 돌파를 줄일 수 있는지 실험 가치가 있습니다.
   - 이 전략은 범용 도입보다 `ETH 전용 실험`으로 시작하는 편이 안전합니다.
@@ -621,9 +623,9 @@ BTC를 더 활발하게 보려면 나중에 검토할 항목
   - `BTC_TREND_RUNNER_MIN_PROFIT_PROTECT_PCT=...`
   - `STRATEGY_RUNNER_MODE_SYMBOLS=...`
 - 코드 시작점
-  - [core/strategy/btc_position.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc_position.py)
-  - [core/strategy/btc.py](/Users/plo/Documents/auto_coin_bot/core/strategy/btc.py)
-  - [core/risk/alt_exit.py](/Users/plo/Documents/auto_coin_bot/core/risk/alt_exit.py)
+  - [core/strategy/btc_position.py](core/strategy/btc_position.py)
+  - [core/strategy/btc.py](core/strategy/btc.py)
+  - [core/risk/alt_exit.py](core/risk/alt_exit.py)
 - 설계 포인트
   - 현재 구조를 가장 적게 흔드는 후보입니다.
   - 로그 기준으로 러너가 있는데 너무 일찍 잠그는 문제를 해결하는 데 직접적입니다.

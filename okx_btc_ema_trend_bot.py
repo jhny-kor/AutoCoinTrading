@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-14: BTC 신규진입/추가매수 후 내부 상태 갱신을 공통 lifecycle helper 로 옮김
+- 2026-05-14: OKX BTC 시장가 주문 제출과 타이밍 기록을 공통 order adapter 로 옮김
 - 2026-05-14: BTC 주문 요청/체결 구조화 로그 입력을 공통 helper 로 옮김
 - 2026-05-14: BTC 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮김
 - 2026-05-07: BTC 포지션 비중 계산과 로그 조립을 공통 allocation helper 로 옮겨 업비트/OKX 구조를 맞춤
@@ -76,11 +78,18 @@ from core.execution.okx import (
     fetch_ohlcv_okx,
     get_spot_balances_okx,
     load_okx_config,
-    place_market_order_okx,
     safe_amount_to_precision_okx,
 )
+from core.execution.order_adapters import (
+    submit_okx_market_buy,
+    submit_okx_market_sell,
+)
 from core.logging.metrics import build_btc_common_metrics
-from core.positions.lifecycle import clear_btc_position_state
+from core.positions.lifecycle import (
+    apply_btc_add_on_fill_state,
+    apply_btc_entry_fill_state,
+    clear_btc_position_state,
+)
 from core.positions.guards import handle_unrecoverable_position
 from core.risk.allocation import (
     build_btc_allocations,
@@ -1445,14 +1454,11 @@ def run_bot():
                         actual={"order_value_quote": order_value},
                         metrics=common_metrics,
                     )
-                    order_request_started_at = time.time()
                     try:
-                        order = place_market_order_okx(
-                            exchange,
-                            symbol,
-                            "buy",
-                            order_value,
-                            tgt_ccy="quote_ccy",
+                        order_submission = submit_okx_market_buy(
+                            exchange=exchange,
+                            symbol=symbol,
+                            order_value_quote=order_value,
                         )
                     except Exception as order_error:
                         log_order_failure(
@@ -1466,17 +1472,26 @@ def run_bot():
                             extra={"strategy_version": settings.version},
                         )
                         continue
-                    order_response_received_at = time.time()
+                    order = order_submission.order
+                    order_request_started_at = order_submission.request_started_at
+                    order_response_received_at = order_submission.response_received_at
                     estimated_amount = estimated_entry_amount
-                    entry_price = last_close
-                    entry_opened_at = time.time()
-                    position_id = f"{symbol}:{int(entry_opened_at)}"
-                    highest_price_since_entry = last_close
-                    lowest_price_since_entry = last_close
-                    trailing_armed = False
-                    trailing_armed_at = None
-                    trailing_activation_price = None
-                    last_trade_at = time.time()
+                    entry_fill_state = apply_btc_entry_fill_state(
+                        symbol=symbol,
+                        bought_amount=estimated_amount,
+                        last_close=last_close,
+                        now_ts=time.time(),
+                    )
+                    entry_price = entry_fill_state.entry_price_after
+                    entry_opened_at = entry_fill_state.entry_opened_at
+                    position_id = entry_fill_state.position_id
+                    highest_price_since_entry = entry_fill_state.highest_price_since_entry
+                    lowest_price_since_entry = entry_fill_state.lowest_price_since_entry
+                    trailing_armed = entry_fill_state.trailing_armed
+                    trailing_armed_at = entry_fill_state.trailing_armed_at
+                    trailing_activation_price = entry_fill_state.trailing_activation_price
+                    last_trade_at = entry_fill_state.last_trade_at
+                    add_on_count = entry_fill_state.add_on_count_after
                     log_order_filled(
                         structured_logger=structured_logger,
                         symbol=symbol,
@@ -1572,14 +1587,11 @@ def run_bot():
                     actual={"order_value_quote": add_on_order_value},
                     metrics={**common_metrics, "entry_type": "add_on_winner"},
                 )
-                order_request_started_at = time.time()
                 try:
-                    order = place_market_order_okx(
-                        exchange,
-                        symbol,
-                        "buy",
-                        add_on_order_value,
-                        tgt_ccy="quote_ccy",
+                    order_submission = submit_okx_market_buy(
+                        exchange=exchange,
+                        symbol=symbol,
+                        order_value_quote=add_on_order_value,
                     )
                 except Exception as order_error:
                     log_order_failure(
@@ -1593,22 +1605,28 @@ def run_bot():
                         extra={"strategy_version": settings.version},
                     )
                     continue
-                order_response_received_at = time.time()
+                order = order_submission.order
+                order_request_started_at = order_submission.request_started_at
+                order_response_received_at = order_submission.response_received_at
 
                 previous_amount = base_free
                 added_amount = estimated_add_on_amount
-                total_amount = previous_amount + added_amount
-                previous_entry_price = entry_price or last_close
-                if total_amount > 0:
-                    entry_price = (
-                        (previous_entry_price * previous_amount) + (last_close * added_amount)
-                    ) / total_amount
-                else:
-                    entry_price = last_close
-                add_on_count += 1
-                last_trade_at = time.time()
-                highest_price_since_entry = max(highest_price_since_entry or last_close, last_close)
-                lowest_price_since_entry = min(lowest_price_since_entry or last_close, last_close)
+                add_on_fill_state = apply_btc_add_on_fill_state(
+                    previous_amount=previous_amount,
+                    added_amount=added_amount,
+                    previous_entry_price=entry_price,
+                    last_close=last_close,
+                    current_add_on_count=add_on_count,
+                    highest_price_since_entry=highest_price_since_entry,
+                    lowest_price_since_entry=lowest_price_since_entry,
+                    now_ts=time.time(),
+                )
+                total_amount = add_on_fill_state.total_amount
+                entry_price = add_on_fill_state.entry_price_after
+                add_on_count = add_on_fill_state.add_on_count_after
+                last_trade_at = add_on_fill_state.last_trade_at
+                highest_price_since_entry = add_on_fill_state.highest_price_since_entry
+                lowest_price_since_entry = add_on_fill_state.lowest_price_since_entry
 
                 log_order_filled(
                     structured_logger=structured_logger,
@@ -1762,14 +1780,11 @@ def run_bot():
                         actual={"sell_amount": amount},
                         metrics=common_metrics,
                     )
-                    order_request_started_at = time.time()
                     try:
-                        order = place_market_order_okx(
-                            exchange,
-                            symbol,
-                            "sell",
-                            amount,
-                            tgt_ccy="base_ccy",
+                        order_submission = submit_okx_market_sell(
+                            exchange=exchange,
+                            symbol=symbol,
+                            amount=amount,
                         )
                     except Exception as order_error:
                         log_order_failure(
@@ -1783,7 +1798,9 @@ def run_bot():
                             extra={"strategy_version": settings.version},
                         )
                         continue
-                    order_response_received_at = time.time()
+                    order = order_submission.order
+                    order_request_started_at = order_submission.request_started_at
+                    order_response_received_at = order_submission.response_received_at
                     realized_pnl_pct = 0.0
                     realized_pnl_quote = 0.0
                     fee_quote_estimate = None
