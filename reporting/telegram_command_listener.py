@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-05-14: 시간 판정과 최근 로그 파일 helper 를 reporting.telegram_log_helpers 로 분리했다.
+- 2026-05-14: 순수 명령/숫자/최근 로그 포맷 helper 를 reporting.telegram_formatting 으로 분리했다.
 - 2026-04-28: /analysis 와 /weekly 에 decision journal 기반 의사결정 리뷰와 reflection 요약을 추가했다.
 - 2026-05-11: 정기 리포트의 스킵 사유와 백테스트 대비 실거래 섹션을 구체 사유/가독성 중심으로 정리했다.
 - 2026-05-06: 복합 리포트에서 빈 보조 섹션을 숨기고 핵심 판정이 먼저 보이도록 텔레그램 문구를 정리했다.
@@ -78,8 +80,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from decimal import Decimal, ROUND_DOWN
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from math import sqrt
 
@@ -90,7 +91,7 @@ from core.runtime.program_registry import TRADE_PROGRAM_SPECS
 from btc_trend_settings import load_btc_trend_settings
 from incident_manager import find_incident, update_incident_status
 from bot_logger import BotLogger
-from log_path_utils import iter_files, latest_file, read_all_lines
+from log_path_utils import iter_files
 from reporting.listener_runtime import (
     ListenerSettings,
     get_updates,
@@ -105,6 +106,29 @@ from reporting.position_snapshot import (
     build_okx_positions_text,
     build_upbit_positions_text,
     format_exchange_error_text,
+)
+from reporting.telegram_formatting import (
+    LOW_SIGNAL_SECTION_MARKERS,
+    format_number,
+    format_number_trunc,
+    format_numeric_token_for_telegram,
+    format_recent_log_line_for_telegram,
+    format_symbol_badge,
+    is_low_signal_section,
+    join_report_sections,
+    normalize_command,
+    safe_float,
+    send_text_in_chunks,
+    split_telegram_text,
+)
+from reporting.telegram_log_helpers import (
+    is_in_recent_days,
+    is_today_timestamp,
+    iter_log_lines,
+    latest_log_file,
+    parse_local_timestamp,
+    read_recent_lines,
+    read_recent_lines_by_symbol,
 )
 from reporting.decision_journal import build_recent_reflection_summary
 from reporting.change_effect_report import (
@@ -191,136 +215,6 @@ WEEKDAY_NAME_TO_INDEX = {
 }
 
 
-def normalize_command(text: str) -> str:
-    """입력 텍스트에서 텔레그램 명령만 정규화해 뽑는다."""
-    first = text.strip().split()[0].lower()
-    if "@" in first:
-        first = first.split("@", 1)[0]
-    if not first.startswith("/"):
-        first = f"/{first}"
-    return first
-
-
-def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
-    """텔레그램 최대 길이를 넘지 않도록 문단 중심으로 메시지를 나눈다."""
-    normalized = text.strip()
-    if not normalized:
-        return [""]
-    if len(normalized) <= limit:
-        return [normalized]
-
-    chunks: list[str] = []
-    current = ""
-
-    for paragraph in normalized.split("\n\n"):
-        paragraph = paragraph.strip()
-        if not paragraph:
-            continue
-
-        candidate = paragraph if not current else f"{current}\n\n{paragraph}"
-        if len(candidate) <= limit:
-            current = candidate
-            continue
-
-        if current:
-            chunks.append(current)
-            current = ""
-
-        if len(paragraph) <= limit:
-            current = paragraph
-            continue
-
-        for line in paragraph.splitlines():
-            line = line.rstrip()
-            candidate = line if not current else f"{current}\n{line}"
-            if len(candidate) <= limit:
-                current = candidate
-                continue
-
-            if current:
-                chunks.append(current)
-                current = ""
-
-            while len(line) > limit:
-                chunks.append(line[:limit])
-                line = line[limit:]
-            current = line
-
-    if current:
-        chunks.append(current)
-    return chunks or [normalized[:limit]]
-
-
-def send_text_in_chunks(notifier, text: str, limit: int = 3900) -> tuple[bool, str | None]:
-    """긴 텔레그램 메시지를 여러 조각으로 나눠 순서대로 전송한다."""
-    last_error: str | None = None
-    sent_any = False
-    for chunk in split_telegram_text(text, limit=limit):
-        sent, error = notifier.send_message_detailed(chunk)
-        if not sent:
-            return False, error
-        sent_any = True
-        last_error = error
-    return sent_any, last_error
-
-
-LOW_SIGNAL_SECTION_MARKERS = (
-    "아직",
-    "없습니다",
-    "비교할 수 없습니다",
-    "집계할",
-    "찾지 못해",
-    "만들 수 없습니다",
-)
-
-
-def is_low_signal_section(section: str) -> bool:
-    """복합 리포트에서 숨겨도 되는 빈 보조 섹션인지 판단한다."""
-    lines = [line.strip() for line in section.strip().splitlines() if line.strip()]
-    if not lines:
-        return True
-    if len(lines) == 1:
-        return any(marker in lines[0] for marker in LOW_SIGNAL_SECTION_MARKERS)
-    if len(lines) <= 2 and any(marker in lines[-1] for marker in LOW_SIGNAL_SECTION_MARKERS):
-        return True
-    return False
-
-
-def join_report_sections(sections: list[str], *, skip_low_signal: bool = True) -> str:
-    """텔레그램 복합 리포트 섹션을 저신호 문구 없이 합친다."""
-    filtered: list[str] = []
-    for section in sections:
-        normalized = section.strip()
-        if not normalized:
-            continue
-        if skip_low_signal and is_low_signal_section(normalized):
-            continue
-        filtered.append(normalized)
-    return "\n\n".join(filtered)
-
-
-def format_number(value: float, decimals: int = 4) -> str:
-    """지정 소수점 자리수와 천 단위 쉼표를 적용한 숫자 문자열을 만든다."""
-    return f"{value:,.{decimals}f}"
-
-
-def format_number_trunc(value: float, decimals: int = 4) -> str:
-    """지정 소수점 자리수에서 절사 기준으로 천 단위 쉼표 문자열을 만든다."""
-    quantizer = Decimal("1") if decimals <= 0 else Decimal(f"1.{'0' * decimals}")
-    truncated = Decimal(str(value)).quantize(quantizer, rounding=ROUND_DOWN)
-    return f"{truncated:,.{decimals}f}"
-
-
-def safe_float(value) -> float | None:
-    """None 이나 빈 값을 제외하고 안전하게 float 로 변환한다."""
-    try:
-        if value in (None, ""):
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def build_help_text() -> str:
     """지원 명령 목록을 반환한다."""
     return (
@@ -337,29 +231,6 @@ def build_help_text() -> str:
         "- /last : 최근 운영 로그 확인\n"
         "- /help : 도움말"
     )
-
-
-def parse_local_timestamp(raw: str) -> datetime | None:
-    """로컬 시각 문자열을 datetime 으로 안전하게 변환한다."""
-    try:
-        if not raw:
-            return None
-        parsed = datetime.fromisoformat(raw)
-        if parsed.tzinfo is not None:
-            return parsed.astimezone().replace(tzinfo=None)
-        return parsed
-    except ValueError:
-        return None
-
-
-def is_in_recent_days(raw: str, days: int, *, now: datetime | None = None) -> bool:
-    """지정된 최근 일수 범위 안의 시각인지 확인한다."""
-    parsed = parse_local_timestamp(raw)
-    if parsed is None:
-        return False
-    current = now or datetime.now()
-    lower_bound = current - timedelta(days=days)
-    return lower_bound <= parsed <= current
 
 
 def build_positions_text(settings: ListenerSettings) -> str:
@@ -2047,21 +1918,6 @@ def build_daily_report_text(settings: ListenerSettings, label: str) -> str:
     )
 
 
-def is_today_timestamp(ts: str) -> bool:
-    """로그 타임스탬프가 오늘 날짜인지 확인한다."""
-    return ts.startswith(datetime.now().strftime("%Y-%m-%d"))
-
-
-def iter_log_lines(filename: str) -> list[str]:
-    """같은 이름의 날짜별 로그 파일 줄 목록을 모두 읽는다."""
-    return read_all_lines(iter_files("logs", filename))
-
-
-def latest_log_file(filename: str) -> Path | None:
-    """같은 이름의 날짜별 로그 중 가장 최근 파일을 반환한다."""
-    return latest_file("logs", filename)
-
-
 def build_recent_trades_text(limit: int = 5) -> str:
     """오늘 발생한 최근 체결 내역을 요약한다."""
     records: list[dict] = []
@@ -2280,116 +2136,6 @@ def build_today_skip_summary_text(limit: int = 6) -> str:
             sections.append(f"• {label}: {count}회")
 
     return "\n".join(sections)
-
-
-def read_recent_lines(path: Path | None, line_count: int) -> list[str]:
-    """파일 끝부분의 최근 줄만 읽는다."""
-    if path is None or not path.exists():
-        return ["로그 파일이 없습니다."]
-
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return ["로그 내용이 없습니다."]
-    return lines[-line_count:]
-
-
-def extract_symbol_from_log_line(line: str) -> str | None:
-    """운영 로그 한 줄에서 심볼 표기를 추출한다."""
-    symbol_match = re.search(r"\[([A-Z0-9]+/[A-Z0-9]+)\]", line)
-    if symbol_match:
-        return symbol_match.group(1)
-    return None
-
-
-def format_numeric_token_for_telegram(token: str) -> str:
-    """숫자 토큰에 세 자리 쉼표를 넣되 소수점 자릿수는 유지한다."""
-    if not token:
-        return token
-
-    sign = ""
-    raw = token
-    if raw.startswith("-"):
-        sign = "-"
-        raw = raw[1:]
-
-    if "." in raw:
-        whole, fraction = raw.split(".", 1)
-        if not whole:
-            whole = "0"
-        return f"{sign}{int(whole):,}.{fraction}"
-    return f"{sign}{int(raw):,}"
-
-
-def format_symbol_badge(symbol: str) -> str:
-    """텔레그램 리포트에서 심볼 앞에 초록 원을 붙인다."""
-    cleaned = symbol.strip()
-    return f"🟢 {cleaned}" if cleaned else "🟢"
-
-
-def format_recent_log_line_for_telegram(line: str) -> str:
-    """대괄호 안 텍스트는 유지하고, 그 밖의 숫자만 텔레그램용으로 포맷한다."""
-    parts = re.split(r"(\[[^\]]*\])", line)
-    formatted: list[str] = []
-    for part in parts:
-        if not part:
-            continue
-        if part.startswith("[") and part.endswith("]"):
-            formatted.append(part)
-            continue
-        formatted.append(
-            re.sub(
-                r"-?\d+(?:\.\d+)?",
-                lambda match: format_numeric_token_for_telegram(match.group(0)),
-                part,
-            )
-        )
-    return "".join(formatted)
-
-
-def read_recent_lines_by_symbol(
-    filename: str,
-    line_count: int,
-    symbol_order: list[str] | None = None,
-    lookback_multiplier: int = 20,
-) -> dict[str, list[str]]:
-    """파일 끝부분에서 심볼별 최근 줄을 모아 반환한다."""
-    path = latest_log_file(filename)
-    if path is None or not path.exists():
-        return {"공통": ["로그 파일이 없습니다."]}
-
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return {"공통": ["로그 내용이 없습니다."]}
-
-    lookback_count = max(line_count * lookback_multiplier, 80)
-    recent_lines = lines[-lookback_count:]
-    grouped: dict[str, list[str]] = {}
-
-    for line in recent_lines:
-        symbol = extract_symbol_from_log_line(line) or "공통"
-        grouped.setdefault(symbol, []).append(line)
-
-    trimmed = {
-        symbol: entries[-line_count:]
-        for symbol, entries in grouped.items()
-        if entries
-    }
-
-    has_symbol_specific_logs = any(symbol != "공통" for symbol in trimmed)
-    if has_symbol_specific_logs and "공통" in trimmed:
-        trimmed.pop("공통", None)
-
-    if not symbol_order:
-        return trimmed
-
-    ordered: dict[str, list[str]] = {}
-    for symbol in symbol_order:
-        if symbol in trimmed:
-            ordered[symbol] = trimmed[symbol]
-    for symbol, entries in trimmed.items():
-        if symbol not in ordered:
-            ordered[symbol] = entries
-    return ordered
 
 
 def build_last_logs_text(settings: ListenerSettings) -> str:

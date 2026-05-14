@@ -1,5 +1,6 @@
 """
 작업 요약
+- 알트 실거래 봇의 SMA 돌파, 마감봉 거래량 비율, 절대 등락률 helper 를 공통화했다.
 - regime별 지표 가중치 조합에 재사용할 수 있는 weighted signal score helper 를 추가
 - 2026-04-12: ATR/거래량 분포 기반 percentile, z-score, 호가 압력 점수를 추가해 약한 지표를 결합 판단에 쓸 수 있게 확장
 - 2026-04-08: 볼린저 밴드 계산에서 사용하는 `math.sqrt` 누락 import 를 추가해 알트 봇 런타임 예외를 수정했다.
@@ -21,6 +22,59 @@ def calc_sma(prices: list[float], period: int) -> float:
         raise ValueError("SMA 계산에 필요한 가격 데이터가 부족합니다.")
     window = prices[-period:]
     return sum(window) / len(window)
+
+
+def detect_sma_crossover(
+    closes: list[float], period: int
+) -> tuple[bool, bool, float, float, float, float]:
+    """SMA 상향/하향 돌파를 계산한다."""
+    if len(closes) < period + 1:
+        raise ValueError("이동평균 돌파를 계산하기 위한 캔들 수가 부족합니다.")
+
+    prev_closes = closes[:-1]
+    last_close = closes[-1]
+    prev_ma = calc_sma(prev_closes, period)
+    last_ma = calc_sma(closes, period)
+    prev_close = prev_closes[-1]
+    bullish = prev_close < prev_ma and last_close > last_ma
+    bearish = prev_close > prev_ma and last_close < last_ma
+    return bullish, bearish, prev_close, prev_ma, last_close, last_ma
+
+
+def calc_completed_volume_ratio(ohlcv: list[list[float]], lookback: int) -> float | None:
+    """직전 마감 봉 거래량이 그 이전 평균 거래량의 몇 배인지 계산한다."""
+    if len(ohlcv) < 3:
+        return None
+    completed = ohlcv[:-1]
+    if len(completed) < 2:
+        return None
+    recent = (
+        completed[-(lookback + 1):-1]
+        if len(completed) >= lookback + 1
+        else completed[:-1]
+    )
+    if not recent:
+        return None
+    avg_volume = sum(row[5] for row in recent) / len(recent)
+    current_volume = completed[-1][5]
+    if avg_volume <= 0:
+        return None
+    return current_volume / avg_volume
+
+
+def calc_avg_abs_change_pct(closes: list[float], lookback: int) -> float | None:
+    """최근 절대 등락률 평균을 계산한다."""
+    if len(closes) < 2:
+        return None
+    recent_closes = closes[-(lookback + 1):] if len(closes) >= lookback + 1 else closes
+    changes: list[float] = []
+    for prev, curr in zip(recent_closes, recent_closes[1:]):
+        if prev == 0:
+            continue
+        changes.append(abs((curr - prev) / prev) * 100)
+    if not changes:
+        return None
+    return sum(changes) / len(changes)
 
 
 def calc_weighted_signal_score(

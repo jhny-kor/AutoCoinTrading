@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-14: 알트 공통 SMA/거래량/등락률 helper 를 core.strategy.indicators 로 분리함
 - 2026-05-14: 알트 진입/청산 퍼널 실행 단계를 공통 alt_loop helper 로 옮김
 - 2026-05-14: OKX 시장가 주문 제출과 타이밍 기록을 공통 order adapter 로 옮김
 - 2026-05-14: 청산 퍼널 ready reason 결정을 공통 exit helper 로 옮겨 run_bot 단계 분기를 줄임
@@ -170,9 +171,11 @@ from core.strategy.sol_probe import (
 )
 from core.strategy.volume_spike_entry import evaluate_volume_spike_entry_downgrade
 from core.strategy.indicators import (
+    calc_avg_abs_change_pct,
     calc_atr,
     calc_bollinger_bands,
     calc_bollinger_band_width_pct,
+    calc_completed_volume_ratio as calc_volume_ratio,
     calc_macd_histogram,
     calc_noise_ratio,
     calc_percentile_rank,
@@ -181,6 +184,8 @@ from core.strategy.indicators import (
     calc_recent_volume_ratio_series,
     calc_return_correlation,
     calc_rsi,
+    calc_sma,
+    detect_sma_crossover as detect_crossover,
 )
 from core.strategy.timing import update_entry_timing_state
 from market_regime_guard import (
@@ -255,82 +260,12 @@ def fetch_ohlcv(
     return fetch_ohlcv_okx_core(exchange, symbol, timeframe=timeframe, limit=limit)
 
 
-def calc_sma(prices, period: int) -> float:
-    """단순 이동평균(SMA) 계산."""
-    if len(prices) < period:
-        raise ValueError("가격 데이터가 이동평균 기간보다 적습니다.")
-    window = prices[-period:]
-    return sum(window) / len(window)
-
-
-def detect_crossover(
-    closes, period: int
-) -> Tuple[bool, bool, float, float, float, float]:
-    """
-    이동평균 돌파 여부 감지.
-
-    returns:
-        (bullish_cross, bearish_cross, prev_close, prev_ma, last_close, last_ma)
-    """
-    if len(closes) < period + 1:
-        raise ValueError("이동평균 돌파를 계산하기 위한 캔들 수가 부족합니다.")
-
-    prev_closes = closes[:-1]
-    last_close = closes[-1]
-
-    prev_ma = calc_sma(prev_closes, period)
-    last_ma = calc_sma(closes, period)
-
-    prev_close = prev_closes[-1]
-
-    bullish = prev_close < prev_ma and last_close > last_ma
-    bearish = prev_close > prev_ma and last_close < last_ma
-
-    return bullish, bearish, prev_close, prev_ma, last_close, last_ma
-
-
 def get_spot_balances(exchange: ccxt.okx, base: str, quote: str) -> Tuple[float, float]:
     return get_spot_balances_okx_core(exchange, base, quote)
 
 
 def safe_amount_to_precision(exchange: ccxt.okx, symbol: str, amount: float) -> float:
     return safe_amount_to_precision_okx_core(exchange, symbol, amount)
-
-
-def calc_volume_ratio(ohlcv, lookback: int) -> float | None:
-    """직전 마감 봉 거래량이 그 이전 평균 거래량의 몇 배인지 계산한다."""
-    if len(ohlcv) < 3:
-        return None
-    completed = ohlcv[:-1]
-    if len(completed) < 2:
-        return None
-    recent = (
-        completed[-(lookback + 1):-1]
-        if len(completed) >= lookback + 1
-        else completed[:-1]
-    )
-    if not recent:
-        return None
-    avg_volume = sum(row[5] for row in recent) / len(recent)
-    current_volume = completed[-1][5]
-    if avg_volume <= 0:
-        return None
-    return current_volume / avg_volume
-
-
-def calc_avg_abs_change_pct(closes, lookback: int) -> float | None:
-    """최근 절대 등락률 평균을 계산한다."""
-    if len(closes) < 2:
-        return None
-    recent_closes = closes[-(lookback + 1):] if len(closes) >= lookback + 1 else closes
-    changes = []
-    for prev, curr in zip(recent_closes, recent_closes[1:]):
-        if prev == 0:
-            continue
-        changes.append(abs((curr - prev) / prev) * 100)
-    if not changes:
-        return None
-    return sum(changes) / len(changes)
 
 
 def run_bot():

@@ -322,11 +322,29 @@
 | P2 | 매도 주문 최소금액/최소수량 fallback 정책 분리 | [core/risk/alt_exit.py](core/risk/alt_exit.py) | OKX 수량 기준과 업비트 금액 기준을 별도 helper 로 처리 |
 | P3 | 청산 퍼널 ready reason helper 적용 | [core/strategy/exit_reasons.py](core/strategy/exit_reasons.py) | 알트/BTC 청산 사유 우선순위를 공통 함수로 고정해 `run_bot()` 분기를 축소 |
 | P3 | 알트 루프 진입/청산 퍼널 단계 helper 적용 | [core/strategy/alt_loop.py](core/strategy/alt_loop.py) | 알트 `run_bot()`의 `buy_ready`/`sell_ready` 퍼널 실행 코드를 공통화 |
+| P3 | BTC 루프 진입/추가매수/청산 퍼널 단계 helper 적용 | [core/strategy/btc_loop.py](core/strategy/btc_loop.py) | BTC `run_bot()`의 `buy_ready`/`add_on_ready`/`sell_ready` 퍼널 실행 코드를 공통화 |
+| P3 | 알트 공통 SMA/거래량/등락률 helper 적용 | [core/strategy/indicators.py](core/strategy/indicators.py) | OKX/업비트 알트 봇의 순수 지표 계산 중복을 공통화 |
+| P3 | BTC 공통 EMA/ATR/스윙/청산가 helper 적용 | [core/strategy/btc_indicators.py](core/strategy/btc_indicators.py) | OKX/업비트 BTC 봇의 순수 지표 계산 중복을 공통화 |
+| P3 | 백테스트 리플레이 helper 분리 | [tools/backtest_models.py](tools/backtest_models.py), [tools/backtest_io.py](tools/backtest_io.py), [tools/backtest_math.py](tools/backtest_math.py), [tools/backtest_execution.py](tools/backtest_execution.py) | 데이터 모델, 캔들 IO, 순수 수학/성과 계산, 실행모델/호가/슬리피지 계산을 CLI/시뮬레이션 본문에서 분리 |
+| P3 | 텔레그램 리스너 포맷/로그 helper 분리 | [reporting/telegram_formatting.py](reporting/telegram_formatting.py), [reporting/telegram_log_helpers.py](reporting/telegram_log_helpers.py) | 명령 정규화, 긴 메시지 분할, 숫자/심볼/최근 로그 포맷, 시간/최근 로그 파일 helper 를 분리 |
 | P3 | BTC 매수/추가매수 lifecycle helper 확대 | [core/positions/lifecycle.py](core/positions/lifecycle.py) | BTC 신규진입/추가매수 후 평균가, trailing 초기값, add-on count 계산을 공통화 |
 
 현재 남은 리팩토링 후보:
 
-- 없음. 새 후보는 실거래 로그, 테스트 중복, 또는 같은 파일을 반복 수정해야 하는 근거가 생길 때 추가합니다.
+- 없음. 남은 큰 파일은 전략 실행 순서 또는 리포트 조립 상태머신 자체라 근거 없이 더 쪼개는 항목은 후보로 두지 않습니다. 새 후보는 실거래 로그, 테스트 중복, 또는 같은 파일을 반복 수정해야 하는 근거가 생길 때 추가합니다.
+
+### 거대 소스 점검
+
+2026-05-14 기준 활성 코드에서 1,500줄 이상인 파일은 6개입니다. 운영 봇 파일은 아직 크지만 주문 어댑터, lifecycle, 로그, 퍼널 helper 분리가 반영되어 있어 지금은 전체 분할보다 반복 변경 지점이 확인될 때 단계적으로 모듈화하는 편이 안전합니다.
+
+| 파일 | 대략 LOC | 모듈화 필요성 |
+| --- | ---: | --- |
+| [upbit_ma_crossover_bot.py](upbit_ma_crossover_bot.py) | 2,595 | 낮음. 공통 지표/lifecycle/주문/청산 helper 는 분리했고 업비트 실행 루프만 남겼습니다. |
+| [reporting/telegram_command_listener.py](reporting/telegram_command_listener.py) | 2,558 | 낮음-중간. 포맷/로그 helper 는 분리했고 리포트 조립 본문만 남겼습니다. |
+| [ma_crossover_bot.py](ma_crossover_bot.py) | 2,468 | 낮음. 공통 지표/lifecycle/주문/청산 helper 는 분리했고 OKX 실행 루프만 남겼습니다. |
+| [upbit_btc_ema_trend_bot.py](upbit_btc_ema_trend_bot.py) | 1,945 | 낮음. BTC 공통 지표/주문/lifecycle/퍼널 helper 를 분리했습니다. |
+| [okx_btc_ema_trend_bot.py](okx_btc_ema_trend_bot.py) | 1,906 | 낮음. 업비트 BTC와 같은 helper 를 공유하고 실행 루프만 남았습니다. |
+| [tools/backtest_replay.py](tools/backtest_replay.py) | 1,672 | 낮음-중간. 모델/IO/수학/실행 helper 는 분리했고 alt/btc 시뮬레이션 상태머신만 남았습니다. |
 
 진행 원칙:
 

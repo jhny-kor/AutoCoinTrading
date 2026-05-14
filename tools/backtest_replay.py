@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-14: 실행모델/호가/슬리피지 helper 를 tools.backtest_execution 으로 분리했다.
 - 2026-04-24: analysis_logs 호가 스냅샷을 읽어 best bid/ask 와 depth 기반 부분체결을 반영하는 체결 모델을 추가했다.
 - 2026-05-11: 알트 리플레이가 live volume/gap 상한과 volume spike exit 계약을 반영하도록 보강했다.
 - 2026-04-23: Sharpe ratio, profit factor, 슬리피지/부분체결/지연 실행 모델을 추가해 백테스트 요약과 실행 가정을 강화했다.
@@ -27,11 +28,8 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from bisect import bisect_right
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -63,126 +61,57 @@ from portfolio_allocator import load_portfolio_allocation_settings
 from strategy_settings import load_strategy_settings
 from settings.env import temporary_runtime_overrides
 from tools.apply_strategy_set import resolve_set_paths
+from tools.backtest_io import (
+    build_output_dir,
+    format_iso,
+    get_active_candles_by_time,
+    get_recent_active_candles_by_time,
+    load_candles,
+    local_date_key,
+    resample_candles,
+    write_json,
+    write_jsonl,
+)
+from tools.backtest_execution import (
+    apply_execution_price,
+    build_execution_model,
+    estimate_orderbook_fill_ratio,
+    load_orderbook_snapshots,
+    resolve_default_fee_rate,
+    resolve_default_max_daily_loss,
+    resolve_default_min_buy_order_value,
+    resolve_execution_candle,
+    resolve_orderbook_snapshot,
+)
+from tools.backtest_math import (
+    calc_atr,
+    calc_avg_abs_change_pct,
+    calc_ema_series,
+    calc_sma,
+    calc_volume_ratio,
+    compute_max_drawdown,
+    compute_profit_factor,
+    compute_sharpe_ratio,
+    detect_ema_crossover,
+    detect_sma_crossover,
+    get_recent_swing_high,
+    get_recent_swing_low,
+    parse_timeframe_to_minutes,
+    build_full_ema_series,
+    build_macd_histogram_series,
+)
+from tools.backtest_models import (
+    DEFAULT_RISK_PER_TRADE,
+    AltReplayInitialState,
+    BtcReplayInitialState,
+    Candle,
+    EquityPoint,
+    ExecutionModel,
+    OrderbookSnapshot,
+    TradeRecord,
+)
 from tools.update_backtest_registry import REGISTRY_PATH, build_all_registry_entries, write_registry
 from core.risk.allocation import compute_allocation_score
-
-
-DEFAULT_OKX_FEE_RATE_PCT = 0.10
-DEFAULT_UPBIT_FEE_RATE_PCT = 0.05
-DEFAULT_OKX_MIN_BUY_ORDER_VALUE = 1.0
-DEFAULT_UPBIT_MIN_BUY_ORDER_VALUE = 5000.0
-DEFAULT_OKX_MAX_DAILY_LOSS_QUOTE = 5.0
-DEFAULT_UPBIT_MAX_DAILY_LOSS_QUOTE = 5000.0
-DEFAULT_RISK_PER_TRADE = 0.05
-
-
-@dataclass(frozen=True)
-class Candle:
-    """백테스트용 OHLCV 캔들."""
-
-    timestamp_ms: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-
-
-@dataclass(frozen=True)
-class TradeRecord:
-    """백테스트 체결 1건."""
-
-    strategy_type: str
-    symbol: str
-    side: str
-    reason: str
-    timestamp_ms: int
-    recorded_at: str
-    price: float
-    amount: float
-    order_value_quote: float
-    fee_quote: float
-    realized_pnl_quote: float | None
-    realized_pnl_pct: float | None
-    net_realized_pnl_quote: float | None
-    net_realized_pnl_pct: float | None
-    cash_after: float
-    position_amount_after: float
-    average_entry_price_after: float | None
-    entry_count_after: int
-    extra: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class EquityPoint:
-    """자산곡선 1포인트."""
-
-    timestamp_ms: int
-    equity_quote: float
-    cash_quote: float
-    position_amount: float
-    close: float
-
-
-@dataclass(frozen=True)
-class ExecutionModel:
-    """백테스트 체결 가정."""
-
-    slippage_bps: float
-    buy_fill_ratio: float
-    sell_fill_ratio: float
-    latency_ms: int
-
-
-@dataclass(frozen=True)
-class OrderbookSnapshot:
-    """분석 로그에서 읽은 호가 스냅샷."""
-
-    timestamp_ms: int
-    best_bid: float | None
-    best_ask: float | None
-    best_bid_size: float | None
-    best_ask_size: float | None
-    bid_depth_notional_3: float | None
-    ask_depth_notional_3: float | None
-    spread_pct: float | None
-
-
-@dataclass(frozen=True)
-class AltReplayInitialState:
-    """알트 리플레이 시작 시 주입할 초기 포지션 상태."""
-
-    cash_quote: float
-    units: float
-    average_entry_price: float | None
-    entry_count: int
-    highest_price_since_entry: float | None
-    lowest_price_since_entry: float | None
-    partial_take_profit_done: bool
-    partial_stop_loss_done: bool
-    last_trade_ts: float
-    last_partial_take_profit_ts: float
-    daily_realized_pnl_quote: float
-
-
-@dataclass(frozen=True)
-class BtcReplayInitialState:
-    """BTC 리플레이 시작 시 주입할 초기 포지션 상태."""
-
-    cash_quote: float
-    units: float
-    entry_price: float | None
-    partial_take_profit_done: bool
-    add_on_count: int
-    highest_price_since_entry: float | None
-    lowest_price_since_entry: float | None
-    trailing_armed: bool
-    trailing_armed_at_ts: float | None
-    trailing_activation_price: float | None
-    last_trade_ts: float
-    last_stop_loss_ts: float
-    last_profit_exit_ts: float
-    daily_realized_pnl_quote: float
 
 
 def parse_bool(raw: str | None, default: bool = False) -> bool:
@@ -190,153 +119,6 @@ def parse_bool(raw: str | None, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def parse_timeframe_to_minutes(timeframe: str) -> int:
-    """1m, 5m, 1h 같은 문자열을 분 단위로 바꾼다."""
-    raw = timeframe.strip().lower()
-    if raw.endswith("m"):
-        return int(raw[:-1])
-    if raw.endswith("h"):
-        return int(raw[:-1]) * 60
-    if raw.endswith("d"):
-        return int(raw[:-1]) * 60 * 24
-    raise ValueError(f"지원하지 않는 타임프레임입니다: {timeframe}")
-
-
-def _safe_float(value: Any) -> float | None:
-    """숫자 후보를 float 로 안전하게 변환한다."""
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_int(value: Any) -> int | None:
-    """정수 후보를 int 로 안전하게 변환한다."""
-    if value in (None, ""):
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def calc_sma(values: list[float], period: int) -> float:
-    """단순 이동평균을 계산한다."""
-    if len(values) < period:
-        raise ValueError("SMA 계산에 필요한 데이터가 부족합니다.")
-    window = values[-period:]
-    return sum(window) / len(window)
-
-
-def calc_ema_series(values: list[float], period: int) -> list[float]:
-    """EMA 시리즈를 계산한다."""
-    if len(values) < period:
-        raise ValueError("EMA 계산에 필요한 데이터가 부족합니다.")
-
-    multiplier = 2 / (period + 1)
-    ema_values = [sum(values[:period]) / period]
-    for value in values[period:]:
-        ema_values.append((value - ema_values[-1]) * multiplier + ema_values[-1])
-    return ema_values
-
-
-def detect_sma_crossover(closes: list[float], period: int) -> tuple[bool, bool, float, float, float, float]:
-    """SMA 상향/하향 돌파를 계산한다."""
-    if len(closes) < period + 1:
-        raise ValueError("SMA 돌파 계산에 필요한 데이터가 부족합니다.")
-
-    prev_closes = closes[:-1]
-    prev_close = prev_closes[-1]
-    last_close = closes[-1]
-    prev_ma = calc_sma(prev_closes, period)
-    last_ma = calc_sma(closes, period)
-    bullish = prev_close < prev_ma and last_close > last_ma
-    bearish = prev_close > prev_ma and last_close < last_ma
-    return bullish, bearish, prev_close, prev_ma, last_close, last_ma
-
-
-def detect_ema_crossover(closes: list[float], fast_period: int, slow_period: int) -> tuple[bool, bool, float, float, float, float]:
-    """EMA 상향/하향 돌파를 계산한다."""
-    if len(closes) < slow_period + 2:
-        raise ValueError("EMA 돌파 계산에 필요한 데이터가 부족합니다.")
-
-    fast_series = calc_ema_series(closes, fast_period)
-    slow_series = calc_ema_series(closes, slow_period)
-    series_len = min(len(fast_series), len(slow_series))
-    fast_series = fast_series[-series_len:]
-    slow_series = slow_series[-series_len:]
-
-    prev_fast = fast_series[-2]
-    prev_slow = slow_series[-2]
-    last_fast = fast_series[-1]
-    last_slow = slow_series[-1]
-    bullish = prev_fast <= prev_slow and last_fast > last_slow
-    bearish = prev_fast >= prev_slow and last_fast < last_slow
-    return bullish, bearish, prev_fast, prev_slow, last_fast, last_slow
-
-
-def calc_volume_ratio(candles: list[Candle], lookback: int) -> float | None:
-    """직전 마감 봉 거래량이 그 이전 평균 거래량의 몇 배인지 계산한다."""
-    if len(candles) < 3:
-        return None
-    completed = candles[:-1]
-    if len(completed) < 2:
-        return None
-    recent = completed[-(lookback + 1):-1] if len(completed) >= lookback + 1 else completed[:-1]
-    if not recent:
-        return None
-    avg_volume = sum(c.volume for c in recent) / len(recent)
-    if avg_volume <= 0:
-        return None
-    return completed[-1].volume / avg_volume
-
-
-def calc_avg_abs_change_pct(closes: list[float], lookback: int) -> float | None:
-    """최근 절대 등락률 평균을 계산한다."""
-    if len(closes) < 2:
-        return None
-    recent = closes[-(lookback + 1):] if len(closes) >= lookback + 1 else closes
-    changes: list[float] = []
-    for prev, curr in zip(recent, recent[1:]):
-        if prev == 0:
-            continue
-        changes.append(abs((curr - prev) / prev) * 100)
-    if not changes:
-        return None
-    return sum(changes) / len(changes)
-
-
-def calc_atr(candles: list[Candle], period: int) -> float:
-    """ATR 을 계산한다."""
-    if len(candles) < period + 1:
-        raise ValueError("ATR 계산에 필요한 데이터가 부족합니다.")
-
-    trs: list[float] = []
-    for prev, curr in zip(candles[:-1], candles[1:]):
-        tr = max(
-            curr.high - curr.low,
-            abs(curr.high - prev.close),
-            abs(curr.low - prev.close),
-        )
-        trs.append(tr)
-    recent = trs[-period:]
-    return sum(recent) / len(recent)
-
-
-def get_recent_swing_low(candles: list[Candle], lookback: int) -> float:
-    """최근 스윙 저점을 계산한다."""
-    recent = candles[-lookback:] if len(candles) >= lookback else candles
-    return min(c.low for c in recent)
-
-
-def get_recent_swing_high(candles: list[Candle], lookback: int) -> float:
-    """최근 스윙 고점을 계산한다."""
-    recent = candles[-lookback:] if len(candles) >= lookback else candles
-    return max(c.high for c in recent)
 
 
 def build_exit_prices(
@@ -408,431 +190,6 @@ def build_replay_symbol_regime(
             "collected_at_local": None,
         }
     )
-
-
-def load_candles(path: Path) -> list[Candle]:
-    """CSV 또는 JSONL 파일에서 캔들 목록을 읽는다."""
-    if not path.exists():
-        raise FileNotFoundError(f"입력 파일이 없습니다: {path}")
-    suffix = path.suffix.lower()
-    if suffix == ".csv":
-        return load_candles_from_csv(path)
-    if suffix in {".jsonl", ".json"}:
-        return load_candles_from_jsonl(path)
-    raise ValueError(f"지원하지 않는 파일 형식입니다: {path.suffix}")
-
-
-def load_candles_from_csv(path: Path) -> list[Candle]:
-    """CSV 파일에서 캔들을 읽는다."""
-    candles: list[Candle] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            timestamp_ms = _safe_int(row.get("timestamp_ms") or row.get("timestamp") or row.get("ts"))
-            open_price = _safe_float(row.get("open"))
-            high_price = _safe_float(row.get("high"))
-            low_price = _safe_float(row.get("low"))
-            close_price = _safe_float(row.get("close"))
-            volume = _safe_float(row.get("volume"))
-            if None in {timestamp_ms, open_price, high_price, low_price, close_price, volume}:
-                continue
-            candles.append(
-                Candle(
-                    timestamp_ms=timestamp_ms,
-                    open=open_price,
-                    high=high_price,
-                    low=low_price,
-                    close=close_price,
-                    volume=volume,
-                )
-            )
-    return sorted(candles, key=lambda candle: candle.timestamp_ms)
-
-
-def load_candles_from_jsonl(path: Path) -> list[Candle]:
-    """JSONL 파일에서 캔들을 읽는다."""
-    candles: list[Candle] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            candle = parse_candle_payload(payload)
-            if candle is not None:
-                candles.append(candle)
-    return sorted(candles, key=lambda candle: candle.timestamp_ms)
-
-
-def parse_candle_payload(payload: Any) -> Candle | None:
-    """다양한 JSON 구조에서 캔들 1건을 해석한다."""
-    if isinstance(payload, list) and len(payload) >= 6:
-        timestamp_ms = _safe_int(payload[0])
-        open_price = _safe_float(payload[1])
-        high_price = _safe_float(payload[2])
-        low_price = _safe_float(payload[3])
-        close_price = _safe_float(payload[4])
-        volume = _safe_float(payload[5])
-    elif isinstance(payload, dict):
-        timestamp_ms = _safe_int(
-            payload.get("timestamp_ms")
-            or payload.get("timestamp")
-            or payload.get("ts")
-            or payload.get("last_candle_ts")
-        )
-        open_price = _safe_float(payload.get("open"))
-        high_price = _safe_float(payload.get("high"))
-        low_price = _safe_float(payload.get("low"))
-        close_price = _safe_float(payload.get("close"))
-        volume = _safe_float(payload.get("volume"))
-    else:
-        return None
-
-    if None in {timestamp_ms, open_price, high_price, low_price, close_price, volume}:
-        return None
-    return Candle(
-        timestamp_ms=timestamp_ms,
-        open=open_price,
-        high=high_price,
-        low=low_price,
-        close=close_price,
-        volume=volume,
-    )
-
-
-def resample_candles(candles: list[Candle], source_timeframe: str, target_timeframe: str) -> list[Candle]:
-    """낮은 주기 캔들을 높은 주기 캔들로 리샘플링한다."""
-    if source_timeframe == target_timeframe:
-        return list(candles)
-
-    source_minutes = parse_timeframe_to_minutes(source_timeframe)
-    target_minutes = parse_timeframe_to_minutes(target_timeframe)
-    if target_minutes < source_minutes:
-        raise ValueError("더 낮은 주기로는 리샘플링할 수 없습니다.")
-    if target_minutes % source_minutes != 0:
-        raise ValueError("입력 주기가 목표 주기를 정확히 나누지 못합니다.")
-
-    bucket_ms = target_minutes * 60 * 1000
-    grouped: dict[int, list[Candle]] = {}
-    for candle in candles:
-        bucket = (candle.timestamp_ms // bucket_ms) * bucket_ms
-        grouped.setdefault(bucket, []).append(candle)
-
-    resampled: list[Candle] = []
-    for bucket, rows in sorted(grouped.items()):
-        rows.sort(key=lambda candle: candle.timestamp_ms)
-        resampled.append(
-            Candle(
-                timestamp_ms=bucket,
-                open=rows[0].open,
-                high=max(row.high for row in rows),
-                low=min(row.low for row in rows),
-                close=rows[-1].close,
-                volume=sum(row.volume for row in rows),
-            )
-        )
-    return resampled
-
-
-def get_active_candles_by_time(
-    candles: list[Candle],
-    timestamps: list[int],
-    current_timestamp_ms: int,
-) -> list[Candle]:
-    """현재 시각까지 확정된 상위 주기 캔들 목록을 반환한다."""
-    end = bisect_right(timestamps, current_timestamp_ms)
-    return candles[:end]
-
-
-def get_recent_active_candles_by_time(
-    candles: list[Candle],
-    timestamps: list[int],
-    current_timestamp_ms: int,
-    max_count: int,
-) -> list[Candle]:
-    """현재 시각까지 확정된 상위 주기 캔들 중 최근 필요한 개수만 반환한다."""
-    if max_count <= 0:
-        return []
-    end = bisect_right(timestamps, current_timestamp_ms)
-    start = max(0, end - max_count)
-    return candles[start:end]
-
-
-def build_full_ema_series(prices: list[float], period: int) -> list[float | None]:
-    """전체 히스토리 기준 EMA 시리즈를 원본 인덱스에 맞춰 계산한다."""
-    if period <= 0 or len(prices) < period:
-        return [None] * len(prices)
-
-    multiplier = 2 / (period + 1)
-    ema_values: list[float | None] = [None] * len(prices)
-    seed = sum(prices[:period]) / period
-    ema_values[period - 1] = seed
-    prev_ema = seed
-    for index in range(period, len(prices)):
-        prev_ema = (prices[index] - prev_ema) * multiplier + prev_ema
-        ema_values[index] = prev_ema
-    return ema_values
-
-
-def build_macd_histogram_series(
-    prices: list[float],
-    *,
-    fast_period: int,
-    slow_period: int,
-    signal_period: int,
-) -> list[float | None]:
-    """전체 히스토리 기준 MACD 히스토그램 시리즈를 계산한다."""
-    if (
-        fast_period <= 0
-        or slow_period <= 0
-        or signal_period <= 0
-        or fast_period >= slow_period
-        or len(prices) < slow_period + signal_period
-    ):
-        return [None] * len(prices)
-
-    fast_series = build_full_ema_series(prices, fast_period)
-    slow_series = build_full_ema_series(prices, slow_period)
-    compact_macd: list[float] = []
-    macd_indexes: list[int] = []
-    for index, (fast_value, slow_value) in enumerate(zip(fast_series, slow_series)):
-        if fast_value is None or slow_value is None:
-            continue
-        compact_macd.append(fast_value - slow_value)
-        macd_indexes.append(index)
-
-    signal_series = build_full_ema_series(compact_macd, signal_period)
-    histogram: list[float | None] = [None] * len(prices)
-    for compact_index, signal_value in enumerate(signal_series):
-        if signal_value is None:
-            continue
-        original_index = macd_indexes[compact_index]
-        histogram[original_index] = compact_macd[compact_index] - signal_value
-    return histogram
-
-
-def format_iso(timestamp_ms: int) -> str:
-    """밀리초 타임스탬프를 ISO 문자열로 바꾼다."""
-    return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat()
-
-
-def local_date_key(timestamp_ms: int) -> str:
-    """밀리초 타임스탬프를 로컬 날짜 키로 바꾼다."""
-    return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).astimezone().strftime("%Y-%m-%d")
-
-
-def compute_max_drawdown(equity_curve: list[EquityPoint]) -> float:
-    """자산곡선 기준 최대 낙폭 퍼센트를 계산한다."""
-    peak = 0.0
-    max_drawdown = 0.0
-    for point in equity_curve:
-        peak = max(peak, point.equity_quote)
-        if peak <= 0:
-            continue
-        drawdown = ((peak - point.equity_quote) / peak) * 100
-        max_drawdown = max(max_drawdown, drawdown)
-    return max_drawdown
-
-
-def compute_profit_factor(sell_records: list[TradeRecord]) -> float | None:
-    """최종 청산 순손익 기준 profit factor 를 계산한다."""
-    gross_profit = sum(
-        (record.net_realized_pnl_quote or 0.0)
-        for record in sell_records
-        if (record.net_realized_pnl_quote or 0.0) > 0
-    )
-    gross_loss = abs(
-        sum(
-            (record.net_realized_pnl_quote or 0.0)
-            for record in sell_records
-            if (record.net_realized_pnl_quote or 0.0) < 0
-        )
-    )
-    if gross_loss <= 0:
-        if gross_profit <= 0:
-            return None
-        return float("inf")
-    return gross_profit / gross_loss
-
-
-def compute_sharpe_ratio(equity_curve: list[EquityPoint], *, timeframe: str) -> float | None:
-    """자산곡선의 캔들 단위 수익률로 단순 Sharpe ratio 를 계산한다."""
-    if len(equity_curve) < 3:
-        return None
-    returns: list[float] = []
-    previous_equity = equity_curve[0].equity_quote
-    for point in equity_curve[1:]:
-        if previous_equity <= 0:
-            previous_equity = point.equity_quote
-            continue
-        returns.append((point.equity_quote / previous_equity) - 1.0)
-        previous_equity = point.equity_quote
-    if len(returns) < 2:
-        return None
-    mean_return = sum(returns) / len(returns)
-    variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
-    if variance <= 0:
-        return None
-    timeframe_minutes = parse_timeframe_to_minutes(timeframe)
-    periods_per_year = max(1.0, (365.0 * 24.0 * 60.0) / max(1, timeframe_minutes))
-    return (mean_return / (variance ** 0.5)) * (periods_per_year ** 0.5)
-
-
-def build_execution_model(args: argparse.Namespace) -> ExecutionModel:
-    """CLI 인자에서 실행 모델을 만든다."""
-    return ExecutionModel(
-        slippage_bps=max(0.0, float(args.slippage_bps or 0.0)),
-        buy_fill_ratio=min(1.0, max(0.0, float(args.buy_fill_ratio or 1.0))),
-        sell_fill_ratio=min(1.0, max(0.0, float(args.sell_fill_ratio or 1.0))),
-        latency_ms=max(0, int(args.latency_ms or 0)),
-    )
-
-
-def load_orderbook_snapshots(path: Path | None) -> list[OrderbookSnapshot]:
-    """analysis_logs JSONL 에서 호가 스냅샷을 읽는다."""
-    if path is None or not path.exists():
-        return []
-    snapshots: list[OrderbookSnapshot] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        timestamp_ms = _safe_int(payload.get("last_candle_ts"))
-        if timestamp_ms is None:
-            collected_at = payload.get("collected_at")
-            if isinstance(collected_at, str):
-                try:
-                    timestamp_ms = int(datetime.fromisoformat(collected_at).timestamp() * 1000)
-                except ValueError:
-                    timestamp_ms = None
-        if timestamp_ms is None:
-            continue
-        snapshots.append(
-            OrderbookSnapshot(
-                timestamp_ms=timestamp_ms,
-                best_bid=_safe_float(payload.get("best_bid")),
-                best_ask=_safe_float(payload.get("best_ask")),
-                best_bid_size=_safe_float(payload.get("best_bid_size")),
-                best_ask_size=_safe_float(payload.get("best_ask_size")),
-                bid_depth_notional_3=_safe_float(payload.get("bid_depth_notional_3")),
-                ask_depth_notional_3=_safe_float(payload.get("ask_depth_notional_3")),
-                spread_pct=_safe_float(payload.get("spread_pct")),
-            )
-        )
-    snapshots.sort(key=lambda item: item.timestamp_ms)
-    return snapshots
-
-
-def resolve_orderbook_snapshot(
-    snapshots: list[OrderbookSnapshot],
-    *,
-    target_timestamp_ms: int,
-) -> OrderbookSnapshot | None:
-    """지정 시점 이전의 가장 가까운 호가 스냅샷을 찾는다."""
-    if not snapshots:
-        return None
-    timestamps = [snapshot.timestamp_ms for snapshot in snapshots]
-    index = bisect_right(timestamps, target_timestamp_ms) - 1
-    if index < 0:
-        return None
-    return snapshots[index]
-
-
-def estimate_orderbook_fill_ratio(
-    *,
-    side: str,
-    snapshot: OrderbookSnapshot | None,
-    requested_order_value_quote: float,
-) -> float:
-    """상위 호가 depth 기준으로 부분체결 비율을 추정한다."""
-    if snapshot is None or requested_order_value_quote <= 0:
-        return 1.0
-    if side == "buy":
-        depth_notional = snapshot.ask_depth_notional_3
-        if depth_notional is None and snapshot.best_ask is not None and snapshot.best_ask_size is not None:
-            depth_notional = snapshot.best_ask * snapshot.best_ask_size
-    else:
-        depth_notional = snapshot.bid_depth_notional_3
-        if depth_notional is None and snapshot.best_bid is not None and snapshot.best_bid_size is not None:
-            depth_notional = snapshot.best_bid * snapshot.best_bid_size
-    if depth_notional is None or depth_notional <= 0:
-        return 1.0
-    return min(1.0, depth_notional / requested_order_value_quote)
-
-
-def resolve_execution_candle(
-    candles: list[Candle],
-    *,
-    current_index: int,
-    execution_model: ExecutionModel,
-) -> tuple[Candle, int, str]:
-    """지연이 있으면 다음 캔들 시가 체결로 근사한 실행 캔들을 고른다."""
-    if execution_model.latency_ms <= 0 or current_index + 1 >= len(candles):
-        return candles[current_index], current_index, "close"
-    return candles[current_index + 1], current_index + 1, "next_open"
-
-
-def apply_execution_price(
-    *,
-    reference_price: float,
-    side: str,
-    slippage_bps: float,
-) -> float:
-    """사이드 기준으로 불리한 방향의 슬리피지를 적용한다."""
-    multiplier = slippage_bps / 10_000.0
-    if side == "buy":
-        return reference_price * (1.0 + multiplier)
-    if side == "sell":
-        return reference_price * max(0.0, 1.0 - multiplier)
-    return reference_price
-
-
-def build_output_dir(base_dir: Path, strategy_type: str, symbol: str) -> Path:
-    """리포트 디렉토리를 만든다."""
-    slug = symbol.replace("/", "_").replace("-", "_")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = base_dir / f"{timestamp}__{strategy_type}__{slug}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-def write_json(path: Path, payload: Any) -> None:
-    """JSON 파일을 저장한다."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def write_jsonl(path: Path, rows: list[Any]) -> None:
-    """JSONL 파일을 저장한다."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for row in rows:
-            payload = asdict(row) if not isinstance(row, dict) else row
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-
-
-def resolve_default_fee_rate(exchange_name: str) -> float:
-    """거래소별 기본 수수료율을 반환한다."""
-    if exchange_name.lower() == "upbit":
-        return DEFAULT_UPBIT_FEE_RATE_PCT
-    return DEFAULT_OKX_FEE_RATE_PCT
-
-
-def resolve_default_min_buy_order_value(exchange_name: str) -> float:
-    """거래소별 기본 최소 매수 금액을 반환한다."""
-    if exchange_name.lower() == "upbit":
-        return DEFAULT_UPBIT_MIN_BUY_ORDER_VALUE
-    return DEFAULT_OKX_MIN_BUY_ORDER_VALUE
-
-
-def resolve_default_max_daily_loss(exchange_name: str) -> float:
-    """거래소별 기본 일일 최대 손실 제한을 반환한다."""
-    if exchange_name.lower() == "upbit":
-        return DEFAULT_UPBIT_MAX_DAILY_LOSS_QUOTE
-    return DEFAULT_OKX_MAX_DAILY_LOSS_QUOTE
 
 
 def simulate_alt_strategy(
