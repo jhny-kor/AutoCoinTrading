@@ -184,6 +184,11 @@
   - SOL probe 허용 시 `LOW_ENERGY`와 심볼 레짐 차단 우회 상태 공통 계산
   - SOL probe 최대 보유 시간 청산 판단과 거래소 공통 로그 문구 제공
 
+- [core/strategy/xrp_rebound_probe.py](core/strategy/xrp_rebound_probe.py)
+  - XRP/KRW 전용 고점수 반등 probe 허용 판단
+  - `signal_score >= 70`, 상위 하락 추세 아님, RSI/MACD 통과 조건을 모두 확인
+  - mean_reversion 하단 reclaim 미확인 상태를 전역 완화하지 않고 XRP/KRW 소액 후보로만 낮춤
+
 - [core/strategy/funnels.py](core/strategy/funnels.py)
   - 알트/BTC 진입과 청산 퍼널 단계 생성
   - 알트 진입 기본 단계와 SOL/레짐/상관/체결/타이밍 가드 단계 공통화

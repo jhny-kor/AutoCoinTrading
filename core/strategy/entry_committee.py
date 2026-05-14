@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-05-15: XRP/KRW 고점수 반등 probe 를 위원회 전략 예외 신호로 인식하도록 추가
 - 매수 신호를 전략/리스크/체결/포트폴리오/레짐 관점으로 독립 평가하는 entry committee 를 추가했다.
 - 기본 shadow 모드에서는 실제 진입을 막지 않고 투표 결과만 구조화 로그에 남길 수 있도록 구성했다.
 """
@@ -177,6 +178,7 @@ def _vote_strategy(metrics: dict[str, Any], settings: EntryCommitteeSettings) ->
         _safe_bool(metrics, "low_energy_probe_allowed")
         or _safe_bool(metrics, "mean_reversion_lower_near_probe_allowed")
         or _safe_bool(metrics, "volume_spike_entry_downgrade_allowed")
+        or _safe_bool(metrics, "xrp_rebound_probe_allowed")
     )
 
     if not entry_signal and not probe_allowed:

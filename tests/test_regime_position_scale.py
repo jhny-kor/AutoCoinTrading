@@ -141,6 +141,23 @@ class RegimePositionScaleTests(unittest.TestCase):
         self.assertAlmostEqual(sizing.mean_reversion_lower_near_position_ratio, 0.00984375)
         self.assertAlmostEqual(sizing.position_ratio, 0.00984375)
 
+    def test_xrp_rebound_probe_forces_small_position_ratio(self):
+        sizing = build_alt_position_sizing(
+            strategy=DummyAltStrategy(),
+            symbol="XRP/KRW",
+            base_position_ratio=0.3,
+            symbol_regime="TRENDING",
+            btc_reference_regime="LOW_ENERGY",
+            btc_reference_atr_pct=0.11,
+            alt_atr_pct=0.4,
+            score_scale=1.0,
+            xrp_rebound_probe_allowed=True,
+            xrp_rebound_probe_position_scale=0.25,
+        )
+
+        self.assertAlmostEqual(sizing.xrp_rebound_probe_position_ratio, 0.009375)
+        self.assertAlmostEqual(sizing.position_ratio, 0.009375)
+
     def test_build_btc_position_sizing_preserves_low_energy_probe_order(self):
         sizing = build_btc_position_sizing(
             settings=DummyBtcSettings(),

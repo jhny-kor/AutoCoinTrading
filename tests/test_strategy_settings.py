@@ -220,6 +220,11 @@ class StrategySettingsTests(unittest.TestCase):
                 "STRATEGY_MEAN_REVERSION_LOWER_NEAR_MIN_SIGNAL_SCORE": "40",
                 "STRATEGY_MEAN_REVERSION_LOWER_NEAR_POSITION_SCALE": "0.25",
                 "STRATEGY_MEAN_REVERSION_LOWER_NEAR_EXTRA_CONFIRMATION_LOOPS": "2",
+                "STRATEGY_ENABLE_XRP_REBOUND_PROBE": "true",
+                "STRATEGY_XRP_REBOUND_PROBE_SYMBOLS": "XRP/KRW",
+                "STRATEGY_XRP_REBOUND_PROBE_MIN_SIGNAL_SCORE": "70",
+                "STRATEGY_XRP_REBOUND_PROBE_POSITION_SCALE": "0.25",
+                "STRATEGY_XRP_REBOUND_PROBE_EXTRA_CONFIRMATION_LOOPS": "3",
                 "STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO": "2.0",
                 "STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE": "85",
                 "STRATEGY_OVERHEAT_GUARD_RSI": "68",
@@ -259,6 +264,12 @@ class StrategySettingsTests(unittest.TestCase):
         self.assertEqual(40, settings.mean_reversion_lower_near_min_signal_score)
         self.assertEqual(0.25, settings.mean_reversion_lower_near_position_scale)
         self.assertEqual(2, settings.mean_reversion_lower_near_extra_confirmation_loops)
+        self.assertTrue(settings.enable_xrp_rebound_probe)
+        self.assertEqual(("XRP/KRW",), settings.xrp_rebound_probe_symbols)
+        self.assertEqual(70, settings.xrp_rebound_probe_min_signal_score)
+        self.assertEqual(0.25, settings.xrp_rebound_probe_position_scale)
+        self.assertEqual(3, settings.xrp_rebound_probe_extra_confirmation_loops)
+        self.assertTrue(settings.allows_xrp_rebound_probe("XRP/KRW"))
         self.assertEqual(2.0, settings.overheat_guard_volume_ratio)
         self.assertEqual(85, settings.overheat_guard_atr_percentile)
         self.assertEqual(68, settings.overheat_guard_rsi)

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-15: XRP/KRW 고점수 반등 probe 대상, 최소 점수, 소액 비중, 추가 확인 설정을 추가
 - 2026-05-12: 하단 근접 mean_reversion probe 전용 최소 점수 설정을 추가해 전역 strong 기준과 분리
 - mean_reversion 하단 근접 신호를 소액/추가확인 probe 후보로 제한하는 설정을 추가
 - SOL 제한형 probe 진입/익절/손절/최대 보유시간 설정을 추가
@@ -128,6 +129,11 @@ class StrategySettings:
     mean_reversion_lower_near_min_signal_score: float
     mean_reversion_lower_near_position_scale: float
     mean_reversion_lower_near_extra_confirmation_loops: int
+    enable_xrp_rebound_probe: bool
+    xrp_rebound_probe_symbols: tuple[str, ...]
+    xrp_rebound_probe_min_signal_score: float
+    xrp_rebound_probe_position_scale: float
+    xrp_rebound_probe_extra_confirmation_loops: int
     overheat_guard_volume_ratio: float
     overheat_guard_atr_percentile: float
     overheat_guard_rsi: float
@@ -393,6 +399,10 @@ class StrategySettings:
     def allows_sol_probe(self, symbol: str) -> bool:
         """심볼이 SOL 제한형 probe 대상인지 반환한다."""
         return self.enable_sol_probe and symbol in self.sol_probe_symbols
+
+    def allows_xrp_rebound_probe(self, symbol: str) -> bool:
+        """심볼이 XRP 고점수 반등 probe 관리 대상인지 반환한다."""
+        return self.enable_xrp_rebound_probe and symbol in self.xrp_rebound_probe_symbols
 
     def blocks_entry_when_htf_bearish(self, symbol: str) -> bool:
         """심볼이 상위 하락 추세일 때 신규 진입 차단 대상인지 반환한다."""
@@ -775,6 +785,15 @@ def load_strategy_settings(
         mean_reversion_lower_near_min_signal_score=config_float("strategy", "mean_reversion_lower_near_min_signal_score", 40.0, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_MIN_SIGNAL_SCORE"),
         mean_reversion_lower_near_position_scale=config_float("strategy", "mean_reversion_lower_near_position_scale", 0.25, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_POSITION_SCALE"),
         mean_reversion_lower_near_extra_confirmation_loops=config_int("strategy", "mean_reversion_lower_near_extra_confirmation_loops", 2, env_key="STRATEGY_MEAN_REVERSION_LOWER_NEAR_EXTRA_CONFIRMATION_LOOPS"),
+        enable_xrp_rebound_probe=config_bool("strategy", "enable_xrp_rebound_probe", True, env_key="STRATEGY_ENABLE_XRP_REBOUND_PROBE"),
+        xrp_rebound_probe_symbols=tuple(
+            parse_symbol_list(
+                config_str("strategy", "xrp_rebound_probe_symbols", "XRP/KRW", env_key="STRATEGY_XRP_REBOUND_PROBE_SYMBOLS")
+            )
+        ),
+        xrp_rebound_probe_min_signal_score=config_float("strategy", "xrp_rebound_probe_min_signal_score", 70.0, env_key="STRATEGY_XRP_REBOUND_PROBE_MIN_SIGNAL_SCORE"),
+        xrp_rebound_probe_position_scale=config_float("strategy", "xrp_rebound_probe_position_scale", 0.25, env_key="STRATEGY_XRP_REBOUND_PROBE_POSITION_SCALE"),
+        xrp_rebound_probe_extra_confirmation_loops=config_int("strategy", "xrp_rebound_probe_extra_confirmation_loops", 3, env_key="STRATEGY_XRP_REBOUND_PROBE_EXTRA_CONFIRMATION_LOOPS"),
         overheat_guard_volume_ratio=config_float("strategy", "overheat_guard_volume_ratio", 2.0, env_key="STRATEGY_OVERHEAT_GUARD_VOLUME_RATIO"),
         overheat_guard_atr_percentile=config_float("strategy", "overheat_guard_atr_percentile", 85.0, env_key="STRATEGY_OVERHEAT_GUARD_ATR_PERCENTILE"),
         overheat_guard_rsi=config_float("strategy", "overheat_guard_rsi", 68.0, env_key="STRATEGY_OVERHEAT_GUARD_RSI"),

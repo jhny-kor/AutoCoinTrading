@@ -34,6 +34,8 @@
 - SOL probe 전용 TP/SL 적용, 수수료 기반 최소 익절률, 최대 보유 시간 청산 판단을 [core/strategy/sol_probe.py](core/strategy/sol_probe.py) 의 `resolve_sol_probe_exit_state()`로 모았습니다.
 - OKX/업비트 알트 봇은 같은 helper 를 사용하므로, SOL probe 진입/청산 조건이나 레짐 우회 규칙을 바꿀 때는 각 봇 본문보다 [core/strategy/sol_probe.py](core/strategy/sol_probe.py)를 먼저 수정합니다.
 - 이 리팩토링은 계산 위치와 로그 문구 공통화만 바꾼 것이며, `signal_score >= 70`, 기존 주문금액 25%, TP 0.8%, SL 0.5%, 최대 보유 180분, 같은 심볼 동시 1포지션 조건은 유지합니다.
+- XRP/KRW 하단 reclaim 미확인 신호는 전역으로 풀지 않고 [core/strategy/xrp_rebound_probe.py](core/strategy/xrp_rebound_probe.py) 의 `resolve_xrp_rebound_probe_state()`에서 `signal_score >= 70`, `htf_bearish == false`, RSI/MACD 통과, 소액 비중 25%, 추가 확인 3회 조건을 모두 만족할 때만 반등 probe 후보로 낮춥니다.
+- 2026-05-18 이후 3일 관찰 결과에서 손절 증가 없이 후보 부족이 계속되면 XRP/KRW 반등 probe 최소 점수 `60` 완화 실험을 별도 변경으로 검토합니다.
 
 ### 2026-05-14 완료한 리팩토링
 

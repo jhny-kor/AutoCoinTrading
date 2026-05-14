@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-15: XRP/KRW 고점수 반등 probe 를 mean_reversion 하단 reclaim 미확인 예외로 제한 연결
 - 2026-05-14: 알트 공통 SMA/거래량/등락률 helper 를 core.strategy.indicators 로 분리함
 - 2026-05-14: 알트 진입/청산 퍼널 실행 단계를 공통 alt_loop helper 로 옮김
 - 2026-05-14: 업비트 시장가 주문 제출, private 이벤트 보강, 캐시 무효화를 공통 order adapter 로 옮김
@@ -185,6 +186,7 @@ from core.strategy.sol_probe import (
     resolve_sol_probe_entry_state,
 )
 from core.strategy.volume_spike_entry import evaluate_volume_spike_entry_downgrade
+from core.strategy.xrp_rebound_probe import resolve_xrp_rebound_probe_state
 from core.strategy.indicators import (
     calc_avg_abs_change_pct,
     calc_atr,
@@ -883,12 +885,52 @@ def run_bot():
                 mean_reversion_falling_knife_blocked = bool(
                     signal_state.get("falling_knife_blocked", False)
                 )
+                mean_reversion_lower_reclaim_confirmed = bool(
+                    signal_state.get("lower_reclaim_confirmed", bullish)
+                )
                 mean_reversion_lower_near_probe_allowed = bool(
                     signal_state.get("lower_near_probe_allowed", False)
                 )
                 mean_reversion_lower_near_extra_confirmation_loops = int(
                     signal_state.get("lower_near_extra_confirmation_loops", 0)
                 )
+                xrp_rebound_probe_state = resolve_xrp_rebound_probe_state(
+                    enabled=strategy.enable_xrp_rebound_probe,
+                    symbol=symbol,
+                    eligible_symbols=strategy.xrp_rebound_probe_symbols,
+                    strategy_key=strategy_key,
+                    signal_score=signal_score,
+                    min_signal_score=strategy.xrp_rebound_probe_min_signal_score,
+                    htf_bearish=htf_bearish,
+                    rsi_filter_passed=rsi_filter_passed,
+                    macd_filter_passed=macd_filter_passed,
+                    lower_reclaim_confirmed=mean_reversion_lower_reclaim_confirmed,
+                    falling_knife_blocked=mean_reversion_falling_knife_blocked,
+                    position_scale=strategy.xrp_rebound_probe_position_scale,
+                    extra_confirmation_loops=strategy.xrp_rebound_probe_extra_confirmation_loops,
+                    entry_signal=entry_signal,
+                    signal_is_strong=signal_is_strong,
+                    bullish=bullish,
+                    mean_reversion_lower_near_probe_allowed=mean_reversion_lower_near_probe_allowed,
+                    mean_reversion_lower_near_extra_confirmation_loops=mean_reversion_lower_near_extra_confirmation_loops,
+                )
+                xrp_rebound_probe_decision = xrp_rebound_probe_state.decision
+                xrp_rebound_probe_allowed = xrp_rebound_probe_decision.allowed
+                entry_signal = xrp_rebound_probe_state.entry_signal
+                signal_is_strong = xrp_rebound_probe_state.signal_is_strong
+                bullish = xrp_rebound_probe_state.bullish
+                mean_reversion_lower_near_probe_allowed = (
+                    xrp_rebound_probe_state.mean_reversion_lower_near_probe_allowed
+                )
+                mean_reversion_lower_near_extra_confirmation_loops = (
+                    xrp_rebound_probe_state.mean_reversion_lower_near_extra_confirmation_loops
+                )
+                if xrp_rebound_probe_state.lower_near_suppressed:
+                    signal_state["lower_near_probe_allowed"] = False
+                    signal_state["lower_near_extra_confirmation_loops"] = 0
+                    signal_state["lower_near_probe_reason"] = (
+                        xrp_rebound_probe_decision.reason
+                    )
                 low_energy_probe_decision = evaluate_low_energy_probe(
                     enabled=strategy.enable_low_energy_probe,
                     low_energy_guard_active=low_energy_guard_active,
@@ -946,10 +988,17 @@ def run_bot():
                         f"signal={signal_score:.1f}, volume={0.0 if volume_ratio is None else volume_ratio:.3f}, "
                         f"position_scale={low_energy_probe_decision.position_scale:.2f}x"
                     )
+                if xrp_rebound_probe_allowed:
+                    log(
+                        f"[{symbol}] XRP 고점수 반등 probe 후보로 전환합니다. "
+                        f"signal={signal_score:.1f}, htf_bearish={htf_bearish}, "
+                        f"position_scale={xrp_rebound_probe_decision.position_scale:.2f}x"
+                    )
                 entry_probe_score_override_allowed = (
                     mean_reversion_lower_near_probe_allowed
                     or low_energy_probe_decision.allowed
                     or sol_probe_entry_allowed
+                    or xrp_rebound_probe_allowed
                 )
                 overheated_entry_blocked = is_overheated_entry_risk(
                     volume_ratio=volume_ratio,
@@ -1116,7 +1165,7 @@ def run_bot():
                 elif strategy_key == "breakout":
                     raw_entry_candidate = (
                         entry_signal
-                        and (bullish or sol_probe_entry_allowed)
+                        and (bullish or sol_probe_entry_allowed or xrp_rebound_probe_allowed)
                         and not effective_symbol_regime_blocks_entry
                         and not effective_low_energy_guard_active
                         and not correlation_entry_blocked
@@ -1128,7 +1177,12 @@ def run_bot():
                         and not volume_atr_execution_blocked
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
-                        and (not symbol_regime_requires_fresh_cross or bullish or sol_probe_entry_allowed)
+                        and (
+                            not symbol_regime_requires_fresh_cross
+                            or bullish
+                            or sol_probe_entry_allowed
+                            or xrp_rebound_probe_allowed
+                        )
                     )
                 else:
                     raw_entry_candidate = (
@@ -1144,7 +1198,12 @@ def run_bot():
                         and not volume_atr_execution_blocked
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
-                        and (not symbol_regime_requires_fresh_cross or bullish or sol_probe_entry_allowed)
+                        and (
+                            not symbol_regime_requires_fresh_cross
+                            or bullish
+                            or sol_probe_entry_allowed
+                            or xrp_rebound_probe_allowed
+                        )
                     )
                 # 단발 신호에 바로 진입하지 않고 같은 방향 확인이 누적될 때만 READY 로 승격한다.
                 if mean_reversion_lower_near_probe_allowed:
@@ -1173,6 +1232,7 @@ def run_bot():
                         + volume_spike_entry_downgrade.extra_confirmation_loops
                         + low_energy_probe_decision.extra_confirmation_loops
                         + mean_reversion_lower_near_extra_confirmation_loops
+                        + xrp_rebound_probe_decision.extra_confirmation_loops
                     ),
                 )
                 log(f"[{symbol}] 적용 이격도 기준: {min_gap_pct:.4f}%")
@@ -1587,6 +1647,8 @@ def run_bot():
                     ),
                     low_energy_probe_allowed=low_energy_probe_decision.allowed,
                     low_energy_probe_position_scale=low_energy_probe_decision.position_scale,
+                    xrp_rebound_probe_allowed=xrp_rebound_probe_allowed,
+                    xrp_rebound_probe_position_scale=xrp_rebound_probe_decision.position_scale,
                     sol_probe_allowed=sol_probe_entry_allowed,
                     sol_probe_position_scale=sol_probe_entry_decision.position_scale,
                 )
@@ -1621,6 +1683,7 @@ def run_bot():
                         and regime_policy.allow_dynamic_overweight
                         and not volume_spike_entry_downgrade.allowed
                         and not sol_probe_entry_allowed
+                        and not xrp_rebound_probe_allowed
                     ),
                 )
                 requested_order_value, allocation_decision = build_alt_allocation(
@@ -1803,13 +1866,18 @@ def run_bot():
                     sol_probe_entry_allowed=sol_probe_entry_allowed,
                     sol_probe_entry_reason=sol_probe_entry_decision.reason,
                     sol_probe_position_scale=sol_probe_entry_decision.position_scale,
+                    xrp_rebound_probe_allowed=xrp_rebound_probe_allowed,
+                    xrp_rebound_probe_reason=xrp_rebound_probe_decision.reason,
+                    xrp_rebound_probe_min_signal_score=strategy.xrp_rebound_probe_min_signal_score,
+                    xrp_rebound_probe_position_scale=xrp_rebound_probe_decision.position_scale,
+                    xrp_rebound_probe_extra_confirmation_loops=(
+                        xrp_rebound_probe_decision.extra_confirmation_loops
+                    ),
                     sol_probe_take_profit_pct=strategy.sol_probe_take_profit_pct,
                     sol_probe_stop_loss_pct=strategy.sol_probe_stop_loss_pct,
                     sol_probe_max_hold_minutes=strategy.sol_probe_max_hold_minutes,
                     sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
-                    mean_reversion_lower_reclaim_confirmed=bool(
-                        signal_state.get("lower_reclaim_confirmed", bullish)
-                    ),
+                    mean_reversion_lower_reclaim_confirmed=mean_reversion_lower_reclaim_confirmed,
                     mean_reversion_lower_near_probe_allowed=mean_reversion_lower_near_probe_allowed,
                     mean_reversion_lower_near_probe_reason=str(
                         signal_state.get("lower_near_probe_reason", "")
@@ -1886,7 +1954,11 @@ def run_bot():
                     gap_within_upper_bound=gap_within_upper_bound,
                     rsi_filter_passed=rsi_filter_passed,
                     macd_filter_passed=macd_filter_passed,
-                    htf_bullish=(not strategy.enable_higher_timeframe_filter or htf_bullish),
+                    htf_bullish=(
+                        not strategy.enable_higher_timeframe_filter
+                        or htf_bullish
+                        or xrp_rebound_probe_allowed
+                    ),
                     volume_filter_passed=(not strategy.enable_volume_filter or volume_filter_passed),
                     volume_ratio=volume_ratio,
                     effective_min_volume_ratio=effective_min_volume_ratio,
@@ -1923,9 +1995,7 @@ def run_bot():
                     squeeze_band_passed=bool(signal_state.get("squeeze_band_passed", True)),
                     squeeze_volume_passed=bool(signal_state.get("squeeze_volume_passed", True)),
                     squeeze_breakout_passed=bool(signal_state.get("squeeze_breakout_passed", True)),
-                    mean_reversion_lower_reclaim_confirmed=bool(
-                        signal_state.get("lower_reclaim_confirmed", bullish)
-                    ),
+                    mean_reversion_lower_reclaim_confirmed=mean_reversion_lower_reclaim_confirmed,
                     mean_reversion_lower_near_probe_allowed=mean_reversion_lower_near_probe_allowed,
                     mean_reversion_bb_lower_distance_pct=float(
                         signal_state.get("bb_lower_distance_pct", 0.0)
@@ -1942,8 +2012,14 @@ def run_bot():
                     mean_reversion_lower_near_signal_passed=bool(
                         signal_state.get("lower_near_signal_passed", False)
                     ),
-                    entry_probe_signal=sol_probe_entry_allowed,
-                    entry_probe_reason=sol_probe_entry_decision.reason,
+                    entry_probe_signal=(
+                        sol_probe_entry_allowed or xrp_rebound_probe_allowed
+                    ),
+                    entry_probe_reason=(
+                        xrp_rebound_probe_decision.reason
+                        if xrp_rebound_probe_allowed
+                        else sol_probe_entry_decision.reason
+                    ),
                     atr_context_passed=bool(signal_state.get("atr_context_passed", True)),
                     range_context_passed=bool(signal_state.get("range_context_passed", True)),
                     falling_knife_blocked=mean_reversion_falling_knife_blocked,
@@ -2238,6 +2314,9 @@ def run_bot():
                                 "sol_probe_entry_allowed": sol_probe_entry_allowed,
                                 "sol_probe_entry_reason": sol_probe_entry_decision.reason,
                                 "sol_probe_position_scale": sol_probe_entry_decision.position_scale,
+                                "xrp_rebound_probe_allowed": xrp_rebound_probe_allowed,
+                                "xrp_rebound_probe_reason": xrp_rebound_probe_decision.reason,
+                                "xrp_rebound_probe_position_scale": xrp_rebound_probe_decision.position_scale,
                                 "fee_round_trip_pct": fee_round_trip_pct,
                                 "min_volume_ratio": effective_min_volume_ratio,
                                 "volume_filter_passed": volume_filter_passed,

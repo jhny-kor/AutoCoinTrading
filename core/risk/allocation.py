@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-15: XRP/KRW 고점수 반등 probe 를 전용 소액 비중으로 제한하는 포지션 계산을 추가
 - 2026-05-12: mean_reversion 하단 근접 probe 는 심볼 레짐 0 스케일에 묻히지 않도록 별도 소액 비중을 계산
 - 2026-05-02: 손절 방지를 위해 signal/volume/correlation 단독 가산을 줄이고 고ATR·약한 호가 조합은 allocation score 에서 감점하도록 조정
 - 2026-04-12: volume percentile, ATR percentile, HTF slope, 호가 압력 점수를 결합해 약한 단일 지표 의존도를 줄이도록 allocation score 를 확장
@@ -42,6 +43,7 @@ class AltPositionSizingResult:
     position_ratio: float
     mean_reversion_lower_near_position_ratio: float | None
     low_energy_probe_position_ratio: float | None
+    xrp_rebound_probe_position_ratio: float | None
     sol_probe_position_ratio: float | None
 
 
@@ -232,6 +234,8 @@ def build_alt_position_sizing(
     mean_reversion_lower_near_position_scale: float | None = None,
     low_energy_probe_allowed: bool = False,
     low_energy_probe_position_scale: float = 1.0,
+    xrp_rebound_probe_allowed: bool = False,
+    xrp_rebound_probe_position_scale: float = 1.0,
     sol_probe_allowed: bool = False,
     sol_probe_position_scale: float = 1.0,
 ) -> AltPositionSizingResult:
@@ -291,6 +295,20 @@ def build_alt_position_sizing(
         )
         position_ratio = max(position_ratio, low_energy_probe_position_ratio)
 
+    xrp_rebound_probe_position_ratio = None
+    if xrp_rebound_probe_allowed:
+        xrp_rebound_probe_position_ratio = apply_regime_position_scale(
+            base_position_ratio=base_position_ratio,
+            regime_scale=(
+                btc_regime_position_scale
+                * btc_atr_position_scale
+                * alt_atr_position_scale
+                * xrp_rebound_probe_position_scale
+                * score_scale
+            ),
+        )
+        position_ratio = xrp_rebound_probe_position_ratio
+
     sol_probe_position_ratio = None
     if sol_probe_allowed:
         sol_probe_position_ratio = apply_regime_position_scale(
@@ -317,6 +335,7 @@ def build_alt_position_sizing(
         position_ratio=position_ratio,
         mean_reversion_lower_near_position_ratio=mean_reversion_lower_near_position_ratio,
         low_energy_probe_position_ratio=low_energy_probe_position_ratio,
+        xrp_rebound_probe_position_ratio=xrp_rebound_probe_position_ratio,
         sol_probe_position_ratio=sol_probe_position_ratio,
     )
 
@@ -339,6 +358,11 @@ def format_alt_position_sizing_log(
         if sizing.mean_reversion_lower_near_position_ratio is not None
         else "미적용"
     )
+    xrp_rebound_probe_text = (
+        f"{sizing.xrp_rebound_probe_position_ratio:.4f}"
+        if sizing.xrp_rebound_probe_position_ratio is not None
+        else "미적용"
+    )
     return (
         f"[{symbol}] 적용 매수 비중: 기본 {sizing.base_position_ratio:.4f} | "
         f"심볼 레짐 스케일 {sizing.regime_position_scale:.2f}x | "
@@ -347,6 +371,7 @@ def format_alt_position_sizing_log(
         f"ALT ATR({0.0 if alt_atr_pct is None else alt_atr_pct:.4f}%) 스케일 {sizing.alt_atr_position_scale:.2f}x | "
         f"score 스케일 {sizing.score_scale:.2f}x | "
         f"하단근접 probe 비중 {lower_near_probe_text} | "
+        f"XRP 반등 probe 비중 {xrp_rebound_probe_text} | "
         f"SOL probe 비중 {sol_probe_text} | "
         f"최종 {sizing.position_ratio:.4f}"
     )
