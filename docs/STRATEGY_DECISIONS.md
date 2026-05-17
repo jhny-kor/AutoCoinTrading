@@ -2,6 +2,15 @@
 
 이 문서는 전략이나 설정 값을 수정할 때, 어떤 로그와 어떤 관찰을 근거로 바꿨는지를 간단히 남기는 기록입니다.
 
+## English Summary
+
+This file is the strategy decision log.
+
+- Each entry records what changed, what evidence supported it, and how the change should be interpreted.
+- Historical entries are intentionally preserved even when current runtime values have changed.
+- Use this file before tuning thresholds so the same failed adjustment is not repeated.
+- Current runtime values should be checked in `config/runtime.toml`, `config/runtime.local.toml`, and the relevant `settings/` loader.
+
 ## 기록 목적
 
 - 나중에 "왜 이 값을 이렇게 바꿨는지"를 다시 추적할 수 있게 합니다.

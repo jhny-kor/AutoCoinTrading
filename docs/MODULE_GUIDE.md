@@ -1,5 +1,16 @@
 # MODULE GUIDE
 
+## English Summary
+
+This guide maps the repository by feature area so maintainers can find the right module before changing behavior.
+
+- `settings/` loads runtime strategy and operational configuration.
+- `core/` contains shared strategy, risk, execution, position lifecycle, and notification helpers.
+- `run/` contains the actual process entry points managed by `bot_manager.py`.
+- `reporting/` contains Telegram reports, formatting, and listener runtime helpers.
+- `tools/` contains operational utilities such as strategy set application and backtest registry updates.
+- OKX and Upbit bots should stay structurally aligned unless an exchange-specific constraint requires divergence.
+
 ## 문서 목적
 
 이 문서는 현재 `auto_coin_bot` 프로젝트의 모듈을 `기능 단위`로 빠르게 찾을 수 있도록 정리한 안내서입니다.

@@ -1,5 +1,17 @@
 # PLANS
 
+## English Summary
+
+This document is the short-term bot roadmap and planning log.
+
+- `현재 적용` means the strategy or structure is currently active in runtime code/config.
+- `과거 검토안` and `초기 이력` are historical notes and may no longer match current runtime values.
+- `향후 후보안` means an idea that has not been activated yet.
+- Current strategic direction:
+  - BTC uses `Donchian Channel + ATR` trend-following to reduce weak EMA crossover noise.
+  - Alts use `Bollinger Squeeze + volume expansion` to reduce low-momentum 1-minute MA crossover entries.
+  - The next phase is validation, not adding another large strategy layer.
+
 ## 문서 사용 규칙
 
 - `현재 적용`이라고 적힌 내용은 지금 코드와 `.env` 기준으로 맞춰 둡니다.

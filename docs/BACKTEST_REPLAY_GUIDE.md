@@ -1,5 +1,14 @@
 # 백테스트 / 리플레이 가이드
 
+## English Summary
+
+`backtest_replay.py` is the first-line offline replay tool for checking strategy behavior against local OHLCV data.
+
+- It reuses the same settings loaders as the live bots.
+- It supports alt strategy replay and BTC strategy replay.
+- It writes summary JSON, trade JSONL, and equity-curve JSONL outputs.
+- Replay results are useful for comparing direction and failure modes, but they are not a perfect replacement for live execution data.
+
 ## 목적
 
 `backtest_replay.py` 는 실거래 봇과 같은 설정 로더를 사용해, 로컬 OHLCV 파일로 전략을 다시 재생하는 1차 오프라인 검증 도구입니다.

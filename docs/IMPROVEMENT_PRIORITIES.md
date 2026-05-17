@@ -2,6 +2,14 @@
 
 이 문서는 현재 `auto_coin_bot` 저장소를 기준으로, 실제 코드 상태를 보고 판단한 `보강해야 할 부분`과 `강화해야 할 부분`을 우선순위별로 정리한 메모입니다.
 
+## English Summary
+
+This document records improvement priorities for the short-term trading bot.
+
+- The strongest areas are observability, operational logs, Telegram reporting, and day-to-day operability.
+- The weaker areas are offline verification, restart-state recovery, automated regression coverage, and persistent risk state.
+- The preferred next direction is to make changes more verifiable before adding more strategy complexity.
+
 ## 현재 판단
 
 - 이 프로젝트는 `로그/운영 관측성`과 `실전 운영 편의성`이 강한 편입니다.

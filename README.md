@@ -3,6 +3,18 @@
 OKX와 업비트 현물 자동매매를 테스트하는 단타/인트라데이 프로젝트입니다.  
 현재 구조는 `run/` 실행 진입점, `core/` 공통 전략/리스크/실행 로직, `settings/` 설정 로더, `reporting/` 분석/텔레그램, `tools/` 운영 유틸 기준으로 정리돼 있습니다.
 
+## English Summary
+
+This repository runs a short-term / intraday spot trading bot for OKX and Upbit.
+
+- Current scope: short-term trading only. Swing or long-term experiments must stay outside this project.
+- Runtime entry points live under `run/`.
+- Shared strategy, risk, execution, and position logic live under `core/`.
+- Canonical runtime settings live in `config/runtime.toml`.
+- Local runtime overrides live in `config/runtime.local.toml`.
+- Secrets must stay in `.env.secrets` and must not be committed.
+- Operational evidence is collected through text logs, structured `system / strategy / trade` logs, Telegram reports, and replay/backtest reports.
+
 ## 현재 운영 기준
 
 - 거래소

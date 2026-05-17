@@ -1,5 +1,16 @@
 # 설정 파일 구조 한 페이지 정리
 
+## English Summary
+
+This document explains how runtime configuration is layered.
+
+- The canonical runtime file is `config/runtime.toml`.
+- Strategy presets live under `config/sets/*.toml`.
+- Local active overrides live in `config/runtime.local.toml`.
+- Secret values live in `.env.secrets`.
+- Legacy `.env` is only a fallback when the split env/TOML files are not present.
+- When a strategy appears not to change after editing `.env`, check the TOML runtime layers first.
+
 ## 핵심 결론
 
 현재 구조에서 **canonical 운영 설정은 `config/runtime.toml`** 입니다.
