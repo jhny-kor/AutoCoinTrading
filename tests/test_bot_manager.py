@@ -1,6 +1,6 @@
 import unittest
 
-from bot_manager import is_zombie_stat, parse_process_listing_line
+from bot_manager import command_matches_script, is_zombie_stat, parse_process_listing_line
 
 
 class BotManagerProcessParsingTests(unittest.TestCase):
@@ -21,6 +21,19 @@ class BotManagerProcessParsingTests(unittest.TestCase):
         self.assertTrue(is_zombie_stat("Z"))
         self.assertTrue(is_zombie_stat("Z+"))
         self.assertFalse(is_zombie_stat("S"))
+
+    def test_command_matches_script_uses_process_prefix_only(self):
+        command = "/opt/python run/ma_crossover_bot.py --some-flag"
+
+        self.assertTrue(command_matches_script(command, "run/ma_crossover_bot.py"))
+
+    def test_command_matches_script_ignores_embedded_transcript_mentions(self):
+        command = (
+            "/Applications/Codex.app/SkyComputerUseClient turn-ended "
+            '{"input":"old text mentions run/ma_crossover_bot.py later"}'
+        )
+
+        self.assertFalse(command_matches_script(command, "run/ma_crossover_bot.py"))
 
 
 if __name__ == "__main__":

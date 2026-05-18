@@ -16,6 +16,7 @@
 - ps 조회가 막힌 경우 PID 파일을 이용해 중복 시작과 상태 추적을 이어가도록 보완했다.
 - 프로세스 목록 조회가 막힌 경우 상태 출력에 안내 문구를 함께 남기도록 정리했다.
 - 2026-05-07: defunct 프로세스 PID 파일을 실행 중으로 오판하지 않도록 ps stat 기반 정리를 추가했다.
+- 2026-05-18: ps 명령 전체를 파싱하지 않고 앞쪽 실행 인자만 검사해 긴 외부 프로세스 인자 때문에 상태 조회가 지연되지 않게 했다.
 
 가능한 모든 터미널 명령
 - .venv/bin/python bot_manager.py status
@@ -54,7 +55,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import signal
 import subprocess
 import sys
@@ -222,14 +222,19 @@ def merge_with_pidfile_processes(
 
 def command_matches_script(command: str, script: str) -> bool:
     """명령어 문자열 안에 대상 스크립트가 정확히 포함되어 있는지 확인한다."""
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    # Computer Use/Codex 보조 프로세스는 긴 JSON 인자에 과거 대화 전체를 담을 수 있다.
+    # 전체 command 를 shlex 로 파싱하면 느리고, 대화 안의 스크립트명까지 오탐할 수 있다.
+    tokens = command.split(None, 4)[:4]
+    if not tokens:
+        return False
+
+    executable_name = Path(tokens[0].strip("'\"")).name.lower()
+    if "python" not in executable_name:
+        return False
 
     expected_path = (ROOT_DIR / script).resolve()
-    for token in tokens:
-        token_path = Path(token)
+    for token in tokens[1:]:
+        token_path = Path(token.strip("'\""))
         if token_path.is_absolute() or len(token_path.parts) > 1:
             try:
                 if token_path.resolve() == expected_path:
