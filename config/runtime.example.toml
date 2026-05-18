@@ -3,6 +3,7 @@
 # 2026-04-03: canonical runtime config 예시로 승격
 # 2026-04-09: score 기반 동적 자본 배분 예시 키 추가
 # 2026-05-06: 매수 신호 다관점 검토 위원회 예시 키 추가
+# 2026-05-19: BTC/KRW 고점 추격 차단 예시 키 추가
 
 [portfolio]
 enable_score_based_scaling = true
@@ -35,6 +36,11 @@ entry_mode = "donchian"
 donchian_entry_lookback = 20
 donchian_exit_lookback = 10
 donchian_confirm_breakout_close = true
+enable_top_chase_guard = true
+top_chase_guard_symbol = "BTC/KRW"
+top_chase_guard_volume_ratio = 8.0
+top_chase_guard_atr_percentile = 90.0
+top_chase_guard_range_position_pct = 95.0
 
 [okx]
 sandbox = false

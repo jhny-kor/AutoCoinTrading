@@ -1,4 +1,8 @@
-"""단독 지표를 결합해 추격 진입 리스크를 줄이는 helper 테스트."""
+"""단독 지표를 결합해 추격 진입 리스크를 줄이는 helper 테스트.
+
+수정 요약
+- BTC/KRW 고점 추격 차단 helper 검증을 추가했다.
+"""
 
 import unittest
 
@@ -6,6 +10,7 @@ from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_btc_regime_correlation_volatility_risk,
     is_overheated_entry_risk,
+    is_symbol_top_chase_entry_risk,
     is_stop_loss_context_reentry_risk,
     is_volume_atr_execution_weak_risk,
     requires_overheat_confirmation,
@@ -32,6 +37,47 @@ class CombinedFilterTests(unittest.TestCase):
                 volume_ratio_threshold=2.0,
                 atr_percentile_threshold=85.0,
                 rsi_threshold=68.0,
+            )
+        )
+
+    def test_symbol_top_chase_entry_risk_only_blocks_target_symbol(self):
+        self.assertTrue(
+            is_symbol_top_chase_entry_risk(
+                enabled=True,
+                symbol="BTC/KRW",
+                target_symbol="BTC/KRW",
+                volume_ratio=11.8,
+                atr_percentile=92.0,
+                range_position_pct=100.0,
+                volume_ratio_threshold=8.0,
+                atr_percentile_threshold=90.0,
+                range_position_threshold=95.0,
+            )
+        )
+        self.assertFalse(
+            is_symbol_top_chase_entry_risk(
+                enabled=True,
+                symbol="BTC/USDT",
+                target_symbol="BTC/KRW",
+                volume_ratio=11.8,
+                atr_percentile=92.0,
+                range_position_pct=100.0,
+                volume_ratio_threshold=8.0,
+                atr_percentile_threshold=90.0,
+                range_position_threshold=95.0,
+            )
+        )
+        self.assertFalse(
+            is_symbol_top_chase_entry_risk(
+                enabled=True,
+                symbol="BTC/KRW",
+                target_symbol="BTC/KRW",
+                volume_ratio=7.9,
+                atr_percentile=92.0,
+                range_position_pct=100.0,
+                volume_ratio_threshold=8.0,
+                atr_percentile_threshold=90.0,
+                range_position_threshold=95.0,
             )
         )
 

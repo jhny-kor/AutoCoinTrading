@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-19: BTC/KRW 고점권+고ATR+거래량 폭증 조합은 RSI 와 무관하게 추격 진입으로 차단
 - 2026-05-14: BTC 공통 EMA/ATR/스윙/청산가 helper 를 core.strategy.btc_indicators 로 분리함
 - 2026-05-14: BTC 진입/추가매수/청산 퍼널 실행 단계를 공통 btc_loop helper 로 옮김
 - 2026-05-14: BTC 신규진입/추가매수 후 내부 상태 갱신을 공통 lifecycle helper 로 옮김
@@ -124,6 +125,7 @@ from core.strategy.btc import (
 from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_overheated_entry_risk,
+    is_symbol_top_chase_entry_risk,
     requires_overheat_confirmation,
 )
 from core.strategy.entry_committee import (
@@ -458,6 +460,18 @@ def run_bot():
                 atr_percentile_threshold=settings.overheat_guard_atr_percentile,
                 rsi_threshold=settings.overheat_guard_rsi,
             )
+            top_chase_entry_blocked = is_symbol_top_chase_entry_risk(
+                enabled=settings.enable_top_chase_guard,
+                symbol=symbol,
+                target_symbol=settings.top_chase_guard_symbol,
+                volume_ratio=volume_ratio,
+                atr_percentile=atr_percentile,
+                range_position_pct=recent_range_context["range_position_pct"],
+                volume_ratio_threshold=settings.top_chase_guard_volume_ratio,
+                atr_percentile_threshold=settings.top_chase_guard_atr_percentile,
+                range_position_threshold=settings.top_chase_guard_range_position_pct,
+            )
+            btc_entry_risk_blocked = overheated_entry_blocked or top_chase_entry_blocked
             overheat_extra_confirmation_required = requires_overheat_confirmation(
                 signal_is_strong=signal_is_strong,
                 range_position_pct=recent_range_context["range_position_pct"],
@@ -673,7 +687,7 @@ def run_bot():
                     and not effective_symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
                     and not stop_loss_pattern_blocked
-                    and not overheated_entry_blocked
+                    and not btc_entry_risk_blocked
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
             else:
@@ -683,7 +697,7 @@ def run_bot():
                     and not effective_symbol_regime_blocks_entry
                     and not fill_quality_entry_blocked
                     and not stop_loss_pattern_blocked
-                    and not overheated_entry_blocked
+                    and not btc_entry_risk_blocked
                     and (trend_follow_entry_allowed or bullish or not trend_follow_entry)
                     and (not symbol_regime_requires_fresh_cross or bullish)
                 )
@@ -730,6 +744,16 @@ def run_bot():
                     f"(volume {0.0 if volume_ratio is None else volume_ratio:.2f}, "
                     f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}, "
                     f"RSI {0.0 if rsi_value is None else rsi_value:.2f})."
+                )
+            if top_chase_entry_blocked:
+                log(
+                    f"[{symbol}] 최근 range 최상단 추격 위험으로 신규 진입을 차단합니다 "
+                    f"(range {0.0 if recent_range_context['range_position_pct'] is None else recent_range_context['range_position_pct']:.2f}%/"
+                    f"{settings.top_chase_guard_range_position_pct:.2f}%, "
+                    f"volume {0.0 if volume_ratio is None else volume_ratio:.2f}/"
+                    f"{settings.top_chase_guard_volume_ratio:.2f}, "
+                    f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}/"
+                    f"{settings.top_chase_guard_atr_percentile:.1f})."
                 )
             if overheat_extra_confirmation_required:
                 log(
@@ -1067,6 +1091,11 @@ def run_bot():
                 distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
                 distance_from_recent_low_pct=recent_range_context["distance_from_recent_low_pct"],
                 overheated_entry_blocked=overheated_entry_blocked,
+                top_chase_entry_blocked=top_chase_entry_blocked,
+                top_chase_guard_symbol=settings.top_chase_guard_symbol,
+                top_chase_guard_volume_ratio=settings.top_chase_guard_volume_ratio,
+                top_chase_guard_atr_percentile=settings.top_chase_guard_atr_percentile,
+                top_chase_guard_range_position_pct=settings.top_chase_guard_range_position_pct,
                 overheat_extra_confirmation_required=overheat_extra_confirmation_required,
                 effective_min_atr_pct=effective_min_atr_pct,
                 confirm_bullish=confirm_bullish,
@@ -1222,6 +1251,19 @@ def run_bot():
                 estimated_entry_amount=safe_amount_to_precision_upbit(exchange, symbol, order_value / last_close if last_close else 0.0),
                 min_order_amount=0.0,
                 entry_strategy_key=strategy_key,
+                top_chase_entry_blocked=top_chase_entry_blocked,
+                top_chase_actual={
+                    "symbol": symbol,
+                    "range_position_pct": recent_range_context["range_position_pct"],
+                    "volume_ratio": volume_ratio,
+                    "atr_percentile": atr_percentile,
+                },
+                top_chase_required={
+                    "target_symbol": settings.top_chase_guard_symbol,
+                    "min_range_position_pct": settings.top_chase_guard_range_position_pct,
+                    "min_volume_ratio": settings.top_chase_guard_volume_ratio,
+                    "min_atr_percentile": settings.top_chase_guard_atr_percentile,
+                },
             )
             entry_steps.extend(
                 [
@@ -1492,6 +1534,7 @@ def run_bot():
                             "range_position_pct": recent_range_context["range_position_pct"],
                             "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
                             "overheated_entry_blocked": overheated_entry_blocked,
+                            "top_chase_entry_blocked": top_chase_entry_blocked,
                             "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
                             "confirm_bullish": confirm_bullish,
                         },
@@ -1660,6 +1703,7 @@ def run_bot():
                         "range_position_pct": recent_range_context["range_position_pct"],
                         "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
                         "overheated_entry_blocked": overheated_entry_blocked,
+                        "top_chase_entry_blocked": top_chase_entry_blocked,
                         "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
                         "confirm_bullish": confirm_bullish,
                     },

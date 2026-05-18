@@ -1,5 +1,6 @@
 """
 작업 요약
+- BTC/KRW 고점 추격 차단을 BTC 진입 퍼널 단계로 기록한다.
 - 알트 진입의 SOL/레짐/상관/체결/타이밍 가드 퍼널 단계를 공통 helper 로 분리했다.
 - 하단 근접 mean_reversion probe 는 전용 낮은 점수 기준을 통과하면 distance 단계에서 소액 후보로 인정
 - mean_reversion 하단 근접 probe 후보는 raw signal 단계에서 reclaim 과 구분해 기록
@@ -716,6 +717,9 @@ def build_btc_entry_steps(
     stop_loss_pattern_min_cooldown_sec: int | None = None,
     stop_loss_pattern_signal_score: float | None = None,
     stop_loss_pattern_min_signal_score: float | None = None,
+    top_chase_entry_blocked: bool = False,
+    top_chase_actual: dict | None = None,
+    top_chase_required: dict | None = None,
 ):
     normalized_strategy = str(entry_strategy_key or "ema").strip().lower()
     raw_signal_passed = bullish or trend_follow_entry
@@ -863,6 +867,13 @@ def build_btc_entry_steps(
                 "min_atr_pct": effective_min_atr_pct,
                 "max_atr_pct": max_atr_pct,
             },
+        ),
+        FunnelStep(
+            stage="top_chase_guard",
+            passed=not top_chase_entry_blocked,
+            reason="btc_krw_top_chase_blocked",
+            actual=top_chase_actual or {},
+            required=top_chase_required or {},
         ),
         FunnelStep(
             stage="higher_timeframe",

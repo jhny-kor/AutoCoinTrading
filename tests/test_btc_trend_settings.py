@@ -1,3 +1,8 @@
+"""
+수정 요약
+- BTC/KRW 고점 추격 차단 설정 로딩 검증을 추가했다.
+"""
+
 import os
 import unittest
 from unittest.mock import patch
@@ -120,6 +125,26 @@ class BtcTrendSettingsTests(unittest.TestCase):
         self.assertTrue(settings.enable_okx_funding_rate_guard)
         self.assertEqual(0.0004, settings.okx_funding_rate_max_long_bias)
         self.assertEqual(180.0, settings.okx_funding_rate_cache_ttl_sec)
+
+    def test_loads_top_chase_guard_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BTC_TREND_ENABLE_TOP_CHASE_GUARD": "true",
+                "BTC_TREND_TOP_CHASE_GUARD_SYMBOL": "BTC/KRW",
+                "BTC_TREND_TOP_CHASE_GUARD_VOLUME_RATIO": "8",
+                "BTC_TREND_TOP_CHASE_GUARD_ATR_PERCENTILE": "90",
+                "BTC_TREND_TOP_CHASE_GUARD_RANGE_POSITION_PCT": "95",
+            },
+            clear=False,
+        ):
+            settings = load_btc_trend_settings()
+
+        self.assertTrue(settings.enable_top_chase_guard)
+        self.assertEqual("BTC/KRW", settings.top_chase_guard_symbol)
+        self.assertEqual(8.0, settings.top_chase_guard_volume_ratio)
+        self.assertEqual(90.0, settings.top_chase_guard_atr_percentile)
+        self.assertEqual(95.0, settings.top_chase_guard_range_position_pct)
 
 
 if __name__ == "__main__":
