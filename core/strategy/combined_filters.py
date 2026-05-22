@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-22: BTC/KRW 고ATR+최근 고점 근접 조건을 거래량과 무관한 추격 진입 차단 기준으로 추가했다.
 - 2026-05-19: BTC/KRW 고점권+고ATR+거래량 폭증 추격 진입을 RSI 없이 차단하는 helper 를 추가했다.
 - 2026-05-02: BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+체결/호가 약세, 손절 후 유사 조건 재진입 가드를 추가했다.
 - 거래량, ATR, RSI, 최근 가격 위치를 결합해 단독 지표의 오탐을 줄이는 진입 보조 필터를 추가했다.
@@ -94,18 +95,29 @@ def is_symbol_top_chase_entry_risk(
     volume_ratio_threshold: float,
     atr_percentile_threshold: float,
     range_position_threshold: float,
+    distance_from_recent_high_pct: float | None = None,
+    near_high_atr_percentile_threshold: float | None = None,
+    distance_from_high_threshold_pct: float | None = None,
 ) -> bool:
-    """특정 심볼이 range 최상단에서 거래량과 ATR 이 같이 과열되면 추격 진입으로 본다."""
-    return (
-        enabled
-        and symbol == target_symbol
-        and volume_ratio is not None
-        and atr_percentile is not None
+    """특정 심볼의 range 최상단/고ATR 고점 근접 진입을 추격 진입으로 본다."""
+    if not enabled or symbol != target_symbol or atr_percentile is None:
+        return False
+
+    volume_range_risk = (
+        volume_ratio is not None
         and range_position_pct is not None
         and volume_ratio >= volume_ratio_threshold
         and atr_percentile >= atr_percentile_threshold
         and range_position_pct >= range_position_threshold
     )
+    near_high_atr_risk = (
+        distance_from_recent_high_pct is not None
+        and near_high_atr_percentile_threshold is not None
+        and distance_from_high_threshold_pct is not None
+        and atr_percentile >= near_high_atr_percentile_threshold
+        and distance_from_recent_high_pct <= distance_from_high_threshold_pct
+    )
+    return volume_range_risk or near_high_atr_risk
 
 
 def requires_overheat_confirmation(

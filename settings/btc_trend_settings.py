@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-22: BTC/KRW 고ATR+최근 고점 근접 추격 차단 기준값을 설정으로 추가했다.
 - 2026-05-19: BTC/KRW 고점권+고ATR+거래량 폭증 추격 진입 차단 설정을 추가
 - 2026-05-12: BTC LOW_ENERGY probe 기본 기준을 낮추고 추가 확인을 늘려 소액 후보 전환을 더 적극화
 - BTC LOW_ENERGY 소액 probe 진입 보정 설정을 추가해 강한 신호만 추가확인 후 제한 진입할 수 있게 확장
@@ -128,6 +129,8 @@ class BtcTrendSettings:
     top_chase_guard_volume_ratio: float
     top_chase_guard_atr_percentile: float
     top_chase_guard_range_position_pct: float
+    top_chase_guard_near_high_atr_percentile: float
+    top_chase_guard_distance_from_high_pct: float
     enable_okx_funding_rate_guard: bool
     okx_funding_rate_max_long_bias: float
     okx_funding_rate_cache_ttl_sec: float
@@ -369,6 +372,8 @@ def load_btc_trend_settings() -> BtcTrendSettings:
         top_chase_guard_volume_ratio=config_float("btc_trend", "top_chase_guard_volume_ratio", 8.0, env_key="BTC_TREND_TOP_CHASE_GUARD_VOLUME_RATIO"),
         top_chase_guard_atr_percentile=config_float("btc_trend", "top_chase_guard_atr_percentile", 90.0, env_key="BTC_TREND_TOP_CHASE_GUARD_ATR_PERCENTILE"),
         top_chase_guard_range_position_pct=config_float("btc_trend", "top_chase_guard_range_position_pct", 95.0, env_key="BTC_TREND_TOP_CHASE_GUARD_RANGE_POSITION_PCT"),
+        top_chase_guard_near_high_atr_percentile=config_float("btc_trend", "top_chase_guard_near_high_atr_percentile", 95.0, env_key="BTC_TREND_TOP_CHASE_GUARD_NEAR_HIGH_ATR_PERCENTILE"),
+        top_chase_guard_distance_from_high_pct=config_float("btc_trend", "top_chase_guard_distance_from_high_pct", 0.15, env_key="BTC_TREND_TOP_CHASE_GUARD_DISTANCE_FROM_HIGH_PCT"),
         enable_okx_funding_rate_guard=config_bool("btc_trend", "enable_okx_funding_rate_guard", True, env_key="BTC_TREND_ENABLE_OKX_FUNDING_RATE_GUARD"),
         okx_funding_rate_max_long_bias=config_float("btc_trend", "okx_funding_rate_max_long_bias", 0.0005, env_key="BTC_TREND_OKX_FUNDING_RATE_MAX_LONG_BIAS"),
         okx_funding_rate_cache_ttl_sec=config_float("btc_trend", "okx_funding_rate_cache_ttl_sec", 300.0, env_key="BTC_TREND_OKX_FUNDING_RATE_CACHE_TTL_SEC"),

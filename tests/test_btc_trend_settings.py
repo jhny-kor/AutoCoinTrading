@@ -1,5 +1,6 @@
 """
 수정 요약
+- BTC/KRW 고ATR+최근 고점 근접 추격 차단 설정 로딩 검증을 추가했다.
 - BTC/KRW 고점 추격 차단 설정 로딩 검증을 추가했다.
 """
 
@@ -135,6 +136,8 @@ class BtcTrendSettingsTests(unittest.TestCase):
                 "BTC_TREND_TOP_CHASE_GUARD_VOLUME_RATIO": "8",
                 "BTC_TREND_TOP_CHASE_GUARD_ATR_PERCENTILE": "90",
                 "BTC_TREND_TOP_CHASE_GUARD_RANGE_POSITION_PCT": "95",
+                "BTC_TREND_TOP_CHASE_GUARD_NEAR_HIGH_ATR_PERCENTILE": "95",
+                "BTC_TREND_TOP_CHASE_GUARD_DISTANCE_FROM_HIGH_PCT": "0.15",
             },
             clear=False,
         ):
@@ -145,6 +148,8 @@ class BtcTrendSettingsTests(unittest.TestCase):
         self.assertEqual(8.0, settings.top_chase_guard_volume_ratio)
         self.assertEqual(90.0, settings.top_chase_guard_atr_percentile)
         self.assertEqual(95.0, settings.top_chase_guard_range_position_pct)
+        self.assertEqual(95.0, settings.top_chase_guard_near_high_atr_percentile)
+        self.assertEqual(0.15, settings.top_chase_guard_distance_from_high_pct)
 
 
 if __name__ == "__main__":

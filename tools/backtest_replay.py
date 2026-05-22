@@ -1,5 +1,8 @@
 """
 수정 요약
+- 2026-05-22: BTC/KRW 고ATR+최근 고점 근접 추격 차단을 리플레이 진입 gate 에도 반영했다.
+- 2026-05-22: BTC 리플레이 체결 캔들을 1분 원본 인덱스가 아니라 신호 기준 캔들 인덱스에 맞춰 가격/시각 왜곡을 제거했다.
+- 2026-05-22: BTC 리플레이 summary 생성 시 ExecutionModel 직렬화를 위해 누락된 asdict import 를 복구했다.
 - 2026-05-14: 실행모델/호가/슬리피지 helper 를 tools.backtest_execution 으로 분리했다.
 - 2026-04-24: analysis_logs 호가 스냅샷을 읽어 best bid/ask 와 depth 기반 부분체결을 반영하는 체결 모델을 추가했다.
 - 2026-05-11: 알트 리플레이가 live volume/gap 상한과 volume spike exit 계약을 반영하도록 보강했다.
@@ -30,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 from bisect import bisect_right
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +48,10 @@ from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
 from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.btc_position import evaluate_btc_open_position
+from core.strategy.combined_filters import (
+    calc_recent_range_context,
+    is_symbol_top_chase_entry_risk,
+)
 from core.strategy.indicators import (
     calc_adx,
     calc_bollinger_bands,
@@ -52,6 +60,8 @@ from core.strategy.indicators import (
     calc_macd_histogram,
     calc_noise_ratio,
     calc_pct_slope,
+    calc_percentile_rank,
+    calc_recent_atr_series,
     calc_return_correlation,
     calc_rsi,
 )
@@ -1008,6 +1018,17 @@ def simulate_btc_strategy(
         volume_ratio = calc_volume_ratio(window, settings.volume_lookback)
         atr_value = calc_atr(window, settings.atr_period)
         atr_pct = (atr_value / last_close) * 100 if last_close > 0 else 0.0
+        atr_series = calc_recent_atr_series(
+            base_ohlcv_window,
+            settings.atr_period,
+            sample_count=20,
+        )
+        atr_percentile = calc_percentile_rank(atr_series, atr_value)
+        recent_range_context = calc_recent_range_context(
+            base_ohlcv_window,
+            last_close=last_close,
+            lookback=settings.volume_lookback,
+        )
         rsi_value = calc_rsi(closes, settings.rsi_period)
         noise_ratio = calc_noise_ratio(
             base_ohlcv_window,
@@ -1136,10 +1157,25 @@ def simulate_btc_strategy(
         effective_min_atr_pct = settings.get_min_atr_pct(symbol) * regime_policy.min_atr_multiplier
         atr_filter_passed = effective_min_atr_pct <= atr_pct <= settings.max_atr_pct
         fill_quality_entry_blocked = False
+        top_chase_entry_blocked = is_symbol_top_chase_entry_risk(
+            enabled=settings.enable_top_chase_guard,
+            symbol=symbol,
+            target_symbol=settings.top_chase_guard_symbol,
+            volume_ratio=volume_ratio,
+            atr_percentile=atr_percentile,
+            range_position_pct=recent_range_context["range_position_pct"],
+            volume_ratio_threshold=settings.top_chase_guard_volume_ratio,
+            atr_percentile_threshold=settings.top_chase_guard_atr_percentile,
+            range_position_threshold=settings.top_chase_guard_range_position_pct,
+            distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+            near_high_atr_percentile_threshold=settings.top_chase_guard_near_high_atr_percentile,
+            distance_from_high_threshold_pct=settings.top_chase_guard_distance_from_high_pct,
+        )
         raw_entry_candidate = (
             entry_signal
             and not regime_policy.pause_new_entry
             and not fill_quality_entry_blocked
+            and not top_chase_entry_blocked
         )
         entry_timing_snapshot = update_entry_timing_state(
             state_store=entry_timing_state,
@@ -1233,7 +1269,7 @@ def simulate_btc_strategy(
                 requested_amount = units * min(max(sell_ratio, 0.0), 1.0)
                 amount = requested_amount * execution_model.sell_fill_ratio
                 execution_candle, _, execution_timing = resolve_execution_candle(
-                    candles,
+                    base_candles,
                     current_index=index,
                     execution_model=execution_model,
                 )
@@ -1298,6 +1334,7 @@ def simulate_btc_strategy(
                         extra={
                             "trailing_armed": trailing_armed,
                             "atr_pct": atr_pct,
+                            "atr_percentile": atr_percentile,
                             "ema_spread_pct": ema_spread_pct,
                             "signal_score": signal_score,
                             "noise_ratio": noise_ratio,
@@ -1339,6 +1376,7 @@ def simulate_btc_strategy(
             and signal_score >= effective_signal_score_min
             and volume_filter_passed
             and atr_filter_passed
+            and not top_chase_entry_blocked
             and confirm_filter_passed
             and not regime_policy.pause_new_entry
             and (not regime_policy.require_fresh_cross or bullish)
@@ -1377,7 +1415,7 @@ def simulate_btc_strategy(
             net_order_value = executed_order_value - fee_quote
             if net_order_value >= min_buy_order_value and last_close > 0:
                 execution_candle, _, execution_timing = resolve_execution_candle(
-                    candles,
+                    base_candles,
                     current_index=index,
                     execution_model=execution_model,
                 )
@@ -1428,7 +1466,11 @@ def simulate_btc_strategy(
                         extra={
                             "ema_spread_pct": ema_spread_pct,
                             "atr_pct": atr_pct,
+                            "atr_percentile": atr_percentile,
                             "volume_ratio": volume_ratio,
+                            "range_position_pct": recent_range_context["range_position_pct"],
+                            "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
+                            "top_chase_entry_blocked": top_chase_entry_blocked,
                             "signal_score": signal_score,
                             "allocation_score": allocation_score_result.allocation_score,
                             "allocation_score_scale": allocation_score_result.score_scale,

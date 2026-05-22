@@ -41,6 +41,8 @@ top_chase_guard_symbol = "BTC/KRW"
 top_chase_guard_volume_ratio = 8.0
 top_chase_guard_atr_percentile = 90.0
 top_chase_guard_range_position_pct = 95.0
+top_chase_guard_near_high_atr_percentile = 95.0
+top_chase_guard_distance_from_high_pct = 0.15
 
 [okx]
 sandbox = false

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-22: BTC/KRW가 고ATR 상태에서 최근 고점 0.15% 이내면 거래량 폭증 없이도 추격 진입으로 차단하도록 보강
 - 2026-05-19: BTC/KRW 고점권+고ATR+거래량 폭증 조합은 RSI 와 무관하게 추격 진입으로 차단
 - 2026-05-14: BTC 공통 EMA/ATR/스윙/청산가 helper 를 core.strategy.btc_indicators 로 분리함
 - 2026-05-14: BTC 진입/추가매수/청산 퍼널 실행 단계를 공통 btc_loop helper 로 옮김
@@ -470,6 +471,9 @@ def run_bot():
                 volume_ratio_threshold=settings.top_chase_guard_volume_ratio,
                 atr_percentile_threshold=settings.top_chase_guard_atr_percentile,
                 range_position_threshold=settings.top_chase_guard_range_position_pct,
+                distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                near_high_atr_percentile_threshold=settings.top_chase_guard_near_high_atr_percentile,
+                distance_from_high_threshold_pct=settings.top_chase_guard_distance_from_high_pct,
             )
             btc_entry_risk_blocked = overheated_entry_blocked or top_chase_entry_blocked
             overheat_extra_confirmation_required = requires_overheat_confirmation(
@@ -753,7 +757,10 @@ def run_bot():
                     f"volume {0.0 if volume_ratio is None else volume_ratio:.2f}/"
                     f"{settings.top_chase_guard_volume_ratio:.2f}, "
                     f"ATR percentile {0.0 if atr_percentile is None else atr_percentile:.1f}/"
-                    f"{settings.top_chase_guard_atr_percentile:.1f})."
+                    f"{settings.top_chase_guard_atr_percentile:.1f}, "
+                    f"고점 거리 {0.0 if recent_range_context['distance_from_recent_high_pct'] is None else recent_range_context['distance_from_recent_high_pct']:.4f}%/"
+                    f"{settings.top_chase_guard_distance_from_high_pct:.4f}%, "
+                    f"near-high ATR 기준 {settings.top_chase_guard_near_high_atr_percentile:.1f})."
                 )
             if overheat_extra_confirmation_required:
                 log(
@@ -1096,6 +1103,8 @@ def run_bot():
                 top_chase_guard_volume_ratio=settings.top_chase_guard_volume_ratio,
                 top_chase_guard_atr_percentile=settings.top_chase_guard_atr_percentile,
                 top_chase_guard_range_position_pct=settings.top_chase_guard_range_position_pct,
+                top_chase_guard_near_high_atr_percentile=settings.top_chase_guard_near_high_atr_percentile,
+                top_chase_guard_distance_from_high_pct=settings.top_chase_guard_distance_from_high_pct,
                 overheat_extra_confirmation_required=overheat_extra_confirmation_required,
                 effective_min_atr_pct=effective_min_atr_pct,
                 confirm_bullish=confirm_bullish,
@@ -1255,6 +1264,7 @@ def run_bot():
                 top_chase_actual={
                     "symbol": symbol,
                     "range_position_pct": recent_range_context["range_position_pct"],
+                    "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
                     "volume_ratio": volume_ratio,
                     "atr_percentile": atr_percentile,
                 },
@@ -1263,6 +1273,8 @@ def run_bot():
                     "min_range_position_pct": settings.top_chase_guard_range_position_pct,
                     "min_volume_ratio": settings.top_chase_guard_volume_ratio,
                     "min_atr_percentile": settings.top_chase_guard_atr_percentile,
+                    "near_high_min_atr_percentile": settings.top_chase_guard_near_high_atr_percentile,
+                    "max_distance_from_high_pct": settings.top_chase_guard_distance_from_high_pct,
                 },
             )
             entry_steps.extend(
@@ -1535,6 +1547,8 @@ def run_bot():
                             "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
                             "overheated_entry_blocked": overheated_entry_blocked,
                             "top_chase_entry_blocked": top_chase_entry_blocked,
+                            "top_chase_guard_near_high_atr_percentile": settings.top_chase_guard_near_high_atr_percentile,
+                            "top_chase_guard_distance_from_high_pct": settings.top_chase_guard_distance_from_high_pct,
                             "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
                             "confirm_bullish": confirm_bullish,
                         },
@@ -1704,6 +1718,8 @@ def run_bot():
                         "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
                         "overheated_entry_blocked": overheated_entry_blocked,
                         "top_chase_entry_blocked": top_chase_entry_blocked,
+                        "top_chase_guard_near_high_atr_percentile": settings.top_chase_guard_near_high_atr_percentile,
+                        "top_chase_guard_distance_from_high_pct": settings.top_chase_guard_distance_from_high_pct,
                         "overheat_extra_confirmation_required": overheat_extra_confirmation_required,
                         "confirm_bullish": confirm_bullish,
                     },

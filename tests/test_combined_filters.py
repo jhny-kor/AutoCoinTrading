@@ -1,6 +1,7 @@
 """단독 지표를 결합해 추격 진입 리스크를 줄이는 helper 테스트.
 
 수정 요약
+- BTC/KRW 고ATR+최근 고점 근접 추격 차단 helper 검증을 추가했다.
 - BTC/KRW 고점 추격 차단 helper 검증을 추가했다.
 """
 
@@ -52,6 +53,9 @@ class CombinedFilterTests(unittest.TestCase):
                 volume_ratio_threshold=8.0,
                 atr_percentile_threshold=90.0,
                 range_position_threshold=95.0,
+                distance_from_recent_high_pct=0.5,
+                near_high_atr_percentile_threshold=95.0,
+                distance_from_high_threshold_pct=0.15,
             )
         )
         self.assertFalse(
@@ -65,6 +69,9 @@ class CombinedFilterTests(unittest.TestCase):
                 volume_ratio_threshold=8.0,
                 atr_percentile_threshold=90.0,
                 range_position_threshold=95.0,
+                distance_from_recent_high_pct=0.003,
+                near_high_atr_percentile_threshold=95.0,
+                distance_from_high_threshold_pct=0.15,
             )
         )
         self.assertFalse(
@@ -78,6 +85,43 @@ class CombinedFilterTests(unittest.TestCase):
                 volume_ratio_threshold=8.0,
                 atr_percentile_threshold=90.0,
                 range_position_threshold=95.0,
+                distance_from_recent_high_pct=0.5,
+                near_high_atr_percentile_threshold=95.0,
+                distance_from_high_threshold_pct=0.15,
+            )
+        )
+
+    def test_symbol_top_chase_blocks_near_high_high_atr_without_volume_spike(self):
+        self.assertTrue(
+            is_symbol_top_chase_entry_risk(
+                enabled=True,
+                symbol="BTC/KRW",
+                target_symbol="BTC/KRW",
+                volume_ratio=1.9,
+                atr_percentile=100.0,
+                range_position_pct=85.8,
+                volume_ratio_threshold=8.0,
+                atr_percentile_threshold=90.0,
+                range_position_threshold=95.0,
+                distance_from_recent_high_pct=0.1265,
+                near_high_atr_percentile_threshold=95.0,
+                distance_from_high_threshold_pct=0.15,
+            )
+        )
+        self.assertFalse(
+            is_symbol_top_chase_entry_risk(
+                enabled=True,
+                symbol="BTC/KRW",
+                target_symbol="BTC/KRW",
+                volume_ratio=1.9,
+                atr_percentile=94.9,
+                range_position_pct=85.8,
+                volume_ratio_threshold=8.0,
+                atr_percentile_threshold=90.0,
+                range_position_threshold=95.0,
+                distance_from_recent_high_pct=0.1265,
+                near_high_atr_percentile_threshold=95.0,
+                distance_from_high_threshold_pct=0.15,
             )
         )
 
