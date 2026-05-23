@@ -1,5 +1,6 @@
 """
 작업 요약
+- 날짜 기준이 UTC/KST로 갈려도 날짜별 디렉터리 전체에서 가장 최근 파일을 선택해 log_stale 오탐 재기동을 막는다.
 - analysis/structured 로그도 오늘자 파일이 아직 없으면 전날 최신 파일을 fallback 으로 사용한다.
 - 자정 직후 오늘자 로그가 아직 없을 때 전날 최신 로그를 fallback 으로 사용해 log_missing 오탐 재기동을 줄였다.
 - upbit_stream 은 프로그램 로그 대신 `logs/runtime/upbit_ws/health.json` heartbeat 를 우선 기준으로 판단하도록 개선
@@ -22,7 +23,7 @@ if str(ROOT) not in sys.path:
 
 from bot_manager import read_pid_file, is_pid_alive
 from core.runtime.program_registry import PROGRAMS
-from log_path_utils import current_date_str, latest_file
+from log_path_utils import current_date_str
 
 
 WARNING_PROGRAMS = {"upbit_stream"}
@@ -35,11 +36,7 @@ def file_age_seconds(path: Path | None) -> float | None:
 
 
 def latest_dated_file(root: Path, pattern: str, date_text: str | None = None) -> Path | None:
-    """오늘자 파일이 없으면 날짜별 디렉터리 전체에서 가장 최근 파일을 찾는다."""
-    today_log = latest_file(root / (date_text or current_date_str()), pattern)
-    if today_log is not None:
-        return today_log
-
+    """날짜별 디렉터리 전체에서 가장 최근 파일을 찾는다."""
     candidates = [path for path in root.glob(f"*/{pattern}") if path.is_file()]
     if not candidates:
         return None
