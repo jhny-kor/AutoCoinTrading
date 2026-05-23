@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: /analysis 본문에서 무거운 원시 구조화 로그 스캔을 빼고 시간 버킷 요약 기반 섹션으로 대체했다.
 - 2026-05-24: /analysis, /regime 이 전체 로그를 읽다 중단되지 않도록 최신 날짜/최신 레코드 기반으로 제한했다.
 - 2026-05-14: 시간 판정과 최근 로그 파일 helper 를 reporting.telegram_log_helpers 로 분리했다.
 - 2026-05-14: 순수 명령/숫자/최근 로그 포맷 helper 를 reporting.telegram_formatting 으로 분리했다.
@@ -1035,13 +1036,11 @@ def build_analysis_text(settings: ListenerSettings) -> str:
         build_recovered_position_state_text(settings),
         build_backtest_comparison_text(settings),
         build_latest_tuning_diff_text(),
-        build_change_effect_text(hours=2.0),
-        build_shadow_candidate_summary_text(lookback_hours=2.0),
+        build_bottleneck_change_text(),
+        build_filled_change_text(),
         build_recent_reflection_summary(days=7),
-        build_strategy_funnel_text(),
         build_trade_quality_text(settings),
         build_profit_protect_text(),
-        build_filter_gap_text(),
         build_time_of_day_text(),
         build_volume_candidate_text(settings),
     ]
