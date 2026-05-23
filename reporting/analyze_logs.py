@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: 텔레그램 리포트가 전체 분석 로그를 읽다 죽지 않도록 최신 날짜/최신 레코드 전용 로더를 추가했다.
 - 확장된 분석 로그 필드에 맞춰 거래량 배수, RSI, 스프레드, 캔들 범위 통계를 함께 요약하도록 개선
 - 공개 기준 매수 준비 횟수와 대표 스킵 사유를 함께 보여주도록 개선
 
@@ -19,11 +20,15 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterable
 
 from log_path_utils import iter_files
+
+DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass
@@ -179,24 +184,115 @@ class Summary:
         )
 
 
-def load_records(log_dir: Path) -> list[dict]:
-    """분석용 로그 파일 전체를 읽는다."""
-    records: list[dict] = []
+def iter_recent_date_dirs(log_dir: Path, max_date_dirs: int | None = None) -> list[Path]:
+    """최신 날짜 디렉터리를 내림차순으로 반환한다."""
     if not log_dir.exists():
-        return records
+        return []
+    date_dirs = sorted(
+        (
+            path
+            for path in log_dir.iterdir()
+            if path.is_dir() and DATE_DIR_RE.match(path.name)
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    if max_date_dirs is None:
+        return date_dirs
+    return date_dirs[:max(max_date_dirs, 0)]
 
-    for path in iter_files(log_dir, "*.jsonl"):
-        if path.name == "errors.jsonl":
+
+def iter_record_files(log_dir: Path, max_date_dirs: int | None = None) -> list[Path]:
+    """분석용 JSONL 파일 목록을 반환한다."""
+    if not log_dir.exists():
+        return []
+
+    if max_date_dirs is None:
+        files = iter_files(log_dir, "*.jsonl")
+    else:
+        files = []
+        for date_dir in iter_recent_date_dirs(log_dir, max_date_dirs=max_date_dirs):
+            files.extend(iter_files(date_dir, "*.jsonl"))
+        if not files:
+            files = sorted(path for path in log_dir.glob("*.jsonl") if path.is_file())
+
+    return [path for path in files if path.name != "errors.jsonl"]
+
+
+def iter_records(log_dir: Path, max_date_dirs: int | None = None) -> Iterable[dict]:
+    """분석용 로그 레코드를 순차적으로 읽는다."""
+    if not log_dir.exists():
+        return
+
+    for path in iter_record_files(log_dir, max_date_dirs=max_date_dirs):
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                yield json.loads(line)
+
+
+def load_records(log_dir: Path, max_date_dirs: int | None = None) -> list[dict]:
+    """분석용 로그 파일을 읽는다."""
+    return list(iter_records(log_dir, max_date_dirs=max_date_dirs))
+
+
+def read_latest_record(path: Path, max_scan_bytes: int = 1024 * 1024) -> dict | None:
+    """JSONL 파일의 마지막 유효 레코드 1건을 꼬리에서 읽는다."""
+    if not path.exists() or path.name == "errors.jsonl":
+        return None
+
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            file_size = handle.tell()
+            read_size = min(file_size, max_scan_bytes)
+            handle.seek(file_size - read_size)
+            data = handle.read(read_size)
+    except OSError:
+        return None
+
+    for raw_line in reversed(data.splitlines()):
+        line = raw_line.strip()
+        if not line:
             continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
+        try:
+            return json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            continue
+    return None
 
 
-def build_summaries(records: list[dict]) -> list[Summary]:
+def load_latest_records(
+    log_dir: Path,
+    *,
+    symbols: set[str] | None = None,
+    max_date_dirs: int = 3,
+) -> list[dict]:
+    """심볼별 최신 분석 레코드만 빠르게 읽는다."""
+    latest_by_key: dict[tuple[str, str], tuple[str, dict]] = {}
+
+    for path in iter_record_files(log_dir, max_date_dirs=max_date_dirs):
+        record = read_latest_record(path)
+        if not record:
+            continue
+        exchange = str(record.get("exchange", "")).strip()
+        symbol = str(record.get("symbol", "")).strip()
+        if not exchange or not symbol:
+            continue
+        if symbols is not None and symbol not in symbols:
+            continue
+        collected_at = str(record.get("collected_at", "")).strip()
+        key = (exchange, symbol)
+        current = latest_by_key.get(key)
+        if current is None or collected_at > current[0]:
+            latest_by_key[key] = (collected_at, record)
+
+    return [record for _, record in latest_by_key.values()]
+
+
+def build_summaries(records: Iterable[dict]) -> list[Summary]:
     """레코드 목록을 심볼별 요약으로 변환한다."""
     grouped: dict[tuple[str, str], Summary] = {}
 
@@ -209,6 +305,11 @@ def build_summaries(records: list[dict]) -> list[Summary]:
         grouped[key].add(record)
 
     return sorted(grouped.values(), key=lambda item: (item.exchange, item.symbol))
+
+
+def build_recent_summaries(log_dir: Path, max_date_dirs: int = 1) -> list[Summary]:
+    """최신 날짜 분석 로그만 사용해 심볼별 요약을 만든다."""
+    return build_summaries(iter_records(log_dir, max_date_dirs=max_date_dirs))
 
 
 def print_summary(summaries: list[Summary]):

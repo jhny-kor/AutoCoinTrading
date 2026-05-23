@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: /analysis, /regime 이 전체 로그를 읽다 중단되지 않도록 최신 날짜/최신 레코드 기반으로 제한했다.
 - 2026-05-14: 시간 판정과 최근 로그 파일 helper 를 reporting.telegram_log_helpers 로 분리했다.
 - 2026-05-14: 순수 명령/숫자/최근 로그 포맷 helper 를 reporting.telegram_formatting 으로 분리했다.
 - 2026-04-28: /analysis 와 /weekly 에 decision journal 기반 의사결정 리뷰와 reflection 요약을 추가했다.
@@ -80,7 +81,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from math import sqrt
 
@@ -213,6 +214,30 @@ WEEKDAY_NAME_TO_INDEX = {
     "SAT": 5,
     "SUN": 6,
 }
+
+
+def positive_env_int(name: str, default: int) -> int:
+    """환경 변수의 양수 정수 값을 읽는다."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(value, 1)
+
+
+def analysis_recent_date_dirs() -> int:
+    """텔레그램 분석 요약에 사용할 최신 분석 로그 날짜 수."""
+    return positive_env_int("TELEGRAM_ANALYSIS_RECENT_DATE_DIRS", 1)
+
+
+def regime_latest_date_dirs() -> int:
+    """레짐 계산에 사용할 최신 분석 로그 날짜 수."""
+    return positive_env_int("TELEGRAM_REGIME_LOOKBACK_DATE_DIRS", 3)
+
+
+def structured_recent_date_dirs() -> int:
+    """텔레그램 퍼널 요약에 사용할 최신 구조화 로그 날짜 수."""
+    return positive_env_int("TELEGRAM_STRUCTURED_RECENT_DATE_DIRS", 1)
 
 
 def build_help_text() -> str:
@@ -1251,8 +1276,16 @@ def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
 
     now = datetime.now()
     grouped: dict[tuple[str, str, str], dict[str, object]] = {}
-    for program_name in analyze_strategy_logs.find_program_names(base_dir):
-        for record in analyze_strategy_logs.read_program_records(base_dir, program_name, "strategy.jsonl"):
+    for program_name in analyze_strategy_logs.find_program_names(
+        base_dir,
+        max_date_dirs=days,
+    ):
+        for record in analyze_strategy_logs.read_program_records(
+            base_dir,
+            program_name,
+            "strategy.jsonl",
+            max_date_dirs=days,
+        ):
             if not is_in_recent_days(str(record.get("recorded_at_local", "")), days, now=now):
                 continue
             if str(record.get("side", "")) != "entry":
@@ -1361,8 +1394,10 @@ def build_weekly_report_text(settings: ListenerSettings) -> str:
 
 def build_market_analysis_text(settings: ListenerSettings) -> str:
     """시장 분석 수집 로그 요약 문구를 만든다."""
-    records = analyze_logs.load_records(settings.analysis_log_dir)
-    summaries = analyze_logs.build_summaries(records)
+    summaries = analyze_logs.build_recent_summaries(
+        settings.analysis_log_dir,
+        max_date_dirs=analysis_recent_date_dirs(),
+    )
     managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
     summaries = [item for item in summaries if item.symbol in managed_symbols]
     if not summaries:
@@ -1382,22 +1417,12 @@ def build_market_analysis_text(settings: ListenerSettings) -> str:
 
 def load_latest_market_records(settings: ListenerSettings) -> list[dict]:
     """심볼별 최신 분석 로그 1건씩을 반환한다."""
-    records = analyze_logs.load_records(settings.analysis_log_dir)
-    latest_by_key: dict[tuple[str, str], tuple[datetime, dict]] = {}
-
-    for record in records:
-        exchange = str(record.get("exchange", "")).strip()
-        symbol = str(record.get("symbol", "")).strip()
-        collected_at = parse_local_timestamp(str(record.get("collected_at", "")))
-        if not exchange or not symbol or collected_at is None:
-            continue
-        key = (exchange, symbol)
-        current = latest_by_key.get(key)
-        if current is None or collected_at > current[0]:
-            latest_by_key[key] = (collected_at, record)
-
     managed_symbols = set(settings.okx_symbols + settings.upbit_symbols)
-    rows = [item[1] for item in latest_by_key.values() if str(item[1].get("symbol", "")) in managed_symbols]
+    rows = analyze_logs.load_latest_records(
+        settings.analysis_log_dir,
+        symbols=managed_symbols,
+        max_date_dirs=regime_latest_date_dirs(),
+    )
     rows.sort(key=lambda row: (str(row.get("exchange", "")), str(row.get("symbol", ""))))
     return rows
 
@@ -1667,7 +1692,10 @@ def build_strategy_funnel_text(limit: int = 8) -> str:
     if not base_dir.exists():
         return "전략 퍼널 분석 요약\n- 구조화 전략 로그가 아직 없습니다. 봇을 재시작해 새 strategy.jsonl 이 쌓인 뒤 다시 확인해 주세요."
 
-    rows = analyze_strategy_logs.build_summary_rows(base_dir)
+    rows = analyze_strategy_logs.build_summary_rows(
+        base_dir,
+        max_date_dirs=structured_recent_date_dirs(),
+    )
     if not rows:
         return "전략 퍼널 분석 요약\n- 아직 집계할 전략 퍼널 로그가 없습니다."
     rows = [row for row in rows if str(row.get("side", "")) == "entry"]
@@ -1734,7 +1762,10 @@ def build_filter_gap_text(limit: int = 8) -> str:
     if not base_dir.exists():
         return "필터 기준 부족 폭 요약\n- 구조화 전략 로그가 아직 없습니다."
 
-    rows = analyze_strategy_logs.build_filter_gap_rows(base_dir)
+    rows = analyze_strategy_logs.build_filter_gap_rows(
+        base_dir,
+        max_date_dirs=structured_recent_date_dirs(),
+    )
     if not rows:
         return "필터 기준 부족 폭 요약\n- 아직 집계할 기준 부족 로그가 없습니다."
 
@@ -1862,7 +1893,10 @@ def build_symbol_conclusion_text(limit: int = 8) -> str:
     if not base_dir.exists():
         return "심볼별 핵심 한 줄 결론\n- 구조화 전략 로그가 아직 없습니다."
 
-    rows = analyze_strategy_logs.build_summary_rows(base_dir)
+    rows = analyze_strategy_logs.build_summary_rows(
+        base_dir,
+        max_date_dirs=structured_recent_date_dirs(),
+    )
     if not rows:
         return "심볼별 핵심 한 줄 결론\n- 아직 집계할 전략 로그가 없습니다."
     rows = [row for row in rows if str(row.get("side", "")) == "entry"]
@@ -2088,6 +2122,7 @@ def summarize_skip_reasons_from_structure(program_name: str) -> dict[str, int]:
         Path("structured_logs/live"),
         program_name,
         "strategy.jsonl",
+        max_date_dirs=1,
     ):
         if record.get("log_type") != "strategy":
             continue
@@ -2167,34 +2202,41 @@ def build_last_logs_text(settings: ListenerSettings) -> str:
 
 def build_response_text(command: str, settings: ListenerSettings) -> str:
     """명령에 맞는 응답 문자열을 만든다."""
-    if command == "/status":
-        return "\n\n".join(
-            [
-                bot_manager.build_status_text(use_color=False, exclude_current=False),
-                build_runtime_guard_status_text(settings),
-            ]
+    try:
+        if command == "/status":
+            return "\n\n".join(
+                [
+                    bot_manager.build_status_text(use_color=False, exclude_current=False),
+                    build_runtime_guard_status_text(settings),
+                ]
+            )
+        if command == "/test":
+            return "텔레그램 테스트 메시지입니다. 현재 알림과 명령 응답이 정상 동작 중입니다."
+        if command == "/positions":
+            return build_positions_text(settings)
+        if command == "/pnl":
+            return build_pnl_text()
+        if command == "/analysis":
+            return build_analysis_text(settings)
+        if command == "/regime":
+            return build_regime_text(settings)
+        if command == "/weekly":
+            return build_weekly_report_text(settings)
+        if command == "/change":
+            return build_change_effect_text()
+        if command == "/shadow":
+            return build_shadow_candidate_summary_text()
+        if command == "/last":
+            return build_last_logs_text(settings)
+        if command in {"/start", "/help"}:
+            return build_help_text()
+        return f"알 수 없는 명령입니다.\n\n{build_help_text()}"
+    except Exception as exc:
+        return (
+            f"{command} 응답 생성 중 오류가 발생했습니다.\n"
+            f"- 원인: {repr(exc)}\n"
+            "- 리스너는 계속 실행 중이므로 잠시 뒤 다시 시도해 주세요."
         )
-    if command == "/test":
-        return "텔레그램 테스트 메시지입니다. 현재 알림과 명령 응답이 정상 동작 중입니다."
-    if command == "/positions":
-        return build_positions_text(settings)
-    if command == "/pnl":
-        return build_pnl_text()
-    if command == "/analysis":
-        return build_analysis_text(settings)
-    if command == "/regime":
-        return build_regime_text(settings)
-    if command == "/weekly":
-        return build_weekly_report_text(settings)
-    if command == "/change":
-        return build_change_effect_text()
-    if command == "/shadow":
-        return build_shadow_candidate_summary_text()
-    if command == "/last":
-        return build_last_logs_text(settings)
-    if command in {"/start", "/help"}:
-        return build_help_text()
-    return f"알 수 없는 명령입니다.\n\n{build_help_text()}"
 
 
 def extract_message(update: dict) -> tuple[str | None, str | None]:
@@ -2528,7 +2570,9 @@ def run_listener():
 
                 command = normalize_command(text)
                 log(f"명령 수신: {command}")
+                log(f"응답 생성 시작: {command}")
                 response_text = build_response_text(command, settings)
+                log(f"응답 생성 완료: {command} ({len(response_text)}자)")
                 sent, error = send_text_in_chunks(notifier, response_text)
                 result_text = "성공" if sent else f"실패 ({error})"
                 log(f"응답 전송 결과: {result_text}")

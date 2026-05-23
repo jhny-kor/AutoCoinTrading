@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: 전체 분석 로그 대신 최신 심볼 레코드만 읽어 레짐 스냅샷을 빠르게 만들도록 정리했다.
 - 2026-04-08: 단계 순서, 의미, 해석을 포함한 레짐 payload 를 출력하도록 확장해 웹/텔레그램이 같은 데이터를 재사용할 수 있게 정리
 - 현재 운영 심볼들의 최신 분석 로그를 읽어 심볼별 현재 레짐 스냅샷을 JSON 으로 출력하는 보조 유틸을 추가했다.
 - 런타임 봇 로직과 분리된 점검용 스크립트라는 점이 바로 보이도록 파일 목적을 상단에 명시했다.
@@ -74,32 +75,17 @@ def build_regime_reason(snapshot, row: dict) -> str:
 
 
 def main() -> int:
-    records = analyze_logs.load_records(ROOT / "analysis_logs")
     managed_symbols = set(load_managed_symbols("okx") + load_managed_symbols("upbit"))
-
-    latest_by_key: dict[tuple[str, str], dict] = {}
-    latest_ts_by_key: dict[tuple[str, str], datetime] = {}
-
-    for record in records:
-        exchange = str(record.get("exchange", "")).strip().lower()
-        symbol = str(record.get("symbol", "")).strip()
-        raw_ts = str(record.get("collected_at", "")).strip()
-        if not exchange or not symbol or symbol not in managed_symbols or not raw_ts:
-            continue
-
-        try:
-            parsed_ts = datetime.fromisoformat(raw_ts)
-        except ValueError:
-            continue
-
-        key = (exchange, symbol)
-        current_ts = latest_ts_by_key.get(key)
-        if current_ts is None or parsed_ts > current_ts:
-            latest_ts_by_key[key] = parsed_ts
-            latest_by_key[key] = record
+    records = analyze_logs.load_latest_records(
+        ROOT / "analysis_logs",
+        symbols=managed_symbols,
+        max_date_dirs=3,
+    )
 
     rows = []
-    for (exchange, symbol), row in latest_by_key.items():
+    for row in records:
+        exchange = str(row.get("exchange", "")).strip().lower()
+        symbol = str(row.get("symbol", "")).strip()
         snapshot = classify_symbol_regime(row)
         stage_info = get_regime_stage_info(snapshot.regime)
         rows.append(

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: 텔레그램 분석 명령이 전체 구조화 로그를 읽지 않도록 최신 날짜 제한 옵션을 추가했다.
 - 주문 실행 품질 평균값(API 지연, 슬리피지, 체결 비율)도 거래 품질 요약에 함께 집계하도록 확장
 - MFE/MAE, 트레일링 활성화 소요 시간, 시간대 성과, 필터 기준 부족 폭까지 함께 집계하도록 확장
 - 구조화된 strategy / trade 로그를 읽어 퍼널 병목과 차단 사유를 집계하는 분석 스크립트 추가
@@ -16,12 +17,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from log_path_utils import iter_files
+
+DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -38,21 +42,77 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def find_program_names(base_dir: Path) -> list[str]:
+def iter_recent_date_dirs(base_dir: Path, max_date_dirs: int | None = None) -> list[Path]:
+    """최신 날짜 디렉터리를 내림차순으로 반환한다."""
+    if not base_dir.exists():
+        return []
+    date_dirs = sorted(
+        (
+            path
+            for path in base_dir.iterdir()
+            if path.is_dir() and DATE_DIR_RE.match(path.name)
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    if max_date_dirs is None:
+        return date_dirs
+    return date_dirs[:max(max_date_dirs, 0)]
+
+
+def iter_program_log_files(
+    base_dir: Path,
+    filename: str,
+    *,
+    program_name: str | None = None,
+    max_date_dirs: int | None = None,
+) -> list[Path]:
+    """구조화 로그 파일 목록을 날짜 제한과 함께 반환한다."""
+    if not base_dir.exists():
+        return []
+
+    if max_date_dirs is None:
+        files = iter_files(base_dir, filename)
+    else:
+        files: list[Path] = []
+        for date_dir in iter_recent_date_dirs(base_dir, max_date_dirs=max_date_dirs):
+            files.extend(iter_files(date_dir, filename))
+        if not files:
+            files = iter_files(base_dir, filename)
+
+    if program_name is not None:
+        files = [path for path in files if path.parent.name == program_name]
+    return sorted(files)
+
+
+def find_program_names(base_dir: Path, max_date_dirs: int | None = None) -> list[str]:
     """구조화 로그 루트 아래의 프로그램 이름 목록을 찾는다."""
     names = {
         path.parent.name
-        for path in iter_files(base_dir, "strategy.jsonl")
+        for path in iter_program_log_files(
+            base_dir,
+            "strategy.jsonl",
+            max_date_dirs=max_date_dirs,
+        )
     }
     return sorted(names)
 
 
-def read_program_records(base_dir: Path, program_name: str, filename: str) -> list[dict[str, Any]]:
+def read_program_records(
+    base_dir: Path,
+    program_name: str,
+    filename: str,
+    *,
+    max_date_dirs: int | None = None,
+) -> list[dict[str, Any]]:
     """날짜별로 흩어진 특정 프로그램 로그를 모두 읽는다."""
     rows: list[dict[str, Any]] = []
-    for path in iter_files(base_dir, filename):
-        if path.parent.name != program_name:
-            continue
+    for path in iter_program_log_files(
+        base_dir,
+        filename,
+        program_name=program_name,
+        max_date_dirs=max_date_dirs,
+    ):
         rows.extend(read_jsonl(path))
     return rows
 
@@ -64,12 +124,26 @@ def format_ratio(numerator: int, denominator: int) -> str:
     return f"{(numerator / denominator) * 100:.1f}%"
 
 
-def build_summary_rows(base_dir: Path) -> list[dict[str, Any]]:
+def build_summary_rows(
+    base_dir: Path,
+    *,
+    max_date_dirs: int | None = None,
+) -> list[dict[str, Any]]:
     """프로그램별 strategy / trade 로그를 읽어 요약 행을 만든다."""
     rows: list[dict[str, Any]] = []
-    for program_name in find_program_names(base_dir):
-        strategy_records = read_program_records(base_dir, program_name, "strategy.jsonl")
-        trade_records = read_program_records(base_dir, program_name, "trade.jsonl")
+    for program_name in find_program_names(base_dir, max_date_dirs=max_date_dirs):
+        strategy_records = read_program_records(
+            base_dir,
+            program_name,
+            "strategy.jsonl",
+            max_date_dirs=max_date_dirs,
+        )
+        trade_records = read_program_records(
+            base_dir,
+            program_name,
+            "trade.jsonl",
+            max_date_dirs=max_date_dirs,
+        )
 
         grouped_strategy: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         grouped_trade: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -384,12 +458,21 @@ def extract_threshold_gap(record: dict[str, Any]) -> tuple[str, float, float, fl
     return reason, actual_value, required_value, shortfall
 
 
-def build_filter_gap_rows(base_dir: Path) -> list[dict[str, Any]]:
+def build_filter_gap_rows(
+    base_dir: Path,
+    *,
+    max_date_dirs: int | None = None,
+) -> list[dict[str, Any]]:
     """strategy blocked 로그에서 기준 부족 폭을 요약한다."""
     grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
 
-    for program_name in find_program_names(base_dir):
-        for record in read_program_records(base_dir, program_name, "strategy.jsonl"):
+    for program_name in find_program_names(base_dir, max_date_dirs=max_date_dirs):
+        for record in read_program_records(
+            base_dir,
+            program_name,
+            "strategy.jsonl",
+            max_date_dirs=max_date_dirs,
+        ):
             if record.get("result") != "blocked":
                 continue
             gap = extract_threshold_gap(record)
