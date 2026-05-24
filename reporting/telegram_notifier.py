@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: 거래소 API 허용 IP/화이트리스트 오류에는 운영 진단을 붙이고, 같은 인시던트 반복 알림을 dedupe 하도록 보강했다.
 - 체결/손절/에러 텔레그램 알림 제목에서 심볼 앞에 초록 원 배지를 붙여 식별성을 높임
 
 텔레그램 알림 유틸
@@ -35,7 +36,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from incident_manager import register_incident
-from settings.config_access import env_bool, env_str
+from settings.config_access import env_bool, env_int, env_str
 from settings.env import load_project_env
 
 PROTECTED_DATETIME_RE = re.compile(
@@ -163,6 +164,27 @@ def format_symbol_badge(symbol: str) -> str:
     return f"🟢 {cleaned}" if cleaned else "🟢"
 
 
+def classify_exchange_error_hint(detail: str) -> str | None:
+    """거래소 오류 상세에서 운영자가 바로 조치할 수 있는 진단 힌트를 만든다."""
+    lowered = detail.lower()
+    if "no_authorization_ip" in lowered or "this is not a verified ip" in lowered:
+        return (
+            "현재 서버의 공인 IP가 업비트 Open API 키 허용 IP에 없습니다. "
+            "Oracle Cloud 인스턴스의 예약/공인 IP를 확인해 업비트 API 키 허용 IP에 등록하세요."
+        )
+    if "not included in your api key" in lowered and "ip whitelist" in lowered:
+        return (
+            "현재 서버의 공인 IP가 OKX API 키 IP whitelist 에 없습니다. "
+            "오류 메시지의 IP를 OKX API 키 whitelist 에 추가하거나 Oracle Cloud 예약 IP를 고정하세요."
+        )
+    if "requesttimeout" in lowered or "networkerror" in lowered:
+        return (
+            "거래소 응답 지연 또는 네트워크 시간초과입니다. 반복되면 Oracle Cloud 네트워크, DNS, "
+            "거래소 장애 여부와 API 재시도 설정을 함께 확인하세요."
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class TelegramNotifier:
     """텔레그램 전송 설정과 유틸 메서드."""
@@ -177,6 +199,7 @@ class TelegramNotifier:
     enable_daily_limit_notification: bool
     enable_attention_notification: bool
     enable_error_action_buttons: bool
+    error_dedupe_window_sec: int
 
     def send_message_detailed(
         self,
@@ -264,12 +287,18 @@ class TelegramNotifier:
             exchange_name=exchange_name,
             symbol=symbol,
             detail=detail,
+            dedupe_window_sec=self.error_dedupe_window_sec,
         )
+        if incident.get("status") == "ignored" or int(incident.get("count", 1)) > 1:
+            return False
+
+        hint = classify_exchange_error_hint(detail)
+        display_detail = f"{detail}\n진단: {hint}" if hint else detail
         text = (
             f"[{exchange_name}] {format_symbol_badge(symbol)} 에러 발생\n"
             f"인시던트 ID: {incident['id']}\n"
             f"반복 횟수: {incident['count']}\n"
-            f"{detail}"
+            f"{display_detail}"
         )
         reply_markup = None
         if self.enable_error_action_buttons:
@@ -361,6 +390,7 @@ def load_telegram_notifier() -> TelegramNotifier:
         enable_daily_limit_notification=env_bool("TELEGRAM_NOTIFY_DAILY_LIMIT", True),
         enable_attention_notification=env_bool("TELEGRAM_NOTIFY_ATTENTION", True),
         enable_error_action_buttons=env_bool("TELEGRAM_ENABLE_ERROR_ACTION_BUTTONS", True),
+        error_dedupe_window_sec=env_int("TELEGRAM_ERROR_DEDUPE_WINDOW_SEC", 3600),
     )
 
 

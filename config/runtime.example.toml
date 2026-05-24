@@ -4,6 +4,7 @@
 # 2026-04-09: score 기반 동적 자본 배분 예시 키 추가
 # 2026-05-06: 매수 신호 다관점 검토 위원회 예시 키 추가
 # 2026-05-19: BTC/KRW 고점 추격 차단 예시 키 추가
+# 2026-05-24: 텔레그램 에러 인시던트 반복 알림 dedupe 예시 키 추가
 
 [portfolio]
 enable_score_based_scaling = true
@@ -58,6 +59,7 @@ squeeze_min_volume_ratio = 1.80
 
 [telegram]
 enabled = true
+error_dedupe_window_sec = 3600
 
 [upbit]
 trade_risk_per_trade = 1.0

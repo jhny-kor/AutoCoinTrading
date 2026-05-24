@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-24: 거래소 API 허용 IP 오류를 같은 원인으로 정규화하고, ignored 인시던트는 계속 묶어 텔레그램 반복 알림을 줄이도록 보강
 - 텔레그램 승인형 복구에 쓸 에러 인시던트 저장소를 추가
 - 동일 에러를 짧은 시간 안에 묶어 건수와 마지막 발생 시각을 누적 관리하도록 구성
 - 버튼 클릭 후 상태를 `ignored`, `restart_requested`, `fix_requested` 등으로 업데이트할 수 있도록 지원
@@ -8,12 +9,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 
 INCIDENTS_PATH = Path("logs") / "telegram_incidents.json"
+IP_ADDRESS_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
 def _load_incidents(path: Path = INCIDENTS_PATH) -> list[dict[str, Any]]:
@@ -38,6 +41,39 @@ def _save_incidents(incidents: list[dict[str, Any]], path: Path = INCIDENTS_PATH
     )
 
 
+def normalize_incident_detail_for_signature(detail: str) -> str:
+    """같은 운영 원인을 같은 인시던트로 묶을 수 있게 상세 문자열을 정규화한다."""
+    compact = " ".join(detail.strip().split())
+    lowered = compact.lower()
+
+    if "no_authorization_ip" in lowered or "this is not a verified ip" in lowered:
+        return "upbit_ip_authorization_required"
+
+    if "not included in your api key" in lowered and "ip whitelist" in lowered:
+        ip_match = IP_ADDRESS_RE.search(compact)
+        ip_suffix = f":{ip_match.group(0)}" if ip_match else ""
+        return f"okx_ip_whitelist_required{ip_suffix}"
+
+    return compact
+
+
+def _incident_matches_signature(
+    incident: dict[str, Any],
+    *,
+    exchange_name: str,
+    symbol: str,
+    signature: str,
+    normalized_detail: str,
+) -> bool:
+    """기존 raw signature 와 신규 정규화 signature 를 모두 비교한다."""
+    if incident.get("signature") == signature:
+        return True
+    if incident.get("exchange_name") != exchange_name or incident.get("symbol") != symbol:
+        return False
+    existing_detail = str(incident.get("detail", ""))
+    return normalize_incident_detail_for_signature(existing_detail) == normalized_detail
+
+
 def register_incident(
     *,
     exchange_name: str,
@@ -49,15 +85,25 @@ def register_incident(
     """에러 인시던트를 등록하고 최신 레코드를 반환한다."""
     incidents = _load_incidents(path)
     now_ts = time.time()
-    signature = f"{exchange_name}|{symbol}|{detail.strip()}"
+    normalized_detail = normalize_incident_detail_for_signature(detail)
+    signature = f"{exchange_name}|{symbol}|{normalized_detail}"
 
     for incident in reversed(incidents):
-        if incident.get("signature") != signature:
+        if not _incident_matches_signature(
+            incident,
+            exchange_name=exchange_name,
+            symbol=symbol,
+            signature=signature,
+            normalized_detail=normalized_detail,
+        ):
             continue
         last_seen_ts = float(incident.get("last_seen_ts", 0.0) or 0.0)
-        if (now_ts - last_seen_ts) > dedupe_window_sec:
+        status = str(incident.get("status", "open"))
+        if status != "ignored" and (now_ts - last_seen_ts) > dedupe_window_sec:
             break
         incident["count"] = int(incident.get("count", 1)) + 1
+        incident["detail"] = detail
+        incident["signature"] = signature
         incident["last_seen_ts"] = now_ts
         incident["last_seen_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now_ts))
         _save_incidents(incidents, path)

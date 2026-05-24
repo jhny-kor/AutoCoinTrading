@@ -1,4 +1,12 @@
+"""전략 설정 로딩 테스트.
+
+수정 요약
+- 2026-05-24: 자동 튜닝 테스트가 현재 날짜 변화에 깨지지 않도록 최근 시각을 동적으로 만들도록 보정했다.
+"""
+
+import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -141,15 +149,35 @@ class StrategySettingsTests(unittest.TestCase):
     def test_auto_tune_adjustment_map_uses_recent_final_exits(self):
         with TemporaryDirectory() as tmp_dir:
             trade_path = Path(tmp_dir) / "trade_history.jsonl"
+            now = datetime.now().astimezone().replace(microsecond=0)
+            records = [
+                {
+                    "recorded_at_local": (now - timedelta(hours=4)).isoformat(),
+                    "symbol": "ETH/KRW",
+                    "is_final_exit": True,
+                    "net_realized_pnl_quote": 100,
+                },
+                {
+                    "recorded_at_local": (now - timedelta(hours=3)).isoformat(),
+                    "symbol": "ETH/KRW",
+                    "is_final_exit": True,
+                    "net_realized_pnl_quote": 80,
+                },
+                {
+                    "recorded_at_local": (now - timedelta(hours=2)).isoformat(),
+                    "symbol": "XRP/KRW",
+                    "is_final_exit": True,
+                    "net_realized_pnl_quote": -50,
+                },
+                {
+                    "recorded_at_local": (now - timedelta(hours=1)).isoformat(),
+                    "symbol": "XRP/KRW",
+                    "is_final_exit": True,
+                    "net_realized_pnl_quote": -20,
+                },
+            ]
             trade_path.write_text(
-                "\n".join(
-                    [
-                        '{"recorded_at_local":"2026-04-18T10:00:00+09:00","symbol":"ETH/KRW","is_final_exit":true,"net_realized_pnl_quote":100}',
-                        '{"recorded_at_local":"2026-04-18T11:00:00+09:00","symbol":"ETH/KRW","is_final_exit":true,"net_realized_pnl_quote":80}',
-                        '{"recorded_at_local":"2026-04-18T12:00:00+09:00","symbol":"XRP/KRW","is_final_exit":true,"net_realized_pnl_quote":-50}',
-                        '{"recorded_at_local":"2026-04-18T13:00:00+09:00","symbol":"XRP/KRW","is_final_exit":true,"net_realized_pnl_quote":-20}',
-                    ]
-                ),
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records),
                 encoding="utf-8",
             )
             with patch("settings.strategy_settings.Path.rglob", return_value=[trade_path]):
