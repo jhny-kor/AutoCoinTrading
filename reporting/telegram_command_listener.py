@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-05-26: 텔레그램 리스너의 한글 출력 인코딩을 UTF-8 로 고정하고 /analysis 거래량 후보/튜닝 diff 조회 비용을 줄여 응답 지연을 낮췄다.
 - 2026-05-24: /analysis 본문에서 무거운 원시 구조화 로그 스캔을 빼고 시간 버킷 요약 기반 섹션으로 대체했다.
 - 2026-05-24: /analysis, /regime 이 전체 로그를 읽다 중단되지 않도록 최신 날짜/최신 레코드 기반으로 제한했다.
 - 2026-05-14: 시간 판정과 최근 로그 파일 helper 를 reporting.telegram_log_helpers 로 분리했다.
@@ -86,6 +87,38 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from math import sqrt
 
+
+UTF8_ENV_DEFAULTS = {
+    "PYTHONIOENCODING": "utf-8",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+}
+
+
+def configure_utf8_stdio() -> None:
+    """텔레그램 리스너와 자식 명령의 한글 출력을 UTF-8 로 고정한다."""
+    for key, value in UTF8_ENV_DEFAULTS.items():
+        os.environ.setdefault(key, value)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except ValueError:
+            continue
+
+
+def utf8_child_env() -> dict[str, str]:
+    """자식 명령에 전달할 UTF-8 환경을 만든다."""
+    env = os.environ.copy()
+    for key, value in UTF8_ENV_DEFAULTS.items():
+        env.setdefault(key, value)
+    return env
+
+
+configure_utf8_stdio()
+
 import analyze_logs
 import analyze_strategy_logs
 import bot_manager
@@ -93,7 +126,7 @@ from core.runtime.program_registry import TRADE_PROGRAM_SPECS
 from btc_trend_settings import load_btc_trend_settings
 from incident_manager import find_incident, update_incident_status
 from bot_logger import BotLogger
-from log_path_utils import iter_files
+from log_path_utils import iter_files, latest_file
 from reporting.listener_runtime import (
     ListenerSettings,
     get_updates,
@@ -201,9 +234,7 @@ PROGRAM_EXCHANGES = {
 }
 
 OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SPOT"
-OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles?instId={inst}&bar=1D&limit=7"
 UPBIT_TICKER_ALL_URL = "https://api.upbit.com/v1/ticker/all?quote_currencies=KRW"
-UPBIT_CANDLES_URL = "https://api.upbit.com/v1/candles/days?market={market}&count=7"
 VOLUME_CANDIDATE_COUNT = 3
 STABLE_BASES = {"USDT", "USDC", "USDC.e", "USDD", "DAI"}
 WEEKDAY_NAME_TO_INDEX = {
@@ -543,19 +574,12 @@ def build_backtest_comparison_text(settings: ListenerSettings, limit: int = 6) -
 
 def build_latest_tuning_diff_text(limit: int = 6) -> str:
     """가장 최근 튜닝 세트 diff 요약을 만든다."""
-    diff_paths = sorted(iter_files("reports/backtest_batches", "diff_summary.json"))
-    batch_paths = sorted(iter_files("reports/backtest_batches", "batch_summary.json"))
-
-    latest_diff_path = max(diff_paths, key=lambda path: path.stat().st_mtime) if diff_paths else None
-    latest_batch_path = max(batch_paths, key=lambda path: path.stat().st_mtime) if batch_paths else None
+    latest_diff_path = latest_file("reports/backtest_batches", "diff_summary.json")
 
     rows: list[dict[str, object]] = []
     source_label = ""
 
-    if latest_diff_path is not None and (
-        latest_batch_path is None
-        or latest_diff_path.stat().st_mtime >= latest_batch_path.stat().st_mtime
-    ):
+    if latest_diff_path is not None:
         try:
             payload = json.loads(latest_diff_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
@@ -564,18 +588,20 @@ def build_latest_tuning_diff_text(limit: int = 6) -> str:
             rows = [row for row in payload if isinstance(row, dict)]
             source_label = latest_diff_path.parent.name
 
-    if not rows and len(batch_paths) >= 2:
-        latest_two = select_recent_batch_pair_with_activity(batch_paths)
-        if latest_two is None:
-            latest_two = sorted(batch_paths, key=lambda path: path.stat().st_mtime)[-2:]
-        try:
-            before_payload = json.loads(latest_two[0].read_text(encoding="utf-8"))
-            after_payload = json.loads(latest_two[1].read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            before_payload = {}
-            after_payload = {}
-        rows = build_tuning_diff_rows_from_batch_summaries(before_payload, after_payload)
-        source_label = f"{latest_two[0].parent.name} -> {latest_two[1].parent.name}"
+    if not rows:
+        batch_paths = sorted(iter_files("reports/backtest_batches", "batch_summary.json"))
+        if len(batch_paths) >= 2:
+            latest_two = select_recent_batch_pair_with_activity(batch_paths)
+            if latest_two is None:
+                latest_two = sorted(batch_paths, key=lambda path: path.stat().st_mtime)[-2:]
+            try:
+                before_payload = json.loads(latest_two[0].read_text(encoding="utf-8"))
+                after_payload = json.loads(latest_two[1].read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                before_payload = {}
+                after_payload = {}
+            rows = build_tuning_diff_rows_from_batch_summaries(before_payload, after_payload)
+            source_label = f"{latest_two[0].parent.name} -> {latest_two[1].parent.name}"
 
     if not rows:
         return "최근 튜닝 세트 비교\n- 최신 diff_summary.json 또는 비교 가능한 batch_summary.json 이 없습니다."
@@ -1279,7 +1305,7 @@ def build_weekly_funnel_text(days: int = 7, limit: int = 8) -> str:
         base_dir,
         max_date_dirs=days,
     ):
-        for record in analyze_strategy_logs.read_program_records(
+        for record in analyze_strategy_logs.iter_program_records(
             base_dir,
             program_name,
             "strategy.jsonl",
@@ -1539,8 +1565,10 @@ def build_regime_text(settings: ListenerSettings) -> str:
     return "\n".join(lines)
 
 
-def fetch_public_json(url: str, timeout: int = 20) -> object:
+def fetch_public_json(url: str, timeout: int | None = None) -> object:
     """공개 HTTP JSON 응답을 읽는다."""
+    if timeout is None:
+        timeout = positive_env_int("TELEGRAM_VOLUME_CANDIDATE_HTTP_TIMEOUT_SEC", 5)
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0"},
@@ -1550,8 +1578,8 @@ def fetch_public_json(url: str, timeout: int = 20) -> object:
 
 
 def build_volume_candidate_text(settings: ListenerSettings) -> str:
-    """최근 1주 거래량 기준 신규 분석 후보 코인을 거래소별로 요약한다."""
-    lines = ["거래량 기준 신규 후보 코인"]
+    """최근 거래대금 기준 신규 분석 후보 코인을 거래소별로 요약한다."""
+    lines = ["24시간 거래대금 기준 신규 후보 코인"]
 
     okx_candidates, okx_error = fetch_okx_volume_candidates(settings.okx_symbols)
     if okx_error:
@@ -1560,8 +1588,8 @@ def build_volume_candidate_text(settings: ListenerSettings) -> str:
         lines.append("- OKX: 새로 추가할 만한 상위 후보가 아직 없습니다.")
     else:
         okx_text = ", ".join(
-            f"{symbol} ({format_number(week_quote, 0)} USDT)"
-            for symbol, week_quote in okx_candidates
+            f"{symbol} ({format_number(quote_volume, 0)} USDT)"
+            for symbol, quote_volume in okx_candidates
         )
         lines.append(f"- OKX: {okx_text}")
 
@@ -1572,8 +1600,8 @@ def build_volume_candidate_text(settings: ListenerSettings) -> str:
         lines.append("- UPBIT: 새로 추가할 만한 상위 후보가 아직 없습니다.")
     else:
         upbit_text = ", ".join(
-            f"{symbol} ({format_number(week_quote, 0)} KRW)"
-            for symbol, week_quote in upbit_candidates
+            f"{symbol} ({format_number(quote_volume, 0)} KRW)"
+            for symbol, quote_volume in upbit_candidates
         )
         lines.append(f"- UPBIT: {upbit_text}")
 
@@ -1585,7 +1613,7 @@ def fetch_okx_volume_candidates(
     *,
     limit: int = VOLUME_CANDIDATE_COUNT,
 ) -> tuple[list[tuple[str, float]], str | None]:
-    """OKX 에서 최근 1주 거래량 기준 신규 후보를 추린다."""
+    """OKX 에서 24시간 거래대금 기준 신규 후보를 추린다."""
     try:
         payload = fetch_public_json(OKX_TICKERS_URL)
         data = payload.get("data", []) if isinstance(payload, dict) else []
@@ -1600,27 +1628,11 @@ def fetch_okx_volume_candidates(
                 vol_quote = 0.0
             candidates.append((inst_id, vol_quote))
 
-        candidates.sort(key=lambda item: item[1], reverse=True)
-        weekly_rows: list[tuple[str, float]] = []
-        for inst_id, _ in candidates[:30]:
-            time.sleep(0.08)
-            encoded = urllib.parse.quote(inst_id, safe="")
-            candle_payload = fetch_public_json(OKX_CANDLES_URL.format(inst=encoded))
-            candle_rows = (
-                candle_payload.get("data", [])
-                if isinstance(candle_payload, dict)
-                else []
-            )
-            week_quote = 0.0
-            for item in candle_rows:
-                try:
-                    week_quote += float(item[7])
-                except (TypeError, ValueError, IndexError):
-                    continue
-            symbol = inst_id.replace("-", "/")
-            weekly_rows.append((symbol, week_quote))
-
-        return filter_new_volume_candidates(weekly_rows, managed_symbols, limit), None
+        rows = [
+            (inst_id.replace("-", "/"), vol_quote)
+            for inst_id, vol_quote in candidates
+        ]
+        return filter_new_volume_candidates(rows, managed_symbols, limit), None
     except Exception as exc:
         return [], format_telegram_request_error(exc)
 
@@ -1630,7 +1642,7 @@ def fetch_upbit_volume_candidates(
     *,
     limit: int = VOLUME_CANDIDATE_COUNT,
 ) -> tuple[list[tuple[str, float]], str | None]:
-    """업비트에서 최근 1주 거래량 기준 신규 후보를 추린다."""
+    """업비트에서 24시간 거래대금 기준 신규 후보를 추린다."""
     try:
         payload = fetch_public_json(UPBIT_TICKER_ALL_URL)
         rows = payload if isinstance(payload, list) else []
@@ -1645,22 +1657,11 @@ def fetch_upbit_volume_candidates(
                 trade_price = 0.0
             candidates.append((market, trade_price))
 
-        candidates.sort(key=lambda item: item[1], reverse=True)
-        weekly_rows: list[tuple[str, float]] = []
-        for market, _ in candidates[:20]:
-            time.sleep(0.12)
-            encoded = urllib.parse.quote(market, safe="")
-            candle_rows = fetch_public_json(UPBIT_CANDLES_URL.format(market=encoded))
-            week_quote = 0.0
-            for item in candle_rows if isinstance(candle_rows, list) else []:
-                try:
-                    week_quote += float(item.get("candle_acc_trade_price") or 0.0)
-                except (TypeError, ValueError):
-                    continue
-            symbol = market.replace("KRW-", "") + "/KRW"
-            weekly_rows.append((symbol, week_quote))
-
-        return filter_new_volume_candidates(weekly_rows, managed_symbols, limit), None
+        fast_rows = [
+            (market.replace("KRW-", "") + "/KRW", trade_price)
+            for market, trade_price in candidates
+        ]
+        return filter_new_volume_candidates(fast_rows, managed_symbols, limit), None
     except Exception as exc:
         return [], format_telegram_request_error(exc)
 
@@ -2117,7 +2118,7 @@ def summarize_skip_reasons_from_structure(program_name: str) -> dict[str, int]:
     """오늘 구조화 전략 로그에서 스킵 사유를 센다."""
     today_prefix = datetime.now().strftime("%Y-%m-%d")
     counts: dict[str, int] = {}
-    for record in analyze_strategy_logs.read_program_records(
+    for record in analyze_strategy_logs.iter_program_records(
         Path("structured_logs/live"),
         program_name,
         "strategy.jsonl",
@@ -2311,18 +2312,24 @@ def map_incident_exchange_to_program(exchange_name: str) -> str | None:
 def restart_managed_program(target: str) -> tuple[bool, str]:
     """관리 대상 프로그램을 stop/start 순서로 재기동한다."""
     cmd_prefix = [sys.executable, "bot_manager.py"]
-    workdir = Path(__file__).resolve().parent
+    workdir = Path(__file__).resolve().parents[1]
     stop_result = subprocess.run(
         [*cmd_prefix, "stop", target],
         cwd=workdir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=utf8_child_env(),
     )
     start_result = subprocess.run(
         [*cmd_prefix, "start", target],
         cwd=workdir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=utf8_child_env(),
     )
     ok = stop_result.returncode == 0 and start_result.returncode == 0
     detail = (

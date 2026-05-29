@@ -21,25 +21,28 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from log_path_utils import iter_files
 
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    """JSONL 파일을 읽는다."""
+def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    """JSONL 파일을 한 줄씩 흘려보내며 읽는다(메모리 상수)."""
     if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
+        return
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
-    return rows
+            yield json.loads(line)
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """JSONL 파일을 읽는다."""
+    return list(iter_jsonl(path))
 
 
 def iter_recent_date_dirs(base_dir: Path, max_date_dirs: int | None = None) -> list[Path]:
@@ -106,15 +109,31 @@ def read_program_records(
     max_date_dirs: int | None = None,
 ) -> list[dict[str, Any]]:
     """날짜별로 흩어진 특정 프로그램 로그를 모두 읽는다."""
-    rows: list[dict[str, Any]] = []
+    return list(
+        iter_program_records(
+            base_dir,
+            program_name,
+            filename,
+            max_date_dirs=max_date_dirs,
+        )
+    )
+
+
+def iter_program_records(
+    base_dir: Path,
+    program_name: str,
+    filename: str,
+    *,
+    max_date_dirs: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """날짜별로 흩어진 특정 프로그램 로그를 한 줄씩 흘려보낸다(메모리 상수)."""
     for path in iter_program_log_files(
         base_dir,
         filename,
         program_name=program_name,
         max_date_dirs=max_date_dirs,
     ):
-        rows.extend(read_jsonl(path))
-    return rows
+        yield from iter_jsonl(path)
 
 
 def format_ratio(numerator: int, denominator: int) -> str:
@@ -132,78 +151,77 @@ def build_summary_rows(
     """프로그램별 strategy / trade 로그를 읽어 요약 행을 만든다."""
     rows: list[dict[str, Any]] = []
     for program_name in find_program_names(base_dir, max_date_dirs=max_date_dirs):
-        strategy_records = read_program_records(
-            base_dir,
-            program_name,
-            "strategy.jsonl",
-            max_date_dirs=max_date_dirs,
-        )
-        trade_records = read_program_records(
-            base_dir,
-            program_name,
-            "trade.jsonl",
-            max_date_dirs=max_date_dirs,
-        )
+        # 거대한 strategy.jsonl 을 통째로 메모리에 올리지 않고 한 줄씩 흘려보내며
+        # (symbol, side) 별 집계만 누적한다.
+        strategy_aggs: dict[tuple[str, str], dict[str, Any]] = {}
+        key_order: list[tuple[str, str]] = []
 
-        grouped_strategy: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-        grouped_trade: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        def get_agg(key: tuple[str, str]) -> dict[str, Any]:
+            agg = strategy_aggs.get(key)
+            if agg is None:
+                agg = {
+                    "block_counter": Counter(),
+                    "pass_counter": Counter(),
+                    "scans": 0,
+                    "ready": 0,
+                    "requested": 0,
+                    "filled": 0,
+                }
+                strategy_aggs[key] = agg
+                key_order.append(key)
+            return agg
 
-        for record in strategy_records:
+        for record in iter_program_records(
+            base_dir, program_name, "strategy.jsonl", max_date_dirs=max_date_dirs
+        ):
             key = (str(record.get("symbol", "")), str(record.get("side", "")))
-            grouped_strategy[key].append(record)
-        for record in trade_records:
+            agg = get_agg(key)
+            result = record.get("result")
+            stage = record.get("stage")
+            if result == "blocked":
+                agg["block_counter"][record.get("reason")] += 1
+            elif result == "pass":
+                agg["pass_counter"][stage] += 1
+            if stage == "scan" and result == "seen":
+                agg["scans"] += 1
+            elif result == "ready" and stage in {"buy_ready", "sell_ready"}:
+                agg["ready"] += 1
+            elif stage == "order_requested" and result == "requested":
+                agg["requested"] += 1
+            elif stage == "filled" and result == "filled":
+                agg["filled"] += 1
+
+        # 체결 손익은 trade.jsonl 에서 (symbol, side) 별 합/건수만 누적한다.
+        pnl_sum: dict[tuple[str, str], float] = defaultdict(float)
+        pnl_count: dict[tuple[str, str], int] = defaultdict(int)
+        for record in iter_program_records(
+            base_dir, program_name, "trade.jsonl", max_date_dirs=max_date_dirs
+        ):
             if record.get("log_type") != "trade":
+                continue
+            if record.get("result") != "filled":
+                continue
+            actual = record.get("actual")
+            if not isinstance(actual, dict):
+                continue
+            pnl = actual.get("realized_pnl_pct")
+            if pnl is None:
                 continue
             side = "entry" if record.get("side") == "buy" else "exit"
             key = (str(record.get("symbol", "")), side)
-            grouped_trade[key].append(record)
+            pnl_sum[key] += float(pnl)
+            pnl_count[key] += 1
 
-        for key in sorted(grouped_strategy):
+        for key in sorted(key_order):
             symbol, side = key
-            strategy_group = grouped_strategy[key]
-            trade_group = grouped_trade.get(key, [])
-            block_counter = Counter(
-                record.get("reason")
-                for record in strategy_group
-                if record.get("result") == "blocked"
-            )
-            pass_counter = Counter(
-                record.get("stage")
-                for record in strategy_group
-                if record.get("result") == "pass"
-            )
-            filled_trades = [
-                record for record in trade_group if record.get("result") == "filled"
-            ]
-            pnl_values = [
-                float(record["actual"].get("realized_pnl_pct"))
-                for record in filled_trades
-                if isinstance(record.get("actual"), dict)
-                and record["actual"].get("realized_pnl_pct") is not None
-            ]
-
-            scan_count = sum(
-                1
-                for record in strategy_group
-                if record.get("stage") == "scan" and record.get("result") == "seen"
-            )
-            ready_count = sum(
-                1
-                for record in strategy_group
-                if record.get("result") == "ready"
-                and record.get("stage") in {"buy_ready", "sell_ready"}
-            )
-            order_requested_count = sum(
-                1
-                for record in strategy_group
-                if record.get("stage") == "order_requested"
-                and record.get("result") == "requested"
-            )
-            filled_count = sum(
-                1
-                for record in strategy_group
-                if record.get("stage") == "filled" and record.get("result") == "filled"
-            )
+            agg = strategy_aggs[key]
+            block_counter = agg["block_counter"]
+            pass_counter = agg["pass_counter"]
+            scan_count = agg["scans"]
+            ready_count = agg["ready"]
+            order_requested_count = agg["requested"]
+            filled_count = agg["filled"]
+            pnl_n = pnl_count.get(key, 0)
 
             rows.append(
                 {
@@ -229,9 +247,7 @@ def build_summary_rows(
                     + pass_counter.get("atr", 0),
                     "cooldown_pass": pass_counter.get("cooldown", 0),
                     "avg_realized_pnl_pct": (
-                        f"{sum(pnl_values) / len(pnl_values):.3f}"
-                        if pnl_values
-                        else "-"
+                        f"{pnl_sum[key] / pnl_n:.3f}" if pnl_n else "-"
                     ),
                 }
             )

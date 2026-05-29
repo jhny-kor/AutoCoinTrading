@@ -17,6 +17,7 @@
 - 프로세스 목록 조회가 막힌 경우 상태 출력에 안내 문구를 함께 남기도록 정리했다.
 - 2026-05-07: defunct 프로세스 PID 파일을 실행 중으로 오판하지 않도록 ps stat 기반 정리를 추가했다.
 - 2026-05-18: ps 명령 전체를 파싱하지 않고 앞쪽 실행 인자만 검사해 긴 외부 프로세스 인자 때문에 상태 조회가 지연되지 않게 했다.
+- 2026-05-26: 봇 매니저와 자식 봇 프로세스가 희소 locale 에서도 한글을 UTF-8 로 출력하도록 환경을 고정했다.
 
 가능한 모든 터미널 명령
 - .venv/bin/python bot_manager.py status
@@ -82,6 +83,36 @@ BLUE = "\033[34m"
 CYAN = "\033[36m"
 PROCESS_LIST_WARNING: str | None = None
 PID_DIR = Path("logs") / "pids"
+UTF8_ENV_DEFAULTS = {
+    "PYTHONIOENCODING": "utf-8",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+}
+
+
+def configure_utf8_stdio() -> None:
+    """콘솔과 자식 프로세스의 한글 출력 인코딩을 고정한다."""
+    for key, value in UTF8_ENV_DEFAULTS.items():
+        os.environ.setdefault(key, value)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except ValueError:
+            continue
+
+
+def utf8_child_env() -> dict[str, str]:
+    """자식 봇에 전달할 UTF-8 환경을 만든다."""
+    env = os.environ.copy()
+    for key, value in UTF8_ENV_DEFAULTS.items():
+        env.setdefault(key, value)
+    return env
+
+
+configure_utf8_stdio()
 
 
 @dataclass
@@ -264,6 +295,9 @@ def list_managed_processes(exclude_current: bool = True) -> list[ManagedProcess]
             ["ps", "-Ao", "pid=,ppid=,etime=,stat=,command="],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=utf8_child_env(),
             check=True,
         )
     except PermissionError:
@@ -454,6 +488,7 @@ def start_program(name: str) -> int:
             stdout=subprocess.DEVNULL,
             stderr=f,
             start_new_session=True,
+            env=utf8_child_env(),
         )
 
     write_pid_file(name, process.pid)
