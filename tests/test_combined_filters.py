@@ -1,6 +1,7 @@
 """단독 지표를 결합해 추격 진입 리스크를 줄이는 helper 테스트.
 
 수정 요약
+- BTC LOW_ENERGY 저ATR 구간의 알트 고점 추격 차단 helper 검증을 추가했다.
 - BTC/KRW 고ATR+최근 고점 근접 추격 차단 helper 검증을 추가했다.
 - BTC/KRW 고점 추격 차단 helper 검증을 추가했다.
 """
@@ -10,6 +11,7 @@ import unittest
 from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_btc_regime_correlation_volatility_risk,
+    is_low_energy_top_chase_entry_risk,
     is_overheated_entry_risk,
     is_symbol_top_chase_entry_risk,
     is_stop_loss_context_reentry_risk,
@@ -141,6 +143,34 @@ class CombinedFilterTests(unittest.TestCase):
                 distance_from_recent_high_pct=context["distance_from_recent_high_pct"],
                 range_position_threshold=70.0,
                 distance_from_high_threshold_pct=0.20,
+            )
+        )
+
+    def test_low_energy_top_chase_guard_requires_low_btc_atr_and_high_range(self):
+        self.assertTrue(
+            is_low_energy_top_chase_entry_risk(
+                enabled=True,
+                btc_regime="LOW_ENERGY",
+                btc_atr_pct=0.0227,
+                range_position_pct=100.0,
+                distance_from_recent_high_pct=0.0,
+                risky_btc_regimes=("LOW_ENERGY",),
+                max_btc_atr_pct=0.03,
+                range_position_threshold=95.0,
+                distance_from_high_threshold_pct=0.05,
+            )
+        )
+        self.assertFalse(
+            is_low_energy_top_chase_entry_risk(
+                enabled=True,
+                btc_regime="LOW_ENERGY",
+                btc_atr_pct=0.06,
+                range_position_pct=100.0,
+                distance_from_recent_high_pct=0.0,
+                risky_btc_regimes=("LOW_ENERGY",),
+                max_btc_atr_pct=0.03,
+                range_position_threshold=95.0,
+                distance_from_high_threshold_pct=0.05,
             )
         )
 

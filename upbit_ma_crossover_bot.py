@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-03: BTC LOW_ENERGY 저ATR 구간에서 알트가 고점권이면 추격 진입을 차단하도록 연결
 - 2026-05-15: XRP/KRW 고점수 반등 probe 를 mean_reversion 하단 reclaim 미확인 예외로 제한 연결
 - 2026-05-14: 알트 공통 SMA/거래량/등락률 helper 를 core.strategy.indicators 로 분리함
 - 2026-05-14: 알트 진입/청산 퍼널 실행 단계를 공통 alt_loop helper 로 옮김
@@ -166,6 +167,7 @@ from core.strategy.alt_loop import run_alt_entry_funnel, run_alt_exit_funnel
 from core.strategy.combined_filters import (
     calc_recent_range_context,
     is_btc_regime_correlation_volatility_risk,
+    is_low_energy_top_chase_entry_risk,
     is_overheated_entry_risk,
     is_stop_loss_context_reentry_risk,
     is_volume_atr_execution_weak_risk,
@@ -1085,10 +1087,45 @@ def run_bot():
                         min_orderbook_pressure_score=strategy.volume_atr_execution_min_orderbook_pressure_score,
                     )
                 )
+                low_energy_top_chase_actual = {
+                    "btc_reference_regime": btc_reference_regime,
+                    "btc_reference_atr_pct": btc_reference_atr_pct,
+                    "range_position_pct": recent_range_context["range_position_pct"],
+                    "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
+                }
+                low_energy_top_chase_required = {
+                    "risky_btc_regimes": strategy.low_energy_top_chase_risky_btc_regimes,
+                    "max_btc_atr_pct": strategy.low_energy_top_chase_max_btc_atr_pct,
+                    "range_position_pct": strategy.low_energy_top_chase_range_position_pct,
+                    "distance_from_high_pct": strategy.low_energy_top_chase_distance_from_high_pct,
+                }
+                low_energy_top_chase_entry_blocked = (
+                    entry_signal
+                    and not has_position
+                    and is_low_energy_top_chase_entry_risk(
+                        enabled=strategy.enable_low_energy_top_chase_guard,
+                        btc_regime=btc_reference_regime,
+                        btc_atr_pct=btc_reference_atr_pct,
+                        range_position_pct=recent_range_context["range_position_pct"],
+                        distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                        risky_btc_regimes=strategy.low_energy_top_chase_risky_btc_regimes,
+                        max_btc_atr_pct=strategy.low_energy_top_chase_max_btc_atr_pct,
+                        range_position_threshold=strategy.low_energy_top_chase_range_position_pct,
+                        distance_from_high_threshold_pct=strategy.low_energy_top_chase_distance_from_high_pct,
+                    )
+                )
+                if low_energy_top_chase_entry_blocked:
+                    log(
+                        f"[{symbol}] BTC 저에너지/저ATR 구간에서 최근 고점권 추격 위험이 커 신규 진입을 차단합니다 "
+                        f"(BTC regime {btc_reference_regime}, BTC ATR {0.0 if btc_reference_atr_pct is None else btc_reference_atr_pct:.4f}%, "
+                        f"range {0.0 if recent_range_context['range_position_pct'] is None else recent_range_context['range_position_pct']:.2f}%, "
+                        f"고점 거리 {0.0 if recent_range_context['distance_from_recent_high_pct'] is None else recent_range_context['distance_from_recent_high_pct']:.4f}%)."
+                    )
                 current_entry_risk_context = {
                     "strategy_key": strategy_key,
                     "symbol_regime": symbol_regime,
                     "btc_reference_regime": btc_reference_regime,
+                    "low_energy_top_chase": low_energy_top_chase_entry_blocked,
                     "high_atr": (
                         atr_percentile is not None
                         and atr_percentile >= strategy.volume_atr_execution_guard_atr_percentile
@@ -1175,6 +1212,7 @@ def run_bot():
                         and not overheated_entry_blocked
                         and not btc_correlation_volatility_blocked
                         and not volume_atr_execution_blocked
+                        and not low_energy_top_chase_entry_blocked
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
                         and (
@@ -1196,6 +1234,7 @@ def run_bot():
                         and not overheated_entry_blocked
                         and not btc_correlation_volatility_blocked
                         and not volume_atr_execution_blocked
+                        and not low_energy_top_chase_entry_blocked
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
                         and (
@@ -2054,6 +2093,9 @@ def run_bot():
                         btc_correlation_volatility_blocked=btc_correlation_volatility_blocked,
                         btc_reference_regime=btc_reference_regime,
                         volume_atr_execution_blocked=volume_atr_execution_blocked,
+                        low_energy_top_chase_entry_blocked=low_energy_top_chase_entry_blocked,
+                        low_energy_top_chase_actual=low_energy_top_chase_actual,
+                        low_energy_top_chase_required=low_energy_top_chase_required,
                         fill_quality_snapshot=fill_quality_snapshot,
                         stop_loss_context_reentry_blocked=stop_loss_context_reentry_blocked,
                         seconds_since_last_stop_loss=seconds_since_last_stop_loss,

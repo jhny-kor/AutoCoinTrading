@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-03: 알트 리플레이에 BTC LOW_ENERGY 저ATR 고점 추격 차단을 반영했다.
 - 2026-05-22: BTC/KRW 고ATR+최근 고점 근접 추격 차단을 리플레이 진입 gate 에도 반영했다.
 - 2026-05-22: BTC 리플레이 체결 캔들을 1분 원본 인덱스가 아니라 신호 기준 캔들 인덱스에 맞춰 가격/시각 왜곡을 제거했다.
 - 2026-05-22: BTC 리플레이 summary 생성 시 ExecutionModel 직렬화를 위해 누락된 asdict import 를 복구했다.
@@ -50,6 +51,7 @@ from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.btc_position import evaluate_btc_open_position
 from core.strategy.combined_filters import (
     calc_recent_range_context,
+    is_low_energy_top_chase_entry_risk,
     is_symbol_top_chase_entry_risk,
 )
 from core.strategy.indicators import (
@@ -338,9 +340,18 @@ def simulate_alt_strategy(
         )
         ma_slope_pct = calc_pct_slope(ma_series, strategy.trend_slope_lookback)
         price_slope_pct = calc_pct_slope(closes, strategy.trend_slope_lookback)
+        base_ohlcv_window = [
+            [c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume]
+            for c in window
+        ]
         adx_value = calc_adx(
-            [[c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume] for c in window],
+            base_ohlcv_window,
             14,
+        )
+        recent_range_context = calc_recent_range_context(
+            base_ohlcv_window,
+            last_close=last_close,
+            lookback=strategy.volatility_lookback,
         )
 
         active_higher_timeframe = get_recent_active_candles_by_time(
@@ -467,6 +478,8 @@ def simulate_alt_strategy(
         regime_policy = get_alt_regime_policy(regime_snapshot.regime)
 
         btc_reference_closes: list[float] = []
+        btc_reference_regime = "UNKNOWN"
+        btc_reference_atr_pct = None
         if btc_reference_candles:
             active_btc_reference = get_recent_active_candles_by_time(
                 btc_reference_candles,
@@ -475,6 +488,38 @@ def simulate_alt_strategy(
                 btc_reference_required,
             )
             btc_reference_closes = [candle.close for candle in active_btc_reference]
+            if len(active_btc_reference) >= max(25, strategy.volume_lookback + 3):
+                btc_reference_ohlcv = [
+                    [c.timestamp_ms, c.open, c.high, c.low, c.close, c.volume]
+                    for c in active_btc_reference
+                ]
+                btc_reference_volume_ratio = calc_volume_ratio(
+                    active_btc_reference,
+                    strategy.volume_lookback,
+                )
+                btc_reference_avg_abs_change_pct = calc_avg_abs_change_pct(
+                    btc_reference_closes,
+                    strategy.volatility_lookback,
+                )
+                btc_reference_atr_value = calc_atr(btc_reference_ohlcv, 14)
+                btc_reference_last_close = btc_reference_closes[-1]
+                btc_reference_atr_pct = (
+                    btc_reference_atr_value / btc_reference_last_close * 100
+                    if btc_reference_atr_value is not None and btc_reference_last_close
+                    else None
+                )
+                btc_reference_regime = build_replay_symbol_regime(
+                    volume_ratio=btc_reference_volume_ratio,
+                    avg_abs_change_pct=btc_reference_avg_abs_change_pct,
+                    gap_pct=None,
+                    rsi_value=calc_rsi(btc_reference_closes, strategy.rsi_period),
+                    adx_value=calc_adx(btc_reference_ohlcv, 14),
+                    bullish_signal=False,
+                    bearish_signal=False,
+                    above_ma=True,
+                    htf_bullish=None,
+                    public_buy_ready=False,
+                ).regime
         correlation_with_btc = (
             calc_return_correlation(
                 closes,
@@ -505,10 +550,26 @@ def simulate_alt_strategy(
             and correlation_with_btc >= strategy.max_correlation_with_btc
         )
         fill_quality_entry_blocked = False
+        low_energy_top_chase_entry_blocked = (
+            entry_signal
+            and not has_position
+            and is_low_energy_top_chase_entry_risk(
+                enabled=strategy.enable_low_energy_top_chase_guard,
+                btc_regime=btc_reference_regime,
+                btc_atr_pct=btc_reference_atr_pct,
+                range_position_pct=recent_range_context["range_position_pct"],
+                distance_from_recent_high_pct=recent_range_context["distance_from_recent_high_pct"],
+                risky_btc_regimes=strategy.low_energy_top_chase_risky_btc_regimes,
+                max_btc_atr_pct=strategy.low_energy_top_chase_max_btc_atr_pct,
+                range_position_threshold=strategy.low_energy_top_chase_range_position_pct,
+                distance_from_high_threshold_pct=strategy.low_energy_top_chase_distance_from_high_pct,
+            )
+        )
         raw_entry_candidate = (
             entry_signal
             and not regime_policy.pause_new_entry
             and not correlation_entry_blocked
+            and not low_energy_top_chase_entry_blocked
             and (not regime_policy.require_fresh_cross or bullish)
             and not htf_bearish_entry_blocked
         )
@@ -733,6 +794,7 @@ def simulate_alt_strategy(
             and not htf_bearish_entry_blocked
             and not correlation_entry_blocked
             and not fill_quality_entry_blocked
+            and not low_energy_top_chase_entry_blocked
             and entry_timing_snapshot.ready
             and not in_trade_cooldown
             and not in_partial_tp_cooldown
@@ -825,6 +887,11 @@ def simulate_alt_strategy(
                             "avg_abs_change_pct": avg_abs_change_pct,
                             "correlation_with_btc": correlation_with_btc,
                             "symbol_regime": regime_snapshot.regime,
+                            "btc_reference_regime": btc_reference_regime,
+                            "btc_reference_atr_pct": btc_reference_atr_pct,
+                            "range_position_pct": recent_range_context["range_position_pct"],
+                            "distance_from_recent_high_pct": recent_range_context["distance_from_recent_high_pct"],
+                            "low_energy_top_chase_entry_blocked": low_energy_top_chase_entry_blocked,
                             "entry_timing_phase": entry_timing_snapshot.phase,
                             "requested_order_value_quote": order_value,
                             "executed_order_value_quote": executed_order_value,

@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-03: BTC LOW_ENERGY 저ATR 구간의 알트 고점 추격 진입 차단 helper 를 추가했다.
 - 2026-05-22: BTC/KRW 고ATR+최근 고점 근접 조건을 거래량과 무관한 추격 진입 차단 기준으로 추가했다.
 - 2026-05-19: BTC/KRW 고점권+고ATR+거래량 폭증 추격 진입을 RSI 없이 차단하는 helper 를 추가했다.
 - 2026-05-02: BTC 위험 레짐+고상관+알트 고ATR, 거래량+ATR+체결/호가 약세, 손절 후 유사 조건 재진입 가드를 추가했다.
@@ -131,6 +132,38 @@ def requires_overheat_confirmation(
     """강한 신호라도 최근 range 상단 추격이면 추가 confirmation 을 요구한다."""
     if not signal_is_strong:
         return False
+    range_top_risk = (
+        range_position_pct is not None
+        and range_position_pct >= range_position_threshold
+    )
+    near_high_risk = (
+        distance_from_recent_high_pct is not None
+        and distance_from_recent_high_pct <= distance_from_high_threshold_pct
+    )
+    return range_top_risk or near_high_risk
+
+
+def is_low_energy_top_chase_entry_risk(
+    *,
+    enabled: bool,
+    btc_regime: str | None,
+    btc_atr_pct: float | None,
+    range_position_pct: float | None,
+    distance_from_recent_high_pct: float | None,
+    risky_btc_regimes: tuple[str, ...],
+    max_btc_atr_pct: float,
+    range_position_threshold: float,
+    distance_from_high_threshold_pct: float,
+) -> bool:
+    """BTC 저에너지+저ATR 구간에서 알트가 최근 고점권이면 추격 진입으로 본다."""
+    if not enabled or btc_atr_pct is None:
+        return False
+
+    normalized_regime = str(btc_regime or "UNKNOWN").strip().upper()
+    risky_regimes = {str(item).strip().upper() for item in risky_btc_regimes}
+    if normalized_regime not in risky_regimes or btc_atr_pct > max_btc_atr_pct:
+        return False
+
     range_top_risk = (
         range_position_pct is not None
         and range_position_pct >= range_position_threshold

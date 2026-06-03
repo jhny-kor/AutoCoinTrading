@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-03: BTC LOW_ENERGY 저ATR 구간의 알트 고점 추격 진입 차단 설정을 추가
 - 2026-05-15: XRP/KRW 고점수 반등 probe 대상, 최소 점수, 소액 비중, 추가 확인 설정을 추가
 - 2026-05-12: 하단 근접 mean_reversion probe 전용 최소 점수 설정을 추가해 전역 strong 기준과 분리
 - mean_reversion 하단 근접 신호를 소액/추가확인 probe 후보로 제한하는 설정을 추가
@@ -160,6 +161,11 @@ class StrategySettings:
     low_energy_probe_max_atr_percentile: float
     low_energy_probe_position_scale: float
     low_energy_probe_extra_confirmation_loops: int
+    enable_low_energy_top_chase_guard: bool
+    low_energy_top_chase_risky_btc_regimes: tuple[str, ...]
+    low_energy_top_chase_max_btc_atr_pct: float
+    low_energy_top_chase_range_position_pct: float
+    low_energy_top_chase_distance_from_high_pct: float
     enable_sol_probe: bool
     sol_probe_symbols: tuple[str, ...]
     sol_probe_min_signal_score: float
@@ -829,6 +835,20 @@ def load_strategy_settings(
         low_energy_probe_max_atr_percentile=config_float("strategy", "low_energy_probe_max_atr_percentile", 70.0, env_key="STRATEGY_LOW_ENERGY_PROBE_MAX_ATR_PERCENTILE"),
         low_energy_probe_position_scale=config_float("strategy", "low_energy_probe_position_scale", 0.30, env_key="STRATEGY_LOW_ENERGY_PROBE_POSITION_SCALE"),
         low_energy_probe_extra_confirmation_loops=config_int("strategy", "low_energy_probe_extra_confirmation_loops", 3, env_key="STRATEGY_LOW_ENERGY_PROBE_EXTRA_CONFIRMATION_LOOPS"),
+        enable_low_energy_top_chase_guard=config_bool("strategy", "enable_low_energy_top_chase_guard", False, env_key="STRATEGY_ENABLE_LOW_ENERGY_TOP_CHASE_GUARD"),
+        low_energy_top_chase_risky_btc_regimes=tuple(
+            parse_symbol_list(
+                config_str(
+                    "strategy",
+                    "low_energy_top_chase_risky_btc_regimes",
+                    "LOW_ENERGY",
+                    env_key="STRATEGY_LOW_ENERGY_TOP_CHASE_RISKY_BTC_REGIMES",
+                )
+            )
+        ),
+        low_energy_top_chase_max_btc_atr_pct=config_float("strategy", "low_energy_top_chase_max_btc_atr_pct", 0.03, env_key="STRATEGY_LOW_ENERGY_TOP_CHASE_MAX_BTC_ATR_PCT"),
+        low_energy_top_chase_range_position_pct=config_float("strategy", "low_energy_top_chase_range_position_pct", 95.0, env_key="STRATEGY_LOW_ENERGY_TOP_CHASE_RANGE_POSITION_PCT"),
+        low_energy_top_chase_distance_from_high_pct=config_float("strategy", "low_energy_top_chase_distance_from_high_pct", 0.05, env_key="STRATEGY_LOW_ENERGY_TOP_CHASE_DISTANCE_FROM_HIGH_PCT"),
         enable_sol_probe=config_bool("strategy", "enable_sol_probe", False, env_key="STRATEGY_ENABLE_SOL_PROBE"),
         sol_probe_symbols=tuple(
             parse_symbol_list(
