@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-12: 알트 순익 trailing arm 상태도 런타임 복구 상태에 포함했다.
 - 2026-04-09: 알트도 손절 전용 재진입 시각을 런타임 상태에 복구해 패턴 기반 재진입에 재사용하도록 확장
 """
 
@@ -18,6 +19,7 @@ class AltRuntimeState:
     lowest_price_since_entry: dict[str, float]
     partial_take_profit_done: dict[str, bool]
     partial_stop_loss_done: dict[str, bool]
+    trailing_armed: dict[str, bool]
     partial_take_profit_last_at: dict[str, float]
     entry_count: dict[str, int]
     last_trade_at: dict[str, float]
@@ -74,6 +76,11 @@ def build_alt_runtime_state(
             symbol: state.partial_stop_loss_done
             for symbol, state in recovered_states.items()
             if state.partial_stop_loss_done
+        },
+        trailing_armed={
+            symbol: state.trailing_armed
+            for symbol, state in recovered_states.items()
+            if state.trailing_armed
         },
         partial_take_profit_last_at={
             symbol: state.last_partial_take_profit_at_ts

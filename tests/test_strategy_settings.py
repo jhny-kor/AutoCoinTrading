@@ -1,6 +1,7 @@
 """전략 설정 로딩 테스트.
 
 수정 요약
+- 2026-06-12: 알트 순익 보호 하한과 trailing exit 설정 로딩 검증을 추가했다.
 - 2026-05-24: 자동 튜닝 테스트가 현재 날짜 변화에 깨지지 않도록 최근 시각을 동적으로 만들도록 보정했다.
 """
 
@@ -145,6 +146,41 @@ class StrategySettingsTests(unittest.TestCase):
 
         self.assertEqual(80, settings.get_signal_score_min("ETH/KRW"))
         self.assertEqual(55, settings.get_signal_score_min("XRP/KRW"))
+
+    def test_fee_protect_floor_clamps_symbol_overrides(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT": "0.15",
+                "STRATEGY_FEE_PROTECT_FLOOR_NET_PNL_PCT": "0.50",
+                "STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT_MAP": "ETH/KRW:0.06,XRP/KRW:0.10,SOL/KRW:0.80",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertEqual(0.50, settings.get_fee_protect_min_net_pnl_pct("ETH/KRW"))
+        self.assertEqual(0.50, settings.get_fee_protect_min_net_pnl_pct("XRP/KRW"))
+        self.assertEqual(0.50, settings.get_fee_protect_min_net_pnl_pct("UNKNOWN"))
+        self.assertEqual(0.80, settings.get_fee_protect_min_net_pnl_pct("SOL/KRW"))
+
+    def test_loads_alt_profit_trailing_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_ENABLE_ALT_PROFIT_TRAILING_EXIT": "true",
+                "STRATEGY_ALT_PROFIT_TRAILING_ARM_NET_PNL_PCT": "0.30",
+                "STRATEGY_ALT_PROFIT_TRAILING_DRAWDOWN_PCT": "0.40",
+                "STRATEGY_ALT_PROFIT_TRAILING_FLOOR_NET_PNL_PCT": "0.05",
+            },
+            clear=False,
+        ):
+            settings = load_strategy_settings("UPBIT_MIN_BUY_ORDER_VALUE", 5000)
+
+        self.assertTrue(settings.enable_alt_profit_trailing_exit)
+        self.assertEqual(0.30, settings.alt_profit_trailing_arm_net_pnl_pct)
+        self.assertEqual(0.40, settings.alt_profit_trailing_drawdown_pct)
+        self.assertEqual(0.05, settings.alt_profit_trailing_floor_net_pnl_pct)
 
     def test_auto_tune_adjustment_map_uses_recent_final_exits(self):
         with TemporaryDirectory() as tmp_dir:

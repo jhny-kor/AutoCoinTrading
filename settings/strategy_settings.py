@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-12: 알트 순익 보호 하한과 순익 trailing exit 설정을 추가했다.
 - 2026-06-03: BTC LOW_ENERGY 저ATR 구간의 알트 고점 추격 진입 차단 설정을 추가
 - 2026-05-15: XRP/KRW 고점수 반등 probe 대상, 최소 점수, 소액 비중, 추가 확인 설정을 추가
 - 2026-05-12: 하단 근접 mean_reversion probe 전용 최소 점수 설정을 추가해 전역 strong 기준과 분리
@@ -222,7 +223,12 @@ class StrategySettings:
     stop_loss_pct: float
     enable_fee_protect_exit: bool
     fee_protect_min_net_pnl_pct: float
+    fee_protect_floor_net_pnl_pct: float
     fee_protect_min_net_pnl_pct_map: dict[str, float]
+    enable_alt_profit_trailing_exit: bool
+    alt_profit_trailing_arm_net_pnl_pct: float
+    alt_profit_trailing_drawdown_pct: float
+    alt_profit_trailing_floor_net_pnl_pct: float
     enable_break_even_guard: bool
     break_even_guard_min_mfe_pct: float
     break_even_guard_min_mfe_pct_map: dict[str, float]
@@ -378,10 +384,11 @@ class StrategySettings:
 
     def get_fee_protect_min_net_pnl_pct(self, symbol: str) -> float:
         """심볼별 순익 보호 최소 순익률 기준을 반환한다."""
-        return self.fee_protect_min_net_pnl_pct_map.get(
+        configured_value = self.fee_protect_min_net_pnl_pct_map.get(
             symbol,
             self.fee_protect_min_net_pnl_pct,
         )
+        return max(configured_value, self.fee_protect_floor_net_pnl_pct)
 
     def get_break_even_guard_floor_net_pnl_pct(self, symbol: str) -> float:
         """심볼별 브레이크이븐 가드 순익 바닥 기준을 반환한다."""
@@ -915,7 +922,12 @@ def load_strategy_settings(
         stop_loss_pct=config_float("strategy", "stop_loss_pct", 1.5, env_key="STRATEGY_STOP_LOSS_PCT"),
         enable_fee_protect_exit=config_bool("strategy", "enable_fee_protect_exit", True, env_key="STRATEGY_ENABLE_FEE_PROTECT_EXIT"),
         fee_protect_min_net_pnl_pct=config_float("strategy", "fee_protect_min_net_pnl_pct", 0.20, env_key="STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT"),
+        fee_protect_floor_net_pnl_pct=config_float("strategy", "fee_protect_floor_net_pnl_pct", 0.0, env_key="STRATEGY_FEE_PROTECT_FLOOR_NET_PNL_PCT"),
         fee_protect_min_net_pnl_pct_map=parse_symbol_float_map(config_value("strategy", "fee_protect_min_net_pnl_pct_map", {}, env_key="STRATEGY_FEE_PROTECT_MIN_NET_PNL_PCT_MAP")),
+        enable_alt_profit_trailing_exit=config_bool("strategy", "enable_alt_profit_trailing_exit", False, env_key="STRATEGY_ENABLE_ALT_PROFIT_TRAILING_EXIT"),
+        alt_profit_trailing_arm_net_pnl_pct=config_float("strategy", "alt_profit_trailing_arm_net_pnl_pct", 0.30, env_key="STRATEGY_ALT_PROFIT_TRAILING_ARM_NET_PNL_PCT"),
+        alt_profit_trailing_drawdown_pct=config_float("strategy", "alt_profit_trailing_drawdown_pct", 0.40, env_key="STRATEGY_ALT_PROFIT_TRAILING_DRAWDOWN_PCT"),
+        alt_profit_trailing_floor_net_pnl_pct=config_float("strategy", "alt_profit_trailing_floor_net_pnl_pct", 0.05, env_key="STRATEGY_ALT_PROFIT_TRAILING_FLOOR_NET_PNL_PCT"),
         enable_break_even_guard=config_bool("strategy", "enable_break_even_guard", True, env_key="STRATEGY_ENABLE_BREAK_EVEN_GUARD"),
         break_even_guard_min_mfe_pct=config_float("strategy", "break_even_guard_min_mfe_pct", 0.0, env_key="STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT"),
         break_even_guard_min_mfe_pct_map=parse_symbol_float_map(config_value("strategy", "break_even_guard_min_mfe_pct_map", {}, env_key="STRATEGY_BREAK_EVEN_GUARD_MIN_MFE_PCT_MAP")),

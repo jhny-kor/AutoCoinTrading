@@ -1,6 +1,7 @@
 """
 수정 요약
 - 2026-06-03: 알트 리플레이에 BTC LOW_ENERGY 저ATR 고점 추격 차단을 반영했다.
+- 2026-06-12: 알트 순익 trailing exit 정책을 리플레이 청산 판단에 반영했다.
 - 2026-05-22: BTC/KRW 고ATR+최근 고점 근접 추격 차단을 리플레이 진입 gate 에도 반영했다.
 - 2026-05-22: BTC 리플레이 체결 캔들을 1분 원본 인덱스가 아니라 신호 기준 캔들 인덱스에 맞춰 가격/시각 왜곡을 제거했다.
 - 2026-05-22: BTC 리플레이 summary 생성 시 ExecutionModel 직렬화를 위해 누락된 asdict import 를 복구했다.
@@ -46,6 +47,7 @@ from analysis_log_collector import (
 )
 from btc_trend_settings import load_btc_trend_settings
 from core.risk.alt_exit import compute_alt_exit_decisions, compute_alt_position_metrics
+from core.risk.alt_profit_trailing import resolve_alt_profit_trailing_exit
 from core.strategy.alt import compute_alt_signal_state, compute_can_average_down
 from core.strategy.btc import compute_btc_entry_state, compute_btc_exit_flags
 from core.strategy.btc_position import evaluate_btc_open_position
@@ -264,6 +266,7 @@ def simulate_alt_strategy(
     partial_stop_loss_done = (
         initial_state.partial_stop_loss_done if initial_state is not None else False
     )
+    alt_profit_trailing_armed = False
     last_trade_ts = initial_state.last_trade_ts if initial_state is not None else 0
     last_partial_take_profit_ts = (
         initial_state.last_partial_take_profit_ts if initial_state is not None else 0
@@ -619,7 +622,10 @@ def simulate_alt_strategy(
             take_profit_pct=take_profit_pct,
             stop_loss_pct=stop_loss_pct,
             fee_rate_pct=fee_rate_pct,
-            enable_fee_protect_exit=strategy.enable_fee_protect_exit,
+            enable_fee_protect_exit=(
+                strategy.enable_fee_protect_exit
+                and not strategy.enable_alt_profit_trailing_exit
+            ),
             fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
             enable_break_even_guard=strategy.enable_break_even_guard,
             break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
@@ -637,6 +643,23 @@ def simulate_alt_strategy(
         profit_protect_triggered = bool(alt_exit_state["profit_protect_triggered"])
         break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
         volume_spike_exit_triggered = bool(alt_exit_state["volume_spike_exit_triggered"])
+        alt_profit_trailing_decision = resolve_alt_profit_trailing_exit(
+            has_position=has_position,
+            enabled=strategy.enable_alt_profit_trailing_exit,
+            trailing_armed=alt_profit_trailing_armed,
+            pnl_pct=pnl_pct,
+            mfe_pct=mfe_pct,
+            current_net_realized_pnl_pct=current_net_realized_pnl_pct,
+            arm_net_pnl_pct=strategy.alt_profit_trailing_arm_net_pnl_pct,
+            drawdown_pct=strategy.alt_profit_trailing_drawdown_pct,
+            floor_net_pnl_pct=strategy.alt_profit_trailing_floor_net_pnl_pct,
+            bearish=bearish,
+            stop_loss_triggered=stop_loss_triggered,
+        )
+        alt_profit_trailing_armed = alt_profit_trailing_decision.trailing_armed
+        alt_profit_trailing_exit_triggered = (
+            alt_profit_trailing_decision.trailing_exit_triggered
+        )
 
         if has_position and avg_entry_price is not None:
             normal_exit_triggered = bearish and take_profit_ready and higher_timeframe_exit_passed
@@ -651,6 +674,9 @@ def simulate_alt_strategy(
                 else:
                     exit_ratio = 1.0
                     exit_reason = "stop_loss"
+            elif alt_profit_trailing_exit_triggered:
+                exit_ratio = 1.0
+                exit_reason = "alt_profit_trailing_exit"
             elif profit_protect_triggered:
                 exit_ratio = 1.0
                 exit_reason = "profit_protect_take_profit"
@@ -704,6 +730,7 @@ def simulate_alt_strategy(
                     cash += proceeds - sell_fee_quote
                     units = max(0.0, units - amount)
                     daily_realized_pnl_quote += net_realized_pnl_quote
+                    alt_profit_trailing_armed_at_decision = alt_profit_trailing_armed
                     if units <= 1e-12:
                         units = 0.0
                         avg_entry_price = None
@@ -712,6 +739,7 @@ def simulate_alt_strategy(
                         partial_stop_loss_done = False
                         highest_price_since_entry = None
                         lowest_price_since_entry = None
+                        alt_profit_trailing_armed = False
                         is_final_exit = True
                     if exit_reason == "partial_take_profit" and units > 0:
                         partial_take_profit_done = True
@@ -745,6 +773,15 @@ def simulate_alt_strategy(
                                 "mfe_pct": mfe_pct,
                                 "mae_pct": mae_pct,
                                 "current_net_realized_pnl_pct": current_net_realized_pnl_pct,
+                                "alt_profit_trailing_armed": (
+                                    alt_profit_trailing_armed_at_decision
+                                ),
+                                "alt_profit_trailing_trigger_reason": (
+                                    alt_profit_trailing_decision.trigger_reason
+                                ),
+                                "profit_retrace_from_mfe_pct": (
+                                    alt_profit_trailing_decision.profit_retrace_from_mfe_pct
+                                ),
                                 "signal_score": signal_score,
                                 "symbol_regime": regime_snapshot.regime,
                                 "requested_amount": requested_amount,
@@ -850,6 +887,8 @@ def simulate_alt_strategy(
                 avg_entry_price = ((previous_cost + net_order_value) / units) if units > 0 else last_close
                 cash -= executed_order_value
                 entry_count += 1
+                if not has_position:
+                    alt_profit_trailing_armed = False
                 highest_price_since_entry = execution_price
                 lowest_price_since_entry = execution_price
                 last_trade_ts = execution_candle.timestamp_ms

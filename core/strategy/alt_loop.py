@@ -1,6 +1,7 @@
 """
 작업 요약
 - 알트 봇 루프의 진입/청산 퍼널 실행 단계를 공통 helper 로 분리했다.
+- 알트 순익 trailing exit ready reason 을 청산 퍼널에 전달한다.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ def run_alt_exit_funnel(
     break_even_guard_triggered: bool,
     volume_spike_exit_triggered: bool,
     sol_probe_time_exit_triggered: bool,
+    alt_profit_trailing_exit_triggered: bool = False,
 ) -> bool:
     """알트 청산 퍼널을 표준 ready stage와 우선순위 reason 으로 실행한다."""
     ready, _ = structured_logger.run_funnel(
@@ -54,6 +56,7 @@ def run_alt_exit_funnel(
             break_even_guard_triggered=break_even_guard_triggered,
             volume_spike_exit_triggered=volume_spike_exit_triggered,
             sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
+            alt_profit_trailing_exit_triggered=alt_profit_trailing_exit_triggered,
         ),
     )
     return bool(ready)

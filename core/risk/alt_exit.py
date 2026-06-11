@@ -7,6 +7,7 @@
 - 알트 포지션의 수익률/순익률/MFE/MAE 계산과 청산 보호 판단을 공통화했다.
 - 브레이크이븐 가드와 순익 보호 익절 계산을 한 곳으로 모았다.
 - MFE 대비 되돌림 폭 기준을 추가해 수익 구간에서 급한 반납을 더 빠르게 정리할 수 있게 보강했다.
+- 알트 순익 trailing exit 청산 사유를 공통 매도 intent 에 추가했다.
 """
 
 from __future__ import annotations
@@ -149,6 +150,7 @@ def resolve_alt_sell_intent(
     sol_probe_time_exit_triggered: bool,
     partial_take_profit_pending: bool,
     effective_partial_take_profit_ratio: float,
+    alt_profit_trailing_exit_triggered: bool = False,
 ) -> AltSellIntent:
     """청산 트리거 우선순위에 따라 매도 비율과 reason 코드를 결정한다."""
     if stop_loss_triggered:
@@ -162,6 +164,12 @@ def resolve_alt_sell_intent(
             sell_ratio=1.0,
             exit_reason_key="stop_loss",
             sell_reason="손절",
+        )
+    if alt_profit_trailing_exit_triggered:
+        return AltSellIntent(
+            sell_ratio=1.0,
+            exit_reason_key="alt_profit_trailing_exit",
+            sell_reason="순익트레일링익절",
         )
     if profit_protect_triggered:
         return AltSellIntent(

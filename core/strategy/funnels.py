@@ -9,6 +9,7 @@
 - no_entry_signal 포괄 차단을 raw 신호, squeeze, mean_reversion 컨텍스트, 최종 integrity 단계로 세분화
 - 거래량 상한 초과 신호를 소액/추가확인 후보로 낮춘 경우 volume_cap 단계를 통과하도록 확장
 - OKX funding rate 과열 차단 단계를 알트/BTC 진입 퍼널에 추가
+- 알트 순익 trailing exit 트리거를 청산 퍼널 reason 에 포함했다.
 - 2026-04-10: 알트 보수형 튜닝용 최대 이격도와 최대 거래량 상한 단계를 퍼널에 추가했다.
 - 2026-04-09: 손절 후 패턴 기반 재진입 차단 단계를 퍼널에 추가해 reason 코드로 추적할 수 있게 확장
 - 알트/BTC 진입, 추가매수, 청산 퍼널 step 생성기를 공통 모듈로 분리했다.
@@ -567,6 +568,7 @@ def build_alt_exit_steps(
     fee_protect_min_net_pnl_pct: float,
     break_even_guard_min_mfe_pct: float,
     break_even_guard_floor_net_pnl_pct: float,
+    alt_profit_trailing_exit_triggered: bool = False,
     sol_probe_time_exit_triggered: bool = False,
 ):
     return [
@@ -581,6 +583,7 @@ def build_alt_exit_steps(
             stage="exit_trigger",
             passed=(
                 stop_loss_triggered
+                or alt_profit_trailing_exit_triggered
                 or profit_protect_triggered
                 or break_even_guard_triggered
                 or volume_spike_exit_triggered
@@ -590,6 +593,7 @@ def build_alt_exit_steps(
             reason="no_exit_signal",
             actual={
                 "stop_loss_triggered": stop_loss_triggered,
+                "alt_profit_trailing_exit_triggered": alt_profit_trailing_exit_triggered,
                 "profit_protect_triggered": profit_protect_triggered,
                 "break_even_guard_triggered": break_even_guard_triggered,
                 "volume_spike_exit_triggered": volume_spike_exit_triggered,
@@ -602,6 +606,7 @@ def build_alt_exit_steps(
             stage="cooldown",
             passed=(
                 stop_loss_triggered
+                or alt_profit_trailing_exit_triggered
                 or profit_protect_triggered
                 or break_even_guard_triggered
                 or volume_spike_exit_triggered
@@ -616,6 +621,7 @@ def build_alt_exit_steps(
             stage="distance",
             passed=(
                 stop_loss_triggered
+                or alt_profit_trailing_exit_triggered
                 or profit_protect_triggered
                 or break_even_guard_triggered
                 or volume_spike_exit_triggered
@@ -630,6 +636,7 @@ def build_alt_exit_steps(
             stage="higher_timeframe",
             passed=(
                 stop_loss_triggered
+                or alt_profit_trailing_exit_triggered
                 or profit_protect_triggered
                 or break_even_guard_triggered
                 or volume_spike_exit_triggered
@@ -644,6 +651,7 @@ def build_alt_exit_steps(
             stage="take_profit",
             passed=(
                 stop_loss_triggered
+                or alt_profit_trailing_exit_triggered
                 or profit_protect_triggered
                 or break_even_guard_triggered
                 or volume_spike_exit_triggered

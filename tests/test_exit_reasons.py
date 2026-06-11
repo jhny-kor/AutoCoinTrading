@@ -1,6 +1,7 @@
 """
 작업 요약
 - 알트/BTC 청산 퍼널 ready reason helper 의 우선순위를 검증한다.
+- 알트 순익 trailing exit reason 우선순위를 검증한다.
 """
 
 from __future__ import annotations
@@ -23,6 +24,17 @@ class ExitReasonTests(unittest.TestCase):
                 break_even_guard_triggered=True,
                 volume_spike_exit_triggered=True,
                 sol_probe_time_exit_triggered=True,
+            ),
+        )
+        self.assertEqual(
+            "alt_profit_trailing_exit_triggered",
+            resolve_alt_exit_ready_reason(
+                stop_loss_triggered=False,
+                profit_protect_triggered=True,
+                break_even_guard_triggered=True,
+                volume_spike_exit_triggered=True,
+                sol_probe_time_exit_triggered=True,
+                alt_profit_trailing_exit_triggered=True,
             ),
         )
         self.assertEqual(

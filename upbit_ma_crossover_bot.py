@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-06-12: 알트 순익 trailing exit 정책을 업비트 알트 루프에 연결했다.
 - 2026-06-03: BTC LOW_ENERGY 저ATR 구간에서 알트가 고점권이면 추격 진입을 차단하도록 연결
 - 2026-05-15: XRP/KRW 고점수 반등 probe 를 mean_reversion 하단 reclaim 미확인 예외로 제한 연결
 - 2026-05-14: 알트 공통 SMA/거래량/등락률 helper 를 core.strategy.indicators 로 분리함
@@ -152,6 +153,7 @@ from core.risk.alt_exit import (
     resolve_alt_sell_order_by_min_value,
     resolve_alt_sell_intent,
 )
+from core.risk.alt_profit_trailing import resolve_alt_profit_trailing_exit
 from core.runtime.bootstrap import build_alt_runtime_state
 from core.strategy.alt import (
     compute_alt_signal_state,
@@ -384,6 +386,7 @@ def run_bot():
     lowest_price_since_entry = runtime_state.lowest_price_since_entry
     partial_take_profit_done = runtime_state.partial_take_profit_done
     partial_stop_loss_done = runtime_state.partial_stop_loss_done
+    alt_profit_trailing_armed = runtime_state.trailing_armed
     unrecoverable_position_warned: set[str] = set()
     partial_take_profit_last_at = runtime_state.partial_take_profit_last_at
     entry_count = runtime_state.entry_count
@@ -1495,6 +1498,7 @@ def run_bot():
                 elif not has_position:
                     highest_price_since_entry.pop(symbol, None)
                     lowest_price_since_entry.pop(symbol, None)
+                    alt_profit_trailing_armed.pop(symbol, None)
 
                 fee_round_trip_pct = config["fee_rate_pct"] * 2
                 sol_probe_exit_state = resolve_sol_probe_exit_state(
@@ -1581,7 +1585,10 @@ def run_bot():
                     take_profit_pct=take_profit_pct,
                     stop_loss_pct=stop_loss_pct,
                     fee_rate_pct=config["fee_rate_pct"],
-                    enable_fee_protect_exit=strategy.enable_fee_protect_exit,
+                    enable_fee_protect_exit=(
+                        strategy.enable_fee_protect_exit
+                        and not strategy.enable_alt_profit_trailing_exit
+                    ),
                     fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
                     enable_break_even_guard=strategy.enable_break_even_guard,
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
@@ -1600,11 +1607,32 @@ def run_bot():
                 break_even_guard_triggered = bool(alt_exit_state["break_even_guard_triggered"])
                 volume_spike_exit_triggered = bool(alt_exit_state["volume_spike_exit_triggered"])
                 profit_retrace_from_mfe_pct = alt_exit_state["profit_retrace_from_mfe_pct"]
+                alt_profit_trailing_decision = resolve_alt_profit_trailing_exit(
+                    has_position=has_position,
+                    enabled=strategy.enable_alt_profit_trailing_exit,
+                    trailing_armed=alt_profit_trailing_armed.get(symbol, False),
+                    pnl_pct=pnl_pct,
+                    mfe_pct=mfe_pct,
+                    current_net_realized_pnl_pct=current_net_realized_pnl_pct,
+                    arm_net_pnl_pct=strategy.alt_profit_trailing_arm_net_pnl_pct,
+                    drawdown_pct=strategy.alt_profit_trailing_drawdown_pct,
+                    floor_net_pnl_pct=strategy.alt_profit_trailing_floor_net_pnl_pct,
+                    bearish=bearish,
+                    stop_loss_triggered=stop_loss_triggered,
+                )
+                if alt_profit_trailing_decision.trailing_armed:
+                    alt_profit_trailing_armed[symbol] = True
+                else:
+                    alt_profit_trailing_armed.pop(symbol, None)
+                alt_profit_trailing_exit_triggered = (
+                    alt_profit_trailing_decision.trailing_exit_triggered
+                )
                 if (
                     bearish
                     and has_position
                     and pnl_pct is not None
                     and not take_profit_ready
+                    and not alt_profit_trailing_exit_triggered
                     and not profit_protect_triggered
                     and not break_even_guard_triggered
                     and not volume_spike_exit_triggered
@@ -1619,6 +1647,21 @@ def run_bot():
                     log(
                         f"[{symbol}] 순익 보호 익절 조건 충족: 수수료 반영 순익률 "
                         f"{current_net_realized_pnl_pct:.2f}% >= {fee_protect_min_net_pnl_pct:.2f}%"
+                    )
+                if has_position and alt_profit_trailing_decision.trailing_armed_just_now:
+                    log(
+                        f"[{symbol}] 순익 trailing 모드 전환: 순익률 "
+                        f"{0.0 if current_net_realized_pnl_pct is None else current_net_realized_pnl_pct:.2f}% >= "
+                        f"{strategy.alt_profit_trailing_arm_net_pnl_pct:.2f}%"
+                    )
+                if has_position and alt_profit_trailing_exit_triggered:
+                    log(
+                        f"[{symbol}] 순익 trailing 청산 조건 충족: reason="
+                        f"{alt_profit_trailing_decision.trigger_reason}, "
+                        f"이익 반납폭 "
+                        f"{0.0 if alt_profit_trailing_decision.profit_retrace_from_mfe_pct is None else alt_profit_trailing_decision.profit_retrace_from_mfe_pct:.2f}% / "
+                        f"{strategy.alt_profit_trailing_drawdown_pct:.2f}%, 순익률 "
+                        f"{0.0 if current_net_realized_pnl_pct is None else current_net_realized_pnl_pct:.2f}%"
                     )
                 if has_position and break_even_guard_triggered:
                     log(
@@ -1892,6 +1935,9 @@ def run_bot():
                     fee_round_trip_pct=fee_round_trip_pct,
                     fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
                     profit_protect_triggered=profit_protect_triggered,
+                    alt_profit_trailing_armed=alt_profit_trailing_armed.get(symbol, False),
+                    alt_profit_trailing_exit_triggered=alt_profit_trailing_exit_triggered,
+                    alt_profit_trailing_trigger_reason=alt_profit_trailing_decision.trigger_reason,
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
                     break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
                     break_even_guard_max_profit_retrace_pct=break_even_guard_max_profit_retrace_pct,
@@ -2176,6 +2222,7 @@ def run_bot():
                     fee_protect_min_net_pnl_pct=fee_protect_min_net_pnl_pct,
                     break_even_guard_min_mfe_pct=break_even_guard_min_mfe_pct,
                     break_even_guard_floor_net_pnl_pct=break_even_guard_floor_net_pnl_pct,
+                    alt_profit_trailing_exit_triggered=alt_profit_trailing_exit_triggered,
                     sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                 )
                 exit_steps.extend(
@@ -2206,6 +2253,7 @@ def run_bot():
                     break_even_guard_triggered=break_even_guard_triggered,
                     volume_spike_exit_triggered=volume_spike_exit_triggered,
                     sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
+                    alt_profit_trailing_exit_triggered=alt_profit_trailing_exit_triggered,
                 )
 
                 # 매수 신호 발생 시, 분할 횟수/쿨다운/추가 매수 가격 조건을 만족하면 진입
@@ -2271,6 +2319,8 @@ def run_bot():
                             highest_price_since_entry=highest_price_since_entry,
                             lowest_price_since_entry=lowest_price_since_entry,
                         )
+                        if not has_position:
+                            alt_profit_trailing_armed.pop(symbol, None)
                         last_trade_at[symbol] = time.time()
                         log_order_filled(
                             structured_logger=structured_logger,
@@ -2395,6 +2445,7 @@ def run_bot():
                         sol_probe_time_exit_triggered=sol_probe_time_exit_triggered,
                         partial_take_profit_pending=partial_take_profit_pending,
                         effective_partial_take_profit_ratio=effective_partial_take_profit_ratio,
+                        alt_profit_trailing_exit_triggered=alt_profit_trailing_exit_triggered,
                     )
                     sell_ratio = sell_intent.sell_ratio
                     exit_reason_key = sell_intent.exit_reason_key
@@ -2591,6 +2642,7 @@ def run_bot():
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,
                                 mae_pct=mae_pct,
+                                trailing_armed=alt_profit_trailing_armed.get(symbol, False),
                                 request_started_at=order_request_started_at,
                                 response_received_at=order_response_received_at,
                                 requested_amount=amount,
@@ -2608,6 +2660,11 @@ def run_bot():
                                     "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
                                     "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                                     "profit_protect_triggered": profit_protect_triggered,
+                                    "alt_profit_trailing_exit_triggered": alt_profit_trailing_exit_triggered,
+                                    "alt_profit_trailing_trigger_reason": alt_profit_trailing_decision.trigger_reason,
+                                    "alt_profit_trailing_retrace_from_mfe_pct": (
+                                        alt_profit_trailing_decision.profit_retrace_from_mfe_pct
+                                    ),
                                     "sol_probe_time_exit_triggered": sol_probe_time_exit_triggered,
                                     "sol_probe_max_hold_minutes": strategy.sol_probe_max_hold_minutes,
                                     "pnl_pct_at_decision": pnl_pct,
@@ -2628,6 +2685,7 @@ def run_bot():
                                     partial_stop_loss_done=partial_stop_loss_done,
                                     unrecoverable_position_warned=unrecoverable_position_warned,
                                 )
+                                alt_profit_trailing_armed.pop(symbol, None)
                         else:
                             log_order_filled(
                                 structured_logger=structured_logger,
@@ -2667,6 +2725,7 @@ def run_bot():
                                 lowest_price_since_entry=lowest_price_since_entry.get(symbol),
                                 mfe_pct=mfe_pct,
                                 mae_pct=mae_pct,
+                                trailing_armed=alt_profit_trailing_armed.get(symbol, False),
                                 request_started_at=order_request_started_at,
                                 response_received_at=order_response_received_at,
                                 requested_amount=amount,
@@ -2680,6 +2739,11 @@ def run_bot():
                                     "current_net_pnl_pct_estimate": current_net_realized_pnl_pct,
                                     "fee_protect_min_net_pnl_pct": fee_protect_min_net_pnl_pct,
                                     "profit_protect_triggered": profit_protect_triggered,
+                                    "alt_profit_trailing_exit_triggered": alt_profit_trailing_exit_triggered,
+                                    "alt_profit_trailing_trigger_reason": alt_profit_trailing_decision.trigger_reason,
+                                    "alt_profit_trailing_retrace_from_mfe_pct": (
+                                        alt_profit_trailing_decision.profit_retrace_from_mfe_pct
+                                    ),
                                     "sol_probe_time_exit_triggered": sol_probe_time_exit_triggered,
                                     "sol_probe_max_hold_minutes": strategy.sol_probe_max_hold_minutes,
                                     "entry_price_unknown": True,
@@ -2690,6 +2754,7 @@ def run_bot():
                                 entry_opened_at.pop(symbol, None)
                                 partial_take_profit_done.pop(symbol, None)
                                 partial_stop_loss_done.pop(symbol, None)
+                                alt_profit_trailing_armed.pop(symbol, None)
                         log(
                             f"[{symbol}] 분할 매도 후 남은 진입 카운트: {entry_count.get(symbol, 0)}"
                         )

@@ -1,6 +1,6 @@
 """
 작업 요약
-- 알트 청산 보호/부분청산 계산과 최소 주문 fallback 정책을 검증한다.
+- 알트 순익 trailing exit 정책과 보호/부분청산 계산, 최소 주문 fallback 정책을 검증한다.
 """
 
 import unittest
@@ -14,6 +14,7 @@ from core.risk.alt_exit import (
     resolve_alt_sell_order_by_min_value,
     resolve_alt_sell_intent,
 )
+from core.risk.alt_profit_trailing import resolve_alt_profit_trailing_exit
 
 
 class AltExitRuleTests(unittest.TestCase):
@@ -150,6 +151,80 @@ class AltExitRuleTests(unittest.TestCase):
         self.assertTrue(decisions["volume_spike_exit_triggered"])
         self.assertEqual(decisions["estimated_sell_ratio"], 1.0)
 
+    def test_profit_trailing_arms_on_bearish_net_profit_threshold(self):
+        decision = resolve_alt_profit_trailing_exit(
+            has_position=True,
+            enabled=True,
+            trailing_armed=False,
+            pnl_pct=0.48,
+            mfe_pct=0.60,
+            current_net_realized_pnl_pct=0.31,
+            arm_net_pnl_pct=0.30,
+            drawdown_pct=0.40,
+            floor_net_pnl_pct=0.05,
+            bearish=True,
+            stop_loss_triggered=False,
+        )
+
+        self.assertTrue(decision.trailing_armed)
+        self.assertTrue(decision.trailing_armed_just_now)
+        self.assertFalse(decision.trailing_exit_triggered)
+
+    def test_profit_trailing_exits_after_high_drawdown(self):
+        decision = resolve_alt_profit_trailing_exit(
+            has_position=True,
+            enabled=True,
+            trailing_armed=True,
+            pnl_pct=0.35,
+            mfe_pct=0.81,
+            current_net_realized_pnl_pct=0.22,
+            arm_net_pnl_pct=0.30,
+            drawdown_pct=0.40,
+            floor_net_pnl_pct=0.05,
+            bearish=False,
+            stop_loss_triggered=False,
+        )
+
+        self.assertTrue(decision.trailing_armed)
+        self.assertTrue(decision.trailing_exit_triggered)
+        self.assertEqual("drawdown", decision.trigger_reason)
+
+    def test_profit_trailing_exits_below_net_floor(self):
+        decision = resolve_alt_profit_trailing_exit(
+            has_position=True,
+            enabled=True,
+            trailing_armed=True,
+            pnl_pct=0.12,
+            mfe_pct=0.32,
+            current_net_realized_pnl_pct=0.04,
+            arm_net_pnl_pct=0.30,
+            drawdown_pct=0.40,
+            floor_net_pnl_pct=0.05,
+            bearish=False,
+            stop_loss_triggered=False,
+        )
+
+        self.assertTrue(decision.trailing_exit_triggered)
+        self.assertEqual("net_floor", decision.trigger_reason)
+
+    def test_profit_trailing_does_not_override_stop_loss(self):
+        decision = resolve_alt_profit_trailing_exit(
+            has_position=True,
+            enabled=True,
+            trailing_armed=True,
+            pnl_pct=-1.6,
+            mfe_pct=0.50,
+            current_net_realized_pnl_pct=-1.7,
+            arm_net_pnl_pct=0.30,
+            drawdown_pct=0.40,
+            floor_net_pnl_pct=0.05,
+            bearish=True,
+            stop_loss_triggered=True,
+        )
+
+        self.assertFalse(decision.trailing_armed)
+        self.assertFalse(decision.trailing_exit_triggered)
+
     def test_partial_exit_policy_tracks_pending_flags_and_ratio(self):
         policy = resolve_alt_partial_exit_policy(
             symbol="ETH/KRW",
@@ -215,6 +290,25 @@ class AltExitRuleTests(unittest.TestCase):
         self.assertAlmostEqual(0.35, intent.sell_ratio)
         self.assertEqual("partial_stop_loss", intent.exit_reason_key)
         self.assertEqual("부분손절", intent.sell_reason)
+
+    def test_sell_intent_uses_profit_trailing_before_other_profit_exits(self):
+        intent = resolve_alt_sell_intent(
+            sell_split_ratio=0.4,
+            stop_loss_triggered=False,
+            partial_stop_loss_pending=False,
+            partial_stop_loss_ratio=0.35,
+            profit_protect_triggered=True,
+            break_even_guard_triggered=True,
+            volume_spike_exit_triggered=True,
+            sol_probe_time_exit_triggered=False,
+            partial_take_profit_pending=True,
+            effective_partial_take_profit_ratio=0.6,
+            alt_profit_trailing_exit_triggered=True,
+        )
+
+        self.assertEqual(1.0, intent.sell_ratio)
+        self.assertEqual("alt_profit_trailing_exit", intent.exit_reason_key)
+        self.assertEqual("순익트레일링익절", intent.sell_reason)
 
     def test_sell_intent_uses_partial_take_profit_or_default_split(self):
         partial_intent = resolve_alt_sell_intent(
