@@ -14,6 +14,7 @@
 - 업비트 설정 로드, 429 재시도, 주문 버퍼, 잔고/호가 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
 - 알트/BTC 봇이 같은 업비트 실행 경로를 재사용하도록 정리했다.
 - 업비트 REST 호출을 공식 Rate Limit 그룹별 limiter 로 분리해 현재가 조회 직후 주문 지연을 줄였다.
+- 업비트 REST 그룹별 limiter 가 Oracle 호스트 전체에서 상태를 공유하도록 설정 값을 전달한다.
 """
 
 from __future__ import annotations
@@ -74,6 +75,11 @@ def load_upbit_config() -> dict:
     ws_provider_cache_ttl_sec = env_float("UPBIT_WS_PROVIDER_CACHE_TTL_SEC", 0.25)
     ws_provider_stale_sec = env_float("UPBIT_WS_PROVIDER_STALE_SEC", 5.0)
     group_rate_limit_enabled = env_bool("UPBIT_GROUP_RATE_LIMIT_ENABLED", True)
+    shared_rate_limit_enabled = env_bool("UPBIT_RATE_LIMIT_SHARED_ENABLED", True)
+    shared_rate_limit_state_dir = env_str(
+        "UPBIT_RATE_LIMIT_SHARED_STATE_DIR",
+        "logs/runtime/upbit_rate_limits",
+    ).strip()
 
     return {
         "api_key": api_key,
@@ -94,6 +100,8 @@ def load_upbit_config() -> dict:
         "ws_provider_cache_ttl_sec": ws_provider_cache_ttl_sec,
         "ws_provider_stale_sec": ws_provider_stale_sec,
         "group_rate_limit_enabled": group_rate_limit_enabled,
+        "shared_rate_limit_enabled": shared_rate_limit_enabled,
+        "shared_rate_limit_state_dir": shared_rate_limit_state_dir,
     }
 
 
@@ -112,6 +120,8 @@ def create_upbit_client(config: dict) -> ccxt.upbit:
                 "upbit_orderbook_cache_ttl_sec": config["orderbook_cache_ttl_sec"],
                 "upbit_best_bid_refresh_buffer_pct": config["best_bid_refresh_buffer_pct"],
                 "upbit_group_rate_limit_enabled": config["group_rate_limit_enabled"],
+                "upbit_rate_limit_shared_enabled": config["shared_rate_limit_enabled"],
+                "upbit_rate_limit_shared_state_dir": config["shared_rate_limit_state_dir"],
             },
         }
     )

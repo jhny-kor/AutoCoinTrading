@@ -1,5 +1,6 @@
-"""업비트 재시도 가능 예외와 그룹별 요청 제한 테스트."""
+"""업비트 재시도 가능 예외와 호스트 공유 그룹별 요청 제한 테스트."""
 
+import tempfile
 import unittest
 
 import ccxt
@@ -48,15 +49,17 @@ class UpbitRetryTests(unittest.TestCase):
             calls.append("order")
             return {"ok": "order"}
 
-        exchange = FakeExchange()
+        with tempfile.TemporaryDirectory() as state_dir:
+            exchange = FakeExchange()
+            exchange.options["upbit_rate_limit_shared_state_dir"] = state_dir
 
-        call_upbit_with_retry(exchange, fake_orderbook, rate_limit_group="orderbook")
-        call_upbit_with_retry(exchange, fake_order, rate_limit_group="order")
+            call_upbit_with_retry(exchange, fake_orderbook, rate_limit_group="orderbook")
+            call_upbit_with_retry(exchange, fake_order, rate_limit_group="order")
 
         self.assertEqual(["orderbook", "order"], calls)
         self.assertEqual([], sleeps)
 
-    def test_same_order_group_waits_for_upbit_order_limit(self):
+    def test_same_order_group_waits_across_exchange_instances(self):
         sleeps = []
         now = [100.0]
 
@@ -75,10 +78,14 @@ class UpbitRetryTests(unittest.TestCase):
         def fake_order() -> dict[str, str]:
             return {"ok": "order"}
 
-        exchange = FakeExchange()
+        with tempfile.TemporaryDirectory() as state_dir:
+            first_exchange = FakeExchange()
+            second_exchange = FakeExchange()
+            first_exchange.options["upbit_rate_limit_shared_state_dir"] = state_dir
+            second_exchange.options["upbit_rate_limit_shared_state_dir"] = state_dir
 
-        call_upbit_with_retry(exchange, fake_order, rate_limit_group="order")
-        call_upbit_with_retry(exchange, fake_order, rate_limit_group="order")
+            call_upbit_with_retry(first_exchange, fake_order, rate_limit_group="order")
+            call_upbit_with_retry(second_exchange, fake_order, rate_limit_group="order")
 
         self.assertEqual(1, len(sleeps))
         self.assertAlmostEqual(0.125, sleeps[0])
