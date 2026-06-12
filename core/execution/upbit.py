@@ -13,16 +13,35 @@
 - 업비트 시장가 매도도 공통 재시도 경로와 캐시 무효화 helper 를 쓰도록 확장했다.
 - 업비트 설정 로드, 429 재시도, 주문 버퍼, 잔고/호가 조회, 시장가 주문 유틸을 공통 모듈로 분리했다.
 - 알트/BTC 봇이 같은 업비트 실행 경로를 재사용하도록 정리했다.
+- 업비트 REST 호출을 공식 Rate Limit 그룹별 limiter 로 분리해 현재가 조회 직후 주문 지연을 줄였다.
 """
 
 from __future__ import annotations
 
-import os
-import time
-from typing import Tuple
-
 import ccxt
 
+from core.execution.upbit_markets import (
+    apply_upbit_buy_order_buffer,
+    ensure_upbit_market_cached,
+    invalidate_upbit_balance_cache,
+    invalidate_upbit_orderbook_cache,
+    safe_amount_to_precision_upbit,
+    should_refresh_best_bid_upbit,
+)
+from core.execution.upbit_rate_limits import (
+    call_upbit_with_retry,
+    is_upbit_retryable_error,
+)
+from core.execution.upbit_rest import (
+    create_market_buy_order_upbit,
+    create_market_sell_order_upbit,
+    enrich_upbit_order_with_private_event,
+    fetch_best_bid_upbit,
+    fetch_ohlcv_upbit,
+    fetch_ohlcv_upbit_with_provider,
+    get_spot_balances_upbit,
+    get_spot_balances_upbit_with_provider,
+)
 from core.market_data.upbit_provider import UpbitMarketDataProvider
 from settings.config_access import env_bool, env_float, env_int, env_str
 from settings.env import load_project_env
@@ -54,6 +73,7 @@ def load_upbit_config() -> dict:
     ws_provider_root_dir = env_str("UPBIT_WS_PROVIDER_ROOT_DIR", "logs/runtime/upbit_ws").strip()
     ws_provider_cache_ttl_sec = env_float("UPBIT_WS_PROVIDER_CACHE_TTL_SEC", 0.25)
     ws_provider_stale_sec = env_float("UPBIT_WS_PROVIDER_STALE_SEC", 5.0)
+    group_rate_limit_enabled = env_bool("UPBIT_GROUP_RATE_LIMIT_ENABLED", True)
 
     return {
         "api_key": api_key,
@@ -73,6 +93,7 @@ def load_upbit_config() -> dict:
         "ws_provider_root_dir": ws_provider_root_dir,
         "ws_provider_cache_ttl_sec": ws_provider_cache_ttl_sec,
         "ws_provider_stale_sec": ws_provider_stale_sec,
+        "group_rate_limit_enabled": group_rate_limit_enabled,
     }
 
 
@@ -81,7 +102,7 @@ def create_upbit_client(config: dict) -> ccxt.upbit:
         {
             "apiKey": config["api_key"],
             "secret": config["api_secret"],
-            "enableRateLimit": True,
+            "enableRateLimit": False,
             "timeout": config["request_timeout_ms"],
             "options": {
                 "adjustForTimeDifference": True,
@@ -90,6 +111,7 @@ def create_upbit_client(config: dict) -> ccxt.upbit:
                 "upbit_balance_cache_ttl_sec": config["balance_cache_ttl_sec"],
                 "upbit_orderbook_cache_ttl_sec": config["orderbook_cache_ttl_sec"],
                 "upbit_best_bid_refresh_buffer_pct": config["best_bid_refresh_buffer_pct"],
+                "upbit_group_rate_limit_enabled": config["group_rate_limit_enabled"],
             },
         }
     )
@@ -111,310 +133,3 @@ def create_upbit_market_data_provider(config: dict) -> UpbitMarketDataProvider |
         cache_ttl_sec=float(config.get("ws_provider_cache_ttl_sec", 0.25) or 0.25),
         stale_sec=float(config.get("ws_provider_stale_sec", 5.0) or 5.0),
     )
-
-
-def ensure_upbit_market_cached(exchange: ccxt.upbit, symbol: str) -> None:
-    """업비트 심볼용 최소 market metadata 를 로컬에 채워 market/all 호출을 줄인다."""
-    if not symbol or "/" not in symbol:
-        return
-
-    markets = exchange.markets if isinstance(exchange.markets, dict) else {}
-    if symbol in markets:
-        return
-
-    base, quote = symbol.split("/", 1)
-    market_id = f"{quote}-{base}"
-    market = {
-        "id": market_id,
-        "symbol": symbol,
-        "base": base,
-        "quote": quote,
-        "baseId": base,
-        "quoteId": quote,
-        "active": True,
-        "type": "spot",
-        "spot": True,
-        "margin": False,
-        "swap": False,
-        "future": False,
-        "option": False,
-        "precision": {
-            "amount": 0.00000001,
-            "price": 0.00000001,
-        },
-        "limits": {
-            "amount": {"min": 0.00000001, "max": None},
-            "price": {"min": None, "max": None},
-            "cost": {"min": None, "max": None},
-        },
-        "info": {"market": market_id},
-    }
-
-    markets[symbol] = market
-    exchange.markets = markets
-
-    markets_by_id = exchange.markets_by_id if isinstance(exchange.markets_by_id, dict) else {}
-    markets_by_id.setdefault(market_id, []).append(market)
-    exchange.markets_by_id = markets_by_id
-
-    symbols = list(exchange.symbols) if isinstance(exchange.symbols, list) else []
-    if symbol not in symbols:
-        symbols.append(symbol)
-        symbols.sort()
-    exchange.symbols = symbols
-
-
-def _get_runtime_cache(exchange: ccxt.upbit) -> dict:
-    """클라이언트별 업비트 런타임 캐시 저장소를 반환한다."""
-    return exchange.options.setdefault("upbit_runtime_cache", {})
-
-
-def invalidate_upbit_balance_cache(exchange: ccxt.upbit) -> None:
-    """업비트 잔고 캐시를 비운다."""
-    _get_runtime_cache(exchange).pop("balance", None)
-
-
-def invalidate_upbit_orderbook_cache(
-    exchange: ccxt.upbit,
-    symbol: str | None = None,
-) -> None:
-    """업비트 호가 캐시를 비운다."""
-    cache = _get_runtime_cache(exchange).get("orderbook", {})
-    if symbol is None:
-        cache.clear()
-        return
-    cache.pop(symbol, None)
-
-
-def should_refresh_best_bid_upbit(
-    *,
-    base_free: float,
-    last_close: float,
-    min_order_value: float,
-    refresh_buffer_pct: float,
-) -> bool:
-    """최소 주문 금액 경계 근처일 때만 최신 호가를 다시 조회할지 판단한다."""
-    if base_free <= 0 or last_close <= 0 or min_order_value <= 0:
-        return False
-    approx_position_value = base_free * last_close
-    refresh_threshold = min_order_value * (1 + max(refresh_buffer_pct, 0.0))
-    return approx_position_value <= refresh_threshold
-
-
-def is_upbit_retryable_error(exc: Exception) -> bool:
-    lowered = str(exc).lower()
-    return (
-        isinstance(
-            exc,
-            (
-                ccxt.RateLimitExceeded,
-                ccxt.RequestTimeout,
-                ccxt.NetworkError,
-                ccxt.ExchangeNotAvailable,
-                ccxt.DDoSProtection,
-            ),
-        )
-        or "too_many_requests" in lowered
-        or "429" in lowered
-        or "timeout" in lowered
-        or "timed out" in lowered
-        or "temporarily unavailable" in lowered
-    )
-
-
-def call_upbit_with_retry(exchange: ccxt.upbit, func, *args, **kwargs):
-    retry_count = int(exchange.options.get("upbit_request_retry_count", 3) or 3)
-    retry_delay_sec = float(exchange.options.get("upbit_request_retry_delay_sec", 1.2) or 1.2)
-    last_error: Exception | None = None
-    for attempt in range(retry_count + 1):
-        try:
-            return func(*args, **kwargs)
-        except Exception as exc:
-            last_error = exc
-            if not is_upbit_retryable_error(exc) or attempt >= retry_count:
-                raise
-            time.sleep(retry_delay_sec * (attempt + 1))
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("업비트 재시도 호출이 비정상 종료되었습니다.")
-
-
-def apply_upbit_buy_order_buffer(
-    *,
-    requested_order_value_quote: float,
-    quote_free: float,
-    fee_rate_pct: float,
-    buffer_pct: float,
-    buffer_krw: float,
-) -> float:
-    if requested_order_value_quote <= 0 or quote_free <= 0:
-        return 0.0
-    fee_multiplier = 1 + max(fee_rate_pct, 0.0) / 100.0
-    max_order_value_by_balance = quote_free / fee_multiplier
-    buffer_value = max(buffer_krw, quote_free * max(buffer_pct, 0.0))
-    safe_order_value = min(requested_order_value_quote, max_order_value_by_balance - buffer_value)
-    return max(0.0, float(f"{safe_order_value:.8f}"))
-
-
-def create_market_buy_order_upbit(
-    exchange: ccxt.upbit,
-    symbol: str,
-    cost_to_spend: float,
-):
-    ensure_upbit_market_cached(exchange, symbol)
-    return call_upbit_with_retry(
-        exchange,
-        exchange.create_market_buy_order,
-        symbol,
-        cost_to_spend,
-        params={"createMarketBuyOrderRequiresPrice": False},
-    )
-
-
-def create_market_sell_order_upbit(
-    exchange: ccxt.upbit,
-    symbol: str,
-    amount: float,
-):
-    """업비트 시장가 매도를 공통 재시도 경로로 감싼다."""
-    ensure_upbit_market_cached(exchange, symbol)
-    return call_upbit_with_retry(
-        exchange,
-        exchange.create_market_sell_order,
-        symbol,
-        amount,
-    )
-
-
-def fetch_ohlcv_upbit(
-    exchange: ccxt.upbit, symbol: str, timeframe: str = "1m", limit: int = 200
-):
-    ensure_upbit_market_cached(exchange, symbol)
-    return call_upbit_with_retry(
-        exchange,
-        exchange.fetch_ohlcv,
-        symbol,
-        timeframe=timeframe,
-        limit=limit,
-    )
-
-
-def fetch_ohlcv_upbit_with_provider(
-    exchange: ccxt.upbit,
-    *,
-    symbol: str,
-    timeframe: str,
-    limit: int,
-    market_data_provider: UpbitMarketDataProvider | None = None,
-) -> list[list[float]]:
-    """업비트 OHLCV 를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
-    if market_data_provider is not None:
-        rows = market_data_provider.get_recent_ohlcv(symbol, timeframe, limit)
-        if rows:
-            return rows
-    return fetch_ohlcv_upbit(exchange, symbol, timeframe=timeframe, limit=limit)
-
-
-def get_spot_balances_upbit(exchange: ccxt.upbit, base: str, quote: str) -> Tuple[float, float]:
-    cache = _get_runtime_cache(exchange)
-    ttl_sec = float(exchange.options.get("upbit_balance_cache_ttl_sec", 0.0) or 0.0)
-    now_ts = time.time()
-    cached_balance = cache.get("balance")
-    balance = None
-    if (
-        ttl_sec > 0
-        and isinstance(cached_balance, dict)
-        and (now_ts - float(cached_balance.get("ts", 0.0))) <= ttl_sec
-    ):
-        balance = cached_balance.get("payload")
-    if balance is None:
-        balance = call_upbit_with_retry(exchange, exchange.fetch_balance)
-        cache["balance"] = {"ts": now_ts, "payload": balance}
-    base_free = balance.get(base, {}).get("free", 0.0)
-    quote_free = balance.get(quote, {}).get("free", 0.0)
-    return float(base_free), float(quote_free)
-
-
-def get_spot_balances_upbit_with_provider(
-    exchange: ccxt.upbit,
-    *,
-    base: str,
-    quote: str,
-    market_data_provider: UpbitMarketDataProvider | None = None,
-) -> Tuple[float, float]:
-    """업비트 잔고를 provider 우선으로 읽고 필요 시 REST fallback 한다."""
-    if market_data_provider is not None:
-        balances = market_data_provider.get_private_balances(base, quote)
-        if balances is not None:
-            return balances
-    return get_spot_balances_upbit(exchange, base, quote)
-
-
-def enrich_upbit_order_with_private_event(
-    raw_order: Any,
-    *,
-    symbol: str,
-    market_data_provider: UpbitMarketDataProvider | None = None,
-    max_age_sec: float = 10.0,
-) -> Any:
-    """주문 응답에 최근 myOrder private 이벤트를 보강해 반환한다."""
-    if market_data_provider is None or not isinstance(raw_order, dict):
-        return raw_order
-    order_id = str(raw_order.get("id", "") or raw_order.get("orderId", "") or "")
-    if not order_id:
-        info = raw_order.get("info")
-        if isinstance(info, dict):
-            order_id = str(info.get("uuid", "") or "")
-    if not order_id:
-        return raw_order
-    event = market_data_provider.find_recent_myorder_event(
-        order_id=order_id,
-        market=market_data_provider.get_market_code(symbol),
-        max_age_sec=max_age_sec,
-    )
-    if event is None:
-        return raw_order
-    enriched = dict(raw_order)
-    enriched["private_ws_event"] = event
-    return enriched
-
-
-def safe_amount_to_precision_upbit(exchange: ccxt.upbit, symbol: str, amount: float) -> float:
-    try:
-        ensure_upbit_market_cached(exchange, symbol)
-        return float(exchange.amount_to_precision(symbol, amount))
-    except Exception:
-        return float(f"{amount:.8f}")
-
-
-def fetch_best_bid_upbit(exchange: ccxt.upbit, symbol: str) -> float | None:
-    ensure_upbit_market_cached(exchange, symbol)
-    cache = _get_runtime_cache(exchange).setdefault("orderbook", {})
-    ttl_sec = float(exchange.options.get("upbit_orderbook_cache_ttl_sec", 0.0) or 0.0)
-    now_ts = time.time()
-    cached_orderbook = cache.get(symbol)
-    order_book = None
-    if (
-        ttl_sec > 0
-        and isinstance(cached_orderbook, dict)
-        and (now_ts - float(cached_orderbook.get("ts", 0.0))) <= ttl_sec
-    ):
-        order_book = cached_orderbook.get("payload")
-    try:
-        if order_book is None:
-            order_book = call_upbit_with_retry(
-                exchange,
-                exchange.fetch_order_book,
-                symbol,
-                limit=1,
-            )
-            cache[symbol] = {"ts": now_ts, "payload": order_book}
-    except Exception:
-        return None
-    bids = order_book.get("bids") or []
-    if not bids:
-        return None
-    try:
-        return float(bids[0][0])
-    except (TypeError, ValueError, IndexError):
-        return None

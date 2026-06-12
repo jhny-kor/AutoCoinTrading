@@ -2,7 +2,7 @@
 수정 요약
 - OKX 공개 캔들/호가 수집도 공통 재시도 helper 를 사용해 일시적 NetworkError 로 errors.jsonl 이 늘어나는 빈도를 줄였다.
 - 업비트 공개 조회 전에 심볼별 최소 market metadata 를 채워 `market/all` 호출 없이 REST fallback 이 동작하도록 보강
-- 업비트 공개 OHLCV/호가 조회도 RequestTimeout 재시도와 20초 타임아웃을 사용하도록 보강
+- 업비트 공개 OHLCV/호가 조회도 공식 Rate Limit 그룹별 재시도와 20초 타임아웃을 사용하도록 보강
 - 2026-04-12: htf slope, volume percentile/z-score, ATR percentile, 호가 압력 점수를 함께 저장해 이후 지표 분석 정확도를 높이도록 확장
 - 단일 `.env` 대신 중앙 환경 로더를 통해 `.env.settings`, `.env.secrets`, `.env.local` 까지 읽을 수 있게 정리
 - 업비트 분석 수집기에서도 웹소켓 latest/best bid/1분봉 스냅샷을 우선 사용하고 stale 시 REST fallback 하도록 바꿔 phase 4 전환을 시작했다.
@@ -260,6 +260,7 @@ def fetch_upbit_ohlcv(
         exchange,
         exchange.fetch_ohlcv,
         symbol,
+        rate_limit_group="candle",
         timeframe=timeframe,
         limit=limit,
     )
@@ -317,7 +318,13 @@ def fetch_upbit_order_book(exchange: ccxt.upbit, symbol: str) -> dict[str, float
     """업비트 공개 호가창에서 상위 호가 정보를 가져온다."""
     try:
         ensure_upbit_market_cached(exchange, symbol)
-        order_book = call_upbit_with_retry(exchange, exchange.fetch_order_book, symbol, limit=5)
+        order_book = call_upbit_with_retry(
+            exchange,
+            exchange.fetch_order_book,
+            symbol,
+            rate_limit_group="orderbook",
+            limit=5,
+        )
         bids = order_book.get("bids", [])
         asks = order_book.get("asks", [])
         normalized_bids = [[bid["price"], bid["amount"]] for bid in bids[:5]]
