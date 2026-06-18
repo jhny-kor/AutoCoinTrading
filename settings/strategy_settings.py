@@ -254,13 +254,14 @@ class StrategySettings:
     entry_confirmation_loops: int
     enable_correlation_filter: bool
     correlation_lookback: int
+    btc_reference_cache_ttl_sec: float
     max_correlation_with_btc: float
     enable_fill_quality_guard: bool
     fill_quality_lookback_sec: int
     fill_quality_min_fill_ratio: float
     fill_quality_min_sample_count: int
     min_buy_order_value: float
-    loop_interval_sec: int
+    loop_interval_sec: float
     min_crossover_gap_pct_map: dict[str, float]
     max_entry_gap_pct_map: dict[str, float]
     min_take_profit_pct_map: dict[str, float]
@@ -954,6 +955,7 @@ def load_strategy_settings(
         entry_confirmation_loops=config_int("strategy", "entry_confirmation_loops", 2, env_key="STRATEGY_ENTRY_CONFIRMATION_LOOPS"),
         enable_correlation_filter=config_bool("strategy", "enable_correlation_filter", True, env_key="STRATEGY_ENABLE_CORRELATION_FILTER"),
         correlation_lookback=config_int("strategy", "correlation_lookback", 20, env_key="STRATEGY_CORRELATION_LOOKBACK"),
+        btc_reference_cache_ttl_sec=config_float("strategy", "btc_reference_cache_ttl_sec", 15.0, env_key="STRATEGY_BTC_REFERENCE_CACHE_TTL_SEC"),
         max_correlation_with_btc=config_float("strategy", "max_correlation_with_btc", 0.70, env_key="STRATEGY_MAX_CORRELATION_WITH_BTC"),
         enable_fill_quality_guard=config_bool("strategy", "enable_fill_quality_guard", True, env_key="STRATEGY_ENABLE_FILL_QUALITY_GUARD"),
         fill_quality_lookback_sec=config_int("strategy", "fill_quality_lookback_sec", 3600, env_key="STRATEGY_FILL_QUALITY_LOOKBACK_SEC"),
@@ -967,7 +969,7 @@ def load_strategy_settings(
                 env_key=min_buy_order_env_key,
             )
         ),
-        loop_interval_sec=config_int("strategy", "loop_interval_sec", 10, env_key="STRATEGY_LOOP_INTERVAL_SEC"),
+        loop_interval_sec=config_float("strategy", "loop_interval_sec", 10.0, env_key="STRATEGY_LOOP_INTERVAL_SEC"),
         min_crossover_gap_pct_map=parse_symbol_float_map(config_value("strategy", "min_crossover_gap_pct_map", {}, env_key="STRATEGY_MIN_CROSSOVER_GAP_PCT_MAP")),
         max_entry_gap_pct_map=parse_symbol_float_map(config_value("strategy", "max_entry_gap_pct_map", {}, env_key="STRATEGY_MAX_ENTRY_GAP_PCT_MAP")),
         min_take_profit_pct_map=parse_symbol_float_map(config_value("strategy", "min_take_profit_pct_map", {}, env_key="STRATEGY_MIN_TAKE_PROFIT_PCT_MAP")),

@@ -391,6 +391,8 @@ def run_bot():
 
     # 상위 타임프레임 캔들 캐시((심볼, 타임프레임) -> (조회시각, 캔들)). 5m 추세 필터는 느리게 변하므로 TTL 동안 재사용한다.
     htf_ohlcv_cache: dict[tuple[str, str], tuple[float, list]] = {}
+    # BTC 레퍼런스 캔들 캐시. 상관/ATR/레짐 기준은 느리게 변하므로 TTL 동안 재사용한다.
+    btc_ref_ohlcv_cache: dict[str, tuple[float, list]] = {}
 
     while True:
         today = datetime.now().date()
@@ -417,12 +419,21 @@ def run_bot():
             or strategy.enable_btc_atr_position_scaling
         ):
             try:
-                btc_ohlcv = fetch_ohlcv(
-                    exchange,
+                btc_ref_limit = max(min_ohlcv_limit, strategy.correlation_lookback + ma_period + 5)
+                btc_ohlcv = get_fresh_cached(
+                    btc_ref_ohlcv_cache,
                     DEFAULT_OKX_BTC_SYMBOL,
-                    timeframe=timeframe,
-                    limit=max(min_ohlcv_limit, strategy.correlation_lookback + ma_period + 5),
+                    time.time(),
+                    strategy.btc_reference_cache_ttl_sec,
                 )
+                if btc_ohlcv is None:
+                    btc_ohlcv = fetch_ohlcv(
+                        exchange,
+                        DEFAULT_OKX_BTC_SYMBOL,
+                        timeframe=timeframe,
+                        limit=btc_ref_limit,
+                    )
+                    store_cached(btc_ref_ohlcv_cache, DEFAULT_OKX_BTC_SYMBOL, time.time(), btc_ohlcv)
                 btc_reference_closes = [row[4] for row in btc_ohlcv]
                 if len(btc_reference_closes) >= ma_period:
                     btc_reference_ma = calc_sma(btc_reference_closes, ma_period)
