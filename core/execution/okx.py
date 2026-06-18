@@ -207,6 +207,27 @@ def get_spot_balances_okx(exchange: ccxt.okx, base: str, quote: str) -> Tuple[fl
     return float(base_free), float(quote_free)
 
 
+def get_all_spot_balances_okx(exchange: ccxt.okx) -> dict[str, float]:
+    """계좌 전체 현물 가용 잔고를 한 번의 호출로 {통화: 가용수량} 맵으로 반환한다.
+
+    심볼마다 잔고를 재조회하는 대신 루프당 1회 호출해 재사용하기 위한 helper.
+    """
+    res = call_okx_with_retry(exchange, exchange.privateGetAccountBalance, {})
+    data = res.get("data", []) if isinstance(res, dict) else res
+    balances: dict[str, float] = {}
+    if not data:
+        return balances
+    for detail in data[0].get("details", []):
+        ccy = detail.get("ccy")
+        if not ccy:
+            continue
+        try:
+            balances[ccy] = float(detail.get("availBal", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            balances[ccy] = 0.0
+    return balances
+
+
 def safe_amount_to_precision_okx(exchange: ccxt.okx, symbol: str, amount: float) -> float:
     try:
         return float(exchange.amount_to_precision(symbol, amount))

@@ -99,10 +99,12 @@ from core.execution.okx import (
     create_okx_client as create_okx_client_core,
     fetch_funding_rate_okx as fetch_funding_rate_okx_core,
     fetch_ohlcv_okx as fetch_ohlcv_okx_core,
+    get_all_spot_balances_okx as get_all_spot_balances_okx_core,
     get_spot_balances_okx as get_spot_balances_okx_core,
     load_okx_config as load_okx_config_core,
     safe_amount_to_precision_okx as safe_amount_to_precision_okx_core,
 )
+from core.runtime.fetch_cache import get_fresh_cached, store_cached
 from core.execution.order_adapters import (
     submit_okx_market_buy,
     submit_okx_market_sell,
@@ -270,6 +272,10 @@ def get_spot_balances(exchange: ccxt.okx, base: str, quote: str) -> Tuple[float,
     return get_spot_balances_okx_core(exchange, base, quote)
 
 
+def get_all_spot_balances(exchange: ccxt.okx) -> dict[str, float]:
+    return get_all_spot_balances_okx_core(exchange)
+
+
 def safe_amount_to_precision(exchange: ccxt.okx, symbol: str, amount: float) -> float:
     return safe_amount_to_precision_okx_core(exchange, symbol, amount)
 
@@ -383,6 +389,9 @@ def run_bot():
         },
     )
 
+    # 상위 타임프레임 캔들 캐시((심볼, 타임프레임) -> (조회시각, 캔들)). 5m 추세 필터는 느리게 변하므로 TTL 동안 재사용한다.
+    htf_ohlcv_cache: dict[tuple[str, str], tuple[float, list]] = {}
+
     while True:
         today = datetime.now().date()
         if today != daily_pnl_date:
@@ -437,6 +446,16 @@ def run_bot():
             )
         )
         btc_reference_regime = btc_reference_regime_snapshot.regime
+
+        # 계좌 잔고는 심볼마다 재조회하지 않고 루프당 1회만 조회해 재사용한다.
+        # 루프 도중 체결이 발생하면 그 즉시 다시 조회해 다음 심볼이 최신 잔고를 보게 한다.
+        try:
+            account_balances = get_all_spot_balances(exchange)
+            account_balances_loaded = True
+        except Exception as balance_error:
+            log(f"계좌 잔고 일괄 조회 실패, 심볼별 조회로 대체합니다: {repr(balance_error)}")
+            account_balances = {}
+            account_balances_loaded = False
 
         for m in markets:
             symbol = m["symbol"]
@@ -571,12 +590,21 @@ def run_bot():
                     log(
                         f"[{symbol}] 상위 타임프레임({strategy.higher_timeframe}) 추세 확인 중..."
                     )
-                    htf_ohlcv = fetch_ohlcv(
-                        exchange,
-                        symbol,
-                        timeframe=strategy.higher_timeframe,
-                        limit=strategy.higher_timeframe_ma_period + 5,
+                    htf_cache_key = (symbol, strategy.higher_timeframe)
+                    htf_ohlcv = get_fresh_cached(
+                        htf_ohlcv_cache,
+                        htf_cache_key,
+                        time.time(),
+                        strategy.higher_timeframe_cache_ttl_sec,
                     )
+                    if htf_ohlcv is None:
+                        htf_ohlcv = fetch_ohlcv(
+                            exchange,
+                            symbol,
+                            timeframe=strategy.higher_timeframe,
+                            limit=strategy.higher_timeframe_ma_period + 5,
+                        )
+                        store_cached(htf_ohlcv_cache, htf_cache_key, time.time(), htf_ohlcv)
                     htf_closes = [c[4] for c in htf_ohlcv]
                     htf_last_close = htf_closes[-1]
                     htf_last_ma = calc_sma(
@@ -601,8 +629,12 @@ def run_bot():
                         f"상승추세={htf_bullish}, 하락추세={htf_bearish}"
                     )
 
-                log("잔고 조회 중...")
-                base_free, quote_free = get_spot_balances(exchange, base, quote)
+                if account_balances_loaded:
+                    base_free = account_balances.get(base, 0.0)
+                    quote_free = account_balances.get(quote, 0.0)
+                else:
+                    log("잔고 조회 중...")
+                    base_free, quote_free = get_spot_balances(exchange, base, quote)
                 log(f"현물 잔고 - {base}: {base_free}, {quote}: {quote_free}")
 
                 min_order_amount = strategy.get_min_order_amount(symbol)
@@ -2188,6 +2220,12 @@ def run_bot():
                         order = order_submission.order
                         order_request_started_at = order_submission.request_started_at
                         order_response_received_at = order_submission.response_received_at
+                        # 체결로 잔고가 바뀌었으니 다음 심볼이 최신 잔고를 보도록 즉시 갱신한다.
+                        if account_balances_loaded:
+                            try:
+                                account_balances = get_all_spot_balances(exchange)
+                            except Exception:
+                                account_balances_loaded = False
                         estimated_bought_amount = order_value / last_close
                         buy_fill_state = apply_alt_buy_fill_state(
                             symbol=symbol,
@@ -2387,6 +2425,12 @@ def run_bot():
                         order = order_submission.order
                         order_request_started_at = order_submission.request_started_at
                         order_response_received_at = order_submission.response_received_at
+                        # 체결로 잔고가 바뀌었으니 다음 심볼이 최신 잔고를 보도록 즉시 갱신한다.
+                        if account_balances_loaded:
+                            try:
+                                account_balances = get_all_spot_balances(exchange)
+                            except Exception:
+                                account_balances_loaded = False
                         sell_fill_state = apply_alt_sell_fill_state(
                             symbol=symbol,
                             sold_amount=amount,
