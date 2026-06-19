@@ -317,8 +317,6 @@ def run_bot():
             "okx_ws_stale_sec": float(os.getenv("OKX_WS_STALE_SEC", "8.0")),
         }
     )
-    if okx_ws_provider is not None:
-        logger.log("OKX 웹소켓 캔들 provider 활성화 (REST fallback 유지)")
 
     # 심볼별 평균 진입가 저장 (손익 계산용)
     entry_price = {}
@@ -386,6 +384,8 @@ def run_bot():
     )
 
     log = logger.log
+    if okx_ws_provider is not None:
+        log("OKX 웹소켓 캔들 provider 활성화 (REST fallback 유지)")
 
     log("=== OKX 단순 이동평균 돌파 봇 시작 ===")
     log(f"타임프레임: {timeframe}, MA 기간: {ma_period}")
