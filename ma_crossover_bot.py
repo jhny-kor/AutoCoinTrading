@@ -105,6 +105,10 @@ from core.execution.okx import (
     safe_amount_to_precision_okx as safe_amount_to_precision_okx_core,
 )
 from core.runtime.fetch_cache import get_fresh_cached, store_cached
+from core.market_data.okx_provider import (
+    OkxMarketDataProvider,
+    create_okx_market_data_provider,
+)
 from core.execution.order_adapters import (
     submit_okx_market_buy,
     submit_okx_market_sell,
@@ -263,8 +267,18 @@ def call_okx_with_retry(exchange: ccxt.okx, func, *args, **kwargs):
 
 
 def fetch_ohlcv(
-    exchange: ccxt.okx, symbol: str, timeframe: str = "1m", limit: int = 200
+    exchange: ccxt.okx,
+    symbol: str,
+    timeframe: str = "1m",
+    limit: int = 200,
+    *,
+    provider: "OkxMarketDataProvider | None" = None,
 ):
+    # 웹소켓 수집기 스냅샷이 fresh 하면 REST 대신 사용하고, 아니면 REST 로 fallback 한다.
+    if provider is not None:
+        rows = provider.get_recent_ohlcv(symbol, timeframe, limit)
+        if rows:
+            return rows
     return fetch_ohlcv_okx_core(exchange, symbol, timeframe=timeframe, limit=limit)
 
 
@@ -294,6 +308,17 @@ def run_bot():
     strategy = load_strategy_settings("OKX_MIN_BUY_ORDER_VALUE", 1.0)
     entry_committee_settings = load_entry_committee_settings()
     exchange = create_okx_client(config)
+
+    # OKX 웹소켓 캔들 provider (수집기 스냅샷 우선, stale/끊김 시 REST fallback). 기본 활성, env 로 끌 수 있다.
+    okx_ws_provider = create_okx_market_data_provider(
+        {
+            "enable_okx_ws_provider": os.getenv("OKX_WS_PROVIDER_ENABLE", "true").strip().lower()
+            in {"1", "true", "yes", "y", "on"},
+            "okx_ws_stale_sec": float(os.getenv("OKX_WS_STALE_SEC", "8.0")),
+        }
+    )
+    if okx_ws_provider is not None:
+        logger.log("OKX 웹소켓 캔들 provider 활성화 (REST fallback 유지)")
 
     # 심볼별 평균 진입가 저장 (손익 계산용)
     entry_price = {}
@@ -432,6 +457,7 @@ def run_bot():
                         DEFAULT_OKX_BTC_SYMBOL,
                         timeframe=timeframe,
                         limit=btc_ref_limit,
+                        provider=okx_ws_provider,
                     )
                     store_cached(btc_ref_ohlcv_cache, DEFAULT_OKX_BTC_SYMBOL, time.time(), btc_ohlcv)
                 btc_reference_closes = [row[4] for row in btc_ohlcv]
@@ -478,7 +504,8 @@ def run_bot():
             try:
                 log("캔들 데이터 조회 시도 중...")
                 ohlcv = fetch_ohlcv(
-                    exchange, symbol, timeframe=timeframe, limit=min_ohlcv_limit
+                    exchange, symbol, timeframe=timeframe, limit=min_ohlcv_limit,
+                    provider=okx_ws_provider,
                 )
                 closes = [c[4] for c in ohlcv]  # 종가 리스트
                 ma_series = [
@@ -614,6 +641,7 @@ def run_bot():
                             symbol,
                             timeframe=strategy.higher_timeframe,
                             limit=strategy.higher_timeframe_ma_period + 5,
+                            provider=okx_ws_provider,
                         )
                         store_cached(htf_ohlcv_cache, htf_cache_key, time.time(), htf_ohlcv)
                     htf_closes = [c[4] for c in htf_ohlcv]

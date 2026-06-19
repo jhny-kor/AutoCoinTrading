@@ -77,6 +77,13 @@ PROGRAM_SPECS: tuple[ProgramSpec, ...] = (
         log_name="upbit_market_data_stream.log",
     ),
     ProgramSpec(
+        name="okx_stream",
+        script="run/okx_market_data_stream.py",
+        title="OKX 웹소켓 수집기",
+        report_label="OKX 웹소켓 수집기",
+        log_name="okx_market_data_stream.log",
+    ),
+    ProgramSpec(
         name="telegram",
         script="run/telegram_command_listener.py",
         title="텔레그램 명령 리스너",
@@ -99,6 +106,7 @@ PROGRAM_CHOICES: tuple[str, ...] = tuple(spec.name for spec in PROGRAM_SPECS)
 START_ALL_ORDER: tuple[str, ...] = (
     "collector",
     "upbit_stream",
+    "okx_stream",
     "telegram",
     "okx",
     "upbit",
