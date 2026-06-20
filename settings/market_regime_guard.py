@@ -263,7 +263,9 @@ def get_alt_regime_policy(regime: str | None) -> RegimePolicy:
             allow_pyramiding=False,
         ),
         "CHOPPY_LOW_VOL": RegimePolicy(
-            pause_new_entry=False,
+            # 2026-06-20: 저ADX(<20) 저변동 횡보에서는 강신호 알트 진입도 순손실(7d 백테스트
+            # delta +7.18%p, 승률 38.7→40.6%) -> 신규 진입을 보류한다. ([[stoploss-prevention-research]])
+            pause_new_entry=True,
             require_strong_signal=True,
             require_fresh_cross=False,
             allow_dynamic_overweight=False,
