@@ -167,6 +167,7 @@ from core.strategy.combined_filters import (
     requires_overheat_confirmation,
     safe_optional_float,
 )
+from core.strategy.macro_trend import compute_macro_trend_gate
 from core.strategy.funnels import (
     build_alt_entry_guard_steps,
     build_alt_entry_steps,
@@ -624,6 +625,8 @@ def run_bot():
                 htf_bullish = True
                 htf_bearish = True
                 htf_ma_slope_pct = None
+                macro_trend_passed = True
+                macro_trend_ema = None
                 if strategy.enable_higher_timeframe_filter:
                     log(
                         f"[{symbol}] 상위 타임프레임({strategy.higher_timeframe}) 추세 확인 중..."
@@ -635,17 +638,26 @@ def run_bot():
                         time.time(),
                         strategy.higher_timeframe_cache_ttl_sec,
                     )
-                    if htf_ohlcv is None:
+                    htf_fetch_limit = max(
+                        strategy.higher_timeframe_ma_period,
+                        strategy.macro_trend_ema_period if strategy.enable_macro_trend_filter else 0,
+                    ) + 5
+                    if htf_ohlcv is None or len(htf_ohlcv) < htf_fetch_limit:
                         htf_ohlcv = fetch_ohlcv(
                             exchange,
                             symbol,
                             timeframe=strategy.higher_timeframe,
-                            limit=strategy.higher_timeframe_ma_period + 5,
+                            limit=htf_fetch_limit,
                             provider=okx_ws_provider,
                         )
                         store_cached(htf_ohlcv_cache, htf_cache_key, time.time(), htf_ohlcv)
                     htf_closes = [c[4] for c in htf_ohlcv]
                     htf_last_close = htf_closes[-1]
+                    macro_trend_passed, macro_trend_ema = compute_macro_trend_gate(
+                        htf_closes,
+                        period=strategy.macro_trend_ema_period,
+                        enabled=strategy.enable_macro_trend_filter,
+                    )
                     htf_last_ma = calc_sma(
                         htf_closes, strategy.higher_timeframe_ma_period
                     )
@@ -667,6 +679,11 @@ def run_bot():
                         f"상위 MA: {htf_last_ma:.4f}, "
                         f"상승추세={htf_bullish}, 하락추세={htf_bearish}"
                     )
+                    if strategy.enable_macro_trend_filter and macro_trend_ema is not None:
+                        log(
+                            f"[{symbol}] 매크로 추세(EMA{strategy.macro_trend_ema_period}): "
+                            f"{macro_trend_ema:.4f}, 위={macro_trend_passed}"
+                        )
 
                 if account_balances_loaded:
                     base_free = account_balances.get(base, 0.0)
@@ -1277,6 +1294,7 @@ def run_bot():
                         and not btc_correlation_volatility_blocked
                         and not volume_atr_execution_blocked
                         and not low_energy_top_chase_entry_blocked
+                        and macro_trend_passed
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
                         and (
@@ -1300,6 +1318,7 @@ def run_bot():
                         and not btc_correlation_volatility_blocked
                         and not volume_atr_execution_blocked
                         and not low_energy_top_chase_entry_blocked
+                        and macro_trend_passed
                         and gap_within_upper_bound
                         and volume_cap_allows_entry
                         and (

@@ -106,6 +106,8 @@ class StrategySettings:
     higher_timeframe: str
     higher_timeframe_ma_period: int
     higher_timeframe_cache_ttl_sec: float
+    enable_macro_trend_filter: bool
+    macro_trend_ema_period: int
     enable_rsi_filter: bool
     rsi_period: int
     rsi_entry_min: float
@@ -775,6 +777,8 @@ def load_strategy_settings(
         higher_timeframe=config_str("strategy", "higher_timeframe", "5m", env_key="STRATEGY_HIGHER_TIMEFRAME"),
         higher_timeframe_ma_period=config_int("strategy", "higher_timeframe_ma_period", 20, env_key="STRATEGY_HIGHER_TIMEFRAME_MA_PERIOD"),
         higher_timeframe_cache_ttl_sec=config_float("strategy", "higher_timeframe_cache_ttl_sec", 20.0, env_key="STRATEGY_HIGHER_TIMEFRAME_CACHE_TTL_SEC"),
+        enable_macro_trend_filter=config_bool("strategy", "enable_macro_trend_filter", True, env_key="STRATEGY_ENABLE_MACRO_TREND_FILTER"),
+        macro_trend_ema_period=config_int("strategy", "macro_trend_ema_period", 40, env_key="STRATEGY_MACRO_TREND_EMA_PERIOD"),
         enable_rsi_filter=config_bool("strategy", "enable_rsi_filter", True, env_key="STRATEGY_ENABLE_RSI_FILTER"),
         rsi_period=config_int("strategy", "rsi_period", 14, env_key="STRATEGY_RSI_PERIOD"),
         rsi_entry_min=config_float("strategy", "rsi_entry_min", 40, env_key="STRATEGY_RSI_ENTRY_MIN"),
