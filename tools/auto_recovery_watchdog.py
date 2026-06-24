@@ -115,7 +115,7 @@ def classify_failure(name: str, item: dict[str, Any]) -> str:
     """헬스체크 항목을 자동복구 reason 코드로 분류한다."""
     if not item.get("alive"):
         return "process_down"
-    if name == "upbit_stream":
+    if name in ("upbit_stream", "okx_stream"):
         ws_health = item.get("ws_health") if isinstance(item.get("ws_health"), dict) else {}
         if not ws_health.get("connected"):
             return "websocket_disconnected"

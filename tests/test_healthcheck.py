@@ -130,6 +130,47 @@ class HealthcheckTests(unittest.TestCase):
             self.assertEqual("OK", report["programs"]["upbit_stream"]["status"])
             self.assertTrue(report["programs"]["upbit_stream"]["ws_health"]["connected"])
 
+    def test_okx_stream_uses_runtime_health_json(self):
+        # okx health.json 은 평면 구조(connected/event/last_message_received_at 가 최상위)라
+        # 정상 가동 중 .log 가 침묵해도 log_stale 로 오탐 재기동되면 안 된다.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            analysis_dir = root / "analysis_logs" / "2026-03-29"
+            structured_dir = root / "structured_logs" / "live" / "2026-03-29" / "x"
+            health_dir = root / "logs" / "runtime" / "okx_ws"
+            analysis_dir.mkdir(parents=True)
+            structured_dir.mkdir(parents=True)
+            health_dir.mkdir(parents=True)
+
+            (analysis_dir / "okx__ETH_USDT.jsonl").write_text("{}", encoding="utf-8")
+            (structured_dir / "strategy.jsonl").write_text("{}", encoding="utf-8")
+            (health_dir / "health.json").write_text(
+                json.dumps(
+                    {
+                        "connected": True,
+                        "event": "heartbeat",
+                        "last_message_received_at": time.time(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            programs = {"okx_stream": "run/okx_market_data_stream.py"}
+
+            def fake_path(path_str=""):
+                return root / path_str if path_str else root
+
+            with patch("tools.healthcheck.PROGRAMS", programs), \
+                 patch("tools.healthcheck.current_date_str", return_value="2026-03-29"), \
+                 patch("tools.healthcheck.read_pid_file", return_value=123), \
+                 patch("tools.healthcheck.is_pid_alive", return_value=True), \
+                 patch("tools.healthcheck.Path", side_effect=fake_path):
+                report = build_health_report(1800, mode="warning")
+
+            self.assertEqual("OK", report["programs"]["okx_stream"]["status"])
+            self.assertTrue(report["programs"]["okx_stream"]["ws_health"]["connected"])
+            self.assertEqual("heartbeat", report["programs"]["okx_stream"]["ws_health"]["public_event"])
+
     def test_health_report_uses_previous_day_files_when_today_files_are_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

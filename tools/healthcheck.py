@@ -26,7 +26,14 @@ from core.runtime.program_registry import PROGRAMS
 from log_path_utils import current_date_str
 
 
-WARNING_PROGRAMS = {"upbit_stream"}
+WARNING_PROGRAMS = {"upbit_stream", "okx_stream"}
+
+# 웹소켓 수집기는 정상 가동 중 .log 파일에 줄을 쓰지 않으므로(heartbeat 는 health.json 으로만 간다)
+# 프로그램 로그 mtime 대신 health.json heartbeat 로 판정한다. → 30분 log_stale 오탐 재기동 방지.
+STREAM_HEALTH_PATHS = {
+    "upbit_stream": "logs/runtime/upbit_ws/health.json",
+    "okx_stream": "logs/runtime/okx_ws/health.json",
+}
 
 
 def file_age_seconds(path: Path | None) -> float | None:
@@ -55,9 +62,13 @@ def read_json_file(path: Path) -> dict:
         return {}
 
 
-def build_upbit_stream_health(max_log_age_sec: int) -> dict:
-    """업비트 웹소켓 health heartbeat 기준 상태를 반환한다."""
-    health_path = Path("logs/runtime/upbit_ws/health.json")
+def build_stream_health(health_path_str: str, max_log_age_sec: int) -> dict:
+    """웹소켓 수집기 health heartbeat 기준 상태를 반환한다(upbit/okx 공용).
+
+    upbit health 는 public/private 중첩, okx health 는 평면 구조라 양쪽 모두에서
+    connected / last_message_received_at / event 를 읽도록 fallback 한다.
+    """
+    health_path = Path(health_path_str)
     payload = read_json_file(health_path)
     health_age = file_age_seconds(health_path)
     public_state = payload.get("public") if isinstance(payload.get("public"), dict) else {}
@@ -79,7 +90,7 @@ def build_upbit_stream_health(max_log_age_sec: int) -> dict:
         "health_age_sec": health_age,
         "last_message_age_sec": last_message_age,
         "connected": connected,
-        "public_event": public_state.get("event"),
+        "public_event": public_state.get("event") or payload.get("event"),
         "private_event": private_state.get("event"),
         "ok": health_age is not None and health_age <= max_log_age_sec and connected,
     }
@@ -109,9 +120,9 @@ def build_health_report(max_log_age_sec: int, mode: str = "warning") -> dict:
             log_ok = analysis_age is not None and analysis_age <= max_log_age_sec
         elif name == "telegram":
             log_ok = True
-        elif name == "upbit_stream":
-            upbit_ws_health = build_upbit_stream_health(max_log_age_sec)
-            log_ok = bool(upbit_ws_health["ok"])
+        elif name in STREAM_HEALTH_PATHS:
+            stream_ws_health = build_stream_health(STREAM_HEALTH_PATHS[name], max_log_age_sec)
+            log_ok = bool(stream_ws_health["ok"])
         else:
             log_ok = log_age is not None and log_age <= max_log_age_sec
         healthy = alive and log_ok
@@ -134,14 +145,14 @@ def build_health_report(max_log_age_sec: int, mode: str = "warning") -> dict:
             "status": status,
             "ok": healthy if severity == "strict" or mode == "strict" else status != "FAIL",
         }
-        if name == "upbit_stream":
+        if name in STREAM_HEALTH_PATHS:
             results[name]["ws_health"] = {
-                "path": str(upbit_ws_health["path"]),
-                "health_age_sec": upbit_ws_health["health_age_sec"],
-                "last_message_age_sec": upbit_ws_health["last_message_age_sec"],
-                "connected": upbit_ws_health["connected"],
-                "public_event": upbit_ws_health["public_event"],
-                "private_event": upbit_ws_health["private_event"],
+                "path": str(stream_ws_health["path"]),
+                "health_age_sec": stream_ws_health["health_age_sec"],
+                "last_message_age_sec": stream_ws_health["last_message_age_sec"],
+                "connected": stream_ws_health["connected"],
+                "public_event": stream_ws_health["public_event"],
+                "private_event": stream_ws_health["private_event"],
             }
 
     analysis_ok = (analysis_age or 10**9) <= max_log_age_sec
