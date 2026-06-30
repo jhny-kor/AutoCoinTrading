@@ -4,6 +4,8 @@
 .env.secrets
 .env.local
 config/runtime.local.toml
+config/runtime.toml
+config/sets/
 
 # 운영 로그 / 수집 로그 / 분석 산출물
 logs/
