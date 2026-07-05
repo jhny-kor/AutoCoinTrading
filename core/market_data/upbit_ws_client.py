@@ -168,9 +168,10 @@ class UpbitWebSocketClient:
         )
         app_holder["app"] = app
         self._set_active_app(app)
+        session_stop = threading.Event()
         watchdog_thread = threading.Thread(
             target=self._watchdog_loop,
-            args=(app_holder,),
+            args=(app_holder, session_stop),
             name=f"upbit-{self.client_label}-watchdog",
             daemon=True,
         )
@@ -182,6 +183,7 @@ class UpbitWebSocketClient:
                 sslopt={"cert_reqs": ssl.CERT_REQUIRED},
             )
         finally:
+            session_stop.set()  # 이 세션의 watchdog 만 확실히 종료(좀비 스레드 방지).
             self._clear_active_app(app)
             watchdog_thread.join(timeout=1.0)
 
@@ -192,9 +194,13 @@ class UpbitWebSocketClient:
         payload.update(extra)
         self.on_state(payload)
 
-    def _watchdog_loop(self, app_holder: dict[str, websocket.WebSocketApp]) -> None:
+    def _watchdog_loop(
+        self,
+        app_holder: dict[str, websocket.WebSocketApp],
+        session_stop: threading.Event,
+    ) -> None:
         """heartbeat 를 내보내고 무수신 상태가 길면 현재 세션을 닫아 재연결을 유도한다."""
-        while not self.stop_event.is_set():
+        while not session_stop.is_set() and not self.stop_event.is_set():
             time.sleep(1.0)
             now_ts = time.time()
             if self.heartbeat_interval_sec > 0 and (
@@ -236,12 +242,17 @@ class UpbitWebSocketClient:
 
     @staticmethod
     def _close_app(app: websocket.WebSocketApp) -> None:
+        # keep_running=False + 소켓 shutdown(SHUT_RDWR) 으로 ping_timeout(약 10초)만큼
+        # select 에 블록된 run_forever 를 즉시 EOF 로 깨운다. 실제 close 는 run_forever
+        # teardown 이 수행한다 — 여기서 fd 를 닫으면 select 재시도가 EOF 를 놓쳐 종료가 늦어진다.
         try:
             app.keep_running = False
         except Exception:
             pass
         try:
-            app.close()
+            sock = getattr(app, "sock", None)
+            if sock is not None:
+                sock.abort()
         except Exception:
             pass
 
