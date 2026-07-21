@@ -1,5 +1,6 @@
 """OKX 공개 캔들 웹소켓 클라이언트.
 
+- 수정 요약: OKX 애플리케이션 ping/pong을 직접 처리하고 RFC ping 충돌 및 종료 중복 오류를 막는다.
 - ccxt.pro 가 현재 환경의 aiohttp 버전과 비호환이라(`parse_frame`), 업비트와 동일하게
   `websocket-client` 기반의 경량 동기 클라이언트로 OKX v5 candle 채널을 구독한다.
 - OKX candle 채널은 business 엔드포인트(`/ws/v5/business`)에서 제공된다.
@@ -105,28 +106,8 @@ class OkxWebSocketClient:
             ws_app.send(subscribe_message)
             self._emit_state("connected")
 
-        def on_message(_: websocket.WebSocketApp, message: str | bytes) -> None:
-            self.last_message_received_at = time.time()
-            text = message.decode("utf-8") if isinstance(message, bytes) else message
-            if text == "pong":
-                return
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError:
-                return
-            if not isinstance(payload, dict):
-                return
-            event = payload.get("event")
-            if event in ("subscribe", "error", "unsubscribe"):
-                if event == "error":
-                    self._emit_state("error", error=str(payload))
-                return
-            arg = payload.get("arg") or {}
-            data = payload.get("data")
-            channel = str(arg.get("channel", "") or "")
-            inst_id = str(arg.get("instId", "") or "")
-            if channel and inst_id and isinstance(data, list) and data:
-                self.on_candle(inst_id, channel, data)
+        def on_message(ws_app: websocket.WebSocketApp, message: str | bytes) -> None:
+            self._handle_message(ws_app, message)
 
         def on_error(_: websocket.WebSocketApp, error: Any) -> None:
             self.connected = False
@@ -145,20 +126,21 @@ class OkxWebSocketClient:
         )
         app_holder["app"] = app
         self._set_active_app(app)
+        session_stop = threading.Event()
         watchdog_thread = threading.Thread(
             target=self._watchdog_loop,
-            args=(app_holder,),
+            args=(app_holder, session_stop),
             name="okx-candle-watchdog",
             daemon=True,
         )
         watchdog_thread.start()
         try:
             app.run_forever(
-                ping_interval=self.ping_interval_sec,
-                ping_timeout=max(5.0, self.ping_interval_sec / 2),
+                ping_interval=0,
                 sslopt={"cert_reqs": ssl.CERT_REQUIRED},
             )
         finally:
+            session_stop.set()  # 이 세션의 watchdog 만 확실히 종료(좀비 스레드 방지).
             self._clear_active_app(app)
             watchdog_thread.join(timeout=1.0)
 
@@ -169,9 +151,42 @@ class OkxWebSocketClient:
         payload.update(extra)
         self.on_state(payload)
 
-    def _watchdog_loop(self, app_holder: dict[str, websocket.WebSocketApp]) -> None:
+    def _handle_message(self, ws_app: websocket.WebSocketApp, message: str | bytes) -> None:
+        self.last_message_received_at = time.time()
+        text = message.decode("utf-8") if isinstance(message, bytes) else message
+        if text == "ping":
+            try:
+                ws_app.send("pong")
+            except Exception:
+                pass
+            return
+        if text == "pong":
+            return
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        event = payload.get("event")
+        if event in ("subscribe", "error", "unsubscribe"):
+            if event == "error":
+                self._emit_state("error", error=str(payload))
+            return
+        arg = payload.get("arg") or {}
+        data = payload.get("data")
+        channel = str(arg.get("channel", "") or "")
+        inst_id = str(arg.get("instId", "") or "")
+        if channel and inst_id and isinstance(data, list) and data:
+            self.on_candle(inst_id, channel, data)
+
+    def _watchdog_loop(
+        self,
+        app_holder: dict[str, websocket.WebSocketApp],
+        session_stop: threading.Event,
+    ) -> None:
         """heartbeat 발행 + OKX app-level ping 전송 + 장시간 무수신 시 재연결 유도."""
-        while not self.stop_event.is_set():
+        while not session_stop.is_set() and not self.stop_event.is_set():
             time.sleep(1.0)
             now_ts = time.time()
             if self.heartbeat_interval_sec > 0 and (
@@ -225,11 +240,16 @@ class OkxWebSocketClient:
 
     @staticmethod
     def _close_app(app: websocket.WebSocketApp) -> None:
+        # keep_running=False + 소켓 shutdown(SHUT_RDWR) 으로 ping_timeout(약 10초)만큼
+        # select 에 블록된 run_forever 를 즉시 EOF 로 깨운다. 실제 close 는 run_forever
+        # teardown 이 수행한다 — 여기서 fd 를 닫으면 select 재시도가 EOF 를 놓쳐 종료가 늦어진다.
         try:
             app.keep_running = False
         except Exception:
             pass
         try:
-            app.close()
+            sock = getattr(app, "sock", None)
+            if sock is not None:
+                sock.abort()
         except Exception:
             pass
