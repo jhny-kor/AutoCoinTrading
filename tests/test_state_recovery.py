@@ -1,4 +1,8 @@
-"""trade_history 기반 상태 복구와 당일 순손익 재계산에 대한 개발 테스트."""
+"""
+수정 요약
+- 명시적 최종 청산은 반올림 잔량을 제거하고 부분청산은 유지하는 회귀 테스트를 추가한다.
+- trade_history 기반 상태 복구와 당일 순손익 재계산을 검증한다.
+"""
 
 import unittest
 from datetime import date
@@ -11,6 +15,62 @@ from settings.state_recovery import (
 
 
 class StateRecoveryTests(unittest.TestCase):
+    def test_explicit_final_exit_clears_rounding_residual(self):
+        records = [
+            {
+                "program_name": "ma_crossover_bot",
+                "symbol": "ETH/USDT",
+                "side": "buy",
+                "amount": 1.0,
+                "order_value_quote": 2000.0,
+                "recorded_at_local": "2026-03-29T09:00:00+09:00",
+            },
+            {
+                "program_name": "ma_crossover_bot",
+                "symbol": "ETH/USDT",
+                "side": "sell",
+                "reason": "stop_loss",
+                "is_final_exit": True,
+                "amount": 0.99,
+                "order_value_quote": 1960.0,
+                "recorded_at_local": "2026-03-29T09:10:00+09:00",
+            },
+        ]
+        with patch("settings.state_recovery.read_trade_history", return_value=records):
+            recovered = restore_program_position_states("ma_crossover_bot", ["ETH/USDT"])
+        state = recovered["ETH/USDT"]
+        self.assertEqual(0.0, state.remaining_amount)
+        self.assertIsNone(state.average_entry_price)
+        self.assertEqual(0, state.cycle_buy_count)
+
+    def test_partial_exit_does_not_clear_on_zero_metadata_without_final_flag(self):
+        records = [
+            {
+                "program_name": "ma_crossover_bot",
+                "symbol": "ETH/USDT",
+                "side": "buy",
+                "amount": 2.0,
+                "order_value_quote": 200.0,
+                "recorded_at_local": "2026-03-29T09:00:00+09:00",
+            },
+            {
+                "program_name": "ma_crossover_bot",
+                "symbol": "ETH/USDT",
+                "side": "sell",
+                "reason": "partial_stop_loss",
+                "entry_count_after": 0,
+                "remaining_base_after_estimate": 0,
+                "amount": 1.0,
+                "order_value_quote": 90.0,
+                "recorded_at_local": "2026-03-29T09:10:00+09:00",
+            },
+        ]
+        with patch("settings.state_recovery.read_trade_history", return_value=records):
+            recovered = restore_program_position_states("ma_crossover_bot", ["ETH/USDT"])
+        state = recovered["ETH/USDT"]
+        self.assertAlmostEqual(1.0, state.remaining_amount)
+        self.assertTrue(state.partial_stop_loss_done)
+
     def test_restore_position_after_partial_take_profit(self):
         records = [
             {

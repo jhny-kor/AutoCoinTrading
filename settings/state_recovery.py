@@ -1,5 +1,6 @@
 """
 수정 요약
+- 2026-08-05: 명시적인 최종 매도 상태를 수량 추정 오차와 무관하게 완전 종료하도록 보강
 - 기준 시각 이전까지의 체결만 반영한 포지션 복구와 당일 실현 손익 복구를 지원해 position-aware 백테스트 비교에 사용할 수 있도록 확장
 - trade_history.jsonl 기반으로 프로그램별 포지션 상태를 복구하는 공통 모듈을 추가
 - 평균 진입가, 남은 수량, 분할 진입 카운트, 부분 익절/부분 손절 플래그, 최근 거래 시각을 함께 복구하도록 확장
@@ -33,6 +34,7 @@ STOP_EXIT_REASONS = {
     "stop_loss",
     "partial_stop_loss",
 }
+PARTIAL_EXIT_REASONS = {"partial_take_profit", "partial_stop_loss"}
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,45 @@ def _parse_iso_timestamp(raw: Any) -> float | None:
         return datetime.fromisoformat(str(raw)).timestamp()
     except ValueError:
         return None
+
+
+def _is_explicit_final_exit(record: dict[str, Any], reason: str) -> bool:
+    """매도 레코드의 명시적 최종 종료 표식을 안전하게 판정한다."""
+    raw_final = record.get("is_final_exit")
+    if isinstance(raw_final, bool):
+        if raw_final:
+            return True
+    elif str(raw_final).strip().lower() in {"1", "true", "yes", "y", "on"}:
+        return True
+
+    # 부분청산 사유는 명시적으로 final=true인 경우에만 종료로 승격한다.
+    if reason in PARTIAL_EXIT_REASONS:
+        return False
+    entry_count_after = _to_float(record.get("entry_count_after"))
+    remaining_after = _to_float(record.get("remaining_base_after_estimate"))
+    return (
+        entry_count_after is not None
+        and entry_count_after <= 0
+    ) or (
+        remaining_after is not None
+        and remaining_after <= POSITION_EPSILON
+    )
+
+
+def _clear_recovered_state(state: dict[str, Any]) -> None:
+    """복구 상태를 완전 종료 상태로 되돌린다."""
+    state["remaining_amount"] = 0.0
+    state["cost_basis_quote"] = 0.0
+    state["cycle_buy_count"] = 0
+    state["opened_at_ts"] = None
+    state["open_legs"] = []
+    state["highest_price_since_entry"] = None
+    state["lowest_price_since_entry"] = None
+    state["trailing_armed"] = False
+    state["trailing_armed_at_ts"] = None
+    state["trailing_activation_price"] = None
+    state["partial_take_profit_done"] = False
+    state["partial_stop_loss_done"] = False
 
 
 def restore_program_position_states(
@@ -219,9 +260,13 @@ def restore_program_position_states_as_of(
         if side != "sell" or amount <= 0:
             continue
 
+        explicit_final_exit = _is_explicit_final_exit(record, reason)
         remaining_before = float(state["remaining_amount"])
         cost_before = float(state["cost_basis_quote"])
         if remaining_before <= POSITION_EPSILON:
+            if explicit_final_exit:
+                state["last_trade_at_ts"] = max(state["last_trade_at_ts"], recorded_ts)
+                _clear_recovered_state(state)
             continue
 
         sold_amount = min(amount, remaining_before)
@@ -277,19 +322,8 @@ def restore_program_position_states_as_of(
                 recorded_ts,
             )
 
-        if state["remaining_amount"] <= POSITION_EPSILON:
-            state["remaining_amount"] = 0.0
-            state["cost_basis_quote"] = 0.0
-            state["cycle_buy_count"] = 0
-            state["opened_at_ts"] = None
-            state["open_legs"] = []
-            state["highest_price_since_entry"] = None
-            state["lowest_price_since_entry"] = None
-            state["trailing_armed"] = False
-            state["trailing_armed_at_ts"] = None
-            state["trailing_activation_price"] = None
-            state["partial_take_profit_done"] = False
-            state["partial_stop_loss_done"] = False
+        if explicit_final_exit or state["remaining_amount"] <= POSITION_EPSILON:
+            _clear_recovered_state(state)
 
     recovered: dict[str, RecoveredPositionState] = {}
     for symbol, payload in states.items():

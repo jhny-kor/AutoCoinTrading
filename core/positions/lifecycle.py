@@ -1,5 +1,6 @@
 """
 작업 요약
+- 2026-08-05: 신규 알트 진입 시 이전 포지션의 고저가 상태를 현재 체결가로 초기화
 - BTC 신규진입/추가매수 후 평균 진입가와 trailing 초기 상태 갱신을 공통 함수로 분리했다.
 - 알트 매도 체결 후 남은 수량/진입 카운트/손절 컨텍스트/부분청산 플래그 갱신을 공통 함수로 분리했다.
 - 알트 매수 체결 후 평균 진입가/진입 카운트/고저가 상태 갱신을 공통 함수로 분리했다.
@@ -114,14 +115,17 @@ def apply_alt_buy_fill_state(
     entry_count[symbol] = entry_count_after
     if not has_position:
         entry_opened_at[symbol] = now_ts
-    highest_price_since_entry[symbol] = max(
-        highest_price_since_entry.get(symbol, last_close),
-        last_close,
-    )
-    lowest_price_since_entry[symbol] = min(
-        lowest_price_since_entry.get(symbol, last_close),
-        last_close,
-    )
+        highest_price_since_entry[symbol] = last_close
+        lowest_price_since_entry[symbol] = last_close
+    else:
+        highest_price_since_entry[symbol] = max(
+            highest_price_since_entry.get(symbol, last_close),
+            last_close,
+        )
+        lowest_price_since_entry[symbol] = min(
+            lowest_price_since_entry.get(symbol, last_close),
+            last_close,
+        )
     return AltBuyFillState(
         bought_amount=bought_amount,
         entry_price_after=entry_price_after,

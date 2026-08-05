@@ -1,5 +1,6 @@
 """
 작업 요약
+- 신규 알트 진입이 이전 포지션의 고저가를 재사용하지 않는 회귀 테스트를 추가한다.
 - BTC 신규진입/추가매수 lifecycle 공통 helper 동작을 검증한다.
 - 알트 매수/매도 체결 후 포지션 lifecycle 공통 helper 동작을 검증한다.
 """
@@ -87,6 +88,32 @@ class PositionLifecycleTests(unittest.TestCase):
         self.assertEqual({"ETH/KRW": 1234.0}, entry_opened_at)
         self.assertEqual({"ETH/KRW": 100.0}, highest_price_since_entry)
         self.assertEqual({"ETH/KRW": 100.0}, lowest_price_since_entry)
+
+    def test_apply_alt_buy_fill_state_resets_stale_extrema_on_new_position(self):
+        entry_price = {}
+        entry_count = {}
+        entry_opened_at = {}
+        highest_price_since_entry = {"ETH/KRW": 140.0}
+        lowest_price_since_entry = {"ETH/KRW": 80.0}
+
+        apply_alt_buy_fill_state(
+            symbol="ETH/KRW",
+            bought_amount=2.0,
+            last_close=100.0,
+            has_position=False,
+            avg_entry_price=None,
+            base_free=0.0,
+            current_entry_count=0,
+            now_ts=1234.0,
+            entry_price=entry_price,
+            entry_count=entry_count,
+            entry_opened_at=entry_opened_at,
+            highest_price_since_entry=highest_price_since_entry,
+            lowest_price_since_entry=lowest_price_since_entry,
+        )
+
+        self.assertEqual(100.0, highest_price_since_entry["ETH/KRW"])
+        self.assertEqual(100.0, lowest_price_since_entry["ETH/KRW"])
 
     def test_apply_alt_buy_fill_state_averages_existing_position(self):
         entry_price = {"ETH/KRW": 90.0}
