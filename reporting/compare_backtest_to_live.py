@@ -1,5 +1,7 @@
 """
 수정 요약
+- 2026-08-06: 리플레이 충실도와 배포 근거 적격성의 부적격/미기록 상태를 비교 결과에 보존
+- 2026-08-05: 백테스트와 실거래 표본이 모두 0건이면 방향성 유사로 오판하지 않고 비교 불가로 기록
 - 배치 백테스트 러너가 재사용할 수 있도록 비교 payload 생성 helper 를 추가
 - 백테스트 결과 디렉토리와 실거래 trade_history 를 같은 기준으로 비교하는 스크립트를 추가
 - 심볼, 프로그램, 날짜 범위 기준으로 실거래 체결을 필터링하고 승률/순손익/종료 사유를 함께 요약하도록 구성
@@ -110,9 +112,24 @@ def summarize_sell_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def generate_comments(backtest: dict[str, Any], live: dict[str, Any]) -> list[str]:
+def generate_comments(
+    backtest: dict[str, Any],
+    live: dict[str, Any],
+    backtest_evidence: dict[str, Any] | None = None,
+) -> list[str]:
     """백테스트 대비 실거래 차이를 짧은 코멘트로 만든다."""
     comments: list[str] = []
+    if backtest_evidence is not None:
+        evidence_eligible = backtest_evidence.get("deployment_evidence_eligible")
+        if evidence_eligible is False:
+            comments.append("이 백테스트는 부분 리플레이이므로 실거래 배포 근거로 사용할 수 없습니다.")
+        elif evidence_eligible is not True:
+            comments.append("이 백테스트는 배포 근거 적격성이 기록되지 않아 실거래 배포 근거로 사용할 수 없습니다.")
+    if backtest["sell_count"] == 0 and live["sell_count"] == 0:
+        if backtest["trade_count"] == 0 and live["trade_count"] == 0:
+            comments.append("백테스트와 실거래 체결 표본이 모두 0건이라 방향성이나 성과 유사성을 판단할 수 없습니다.")
+        else:
+            comments.append("백테스트와 실거래 모두 청산 표본이 없어 성과 유사성을 판단할 수 없습니다.")
     if backtest["sell_count"] > 0 and live["sell_count"] == 0:
         comments.append("실거래 비교 기간에 청산 표본이 없어 성과 비교보다 표본 확보가 우선입니다.")
     if live["sell_count"] > 0 and backtest["sell_count"] == 0:
@@ -160,7 +177,10 @@ def build_markdown_report(payload: dict[str, Any]) -> str:
     backtest = payload["backtest"]
     live = payload["live"]
     filters = payload["filters"]
+    evidence = payload["backtest_evidence"]
     comments = payload.get("comments", [])
+    evidence_eligible = evidence["deployment_evidence_eligible"]
+    evidence_label = "예" if evidence_eligible is True else "아니요" if evidence_eligible is False else "미기록"
 
     def format_reasons(items: list[list[Any]] | list[tuple[Any, Any]]) -> str:
         if not items:
@@ -175,6 +195,13 @@ def build_markdown_report(payload: dict[str, Any]) -> str:
         f"- 백테스트 디렉토리: `{filters['backtest_dir']}`",
         f"- 비교 기간 시작: `{filters['since'] or '-'}`",
         f"- 비교 기간 종료: `{filters['until'] or '-'}`",
+        "",
+        "## 증거 적격성",
+        "",
+        f"- 리플레이 충실도: `{evidence['replay_fidelity'] or '-'}`",
+        f"- 확인 단위: `{evidence['replay_confirmation_unit'] or '-'}`",
+        f"- 배포 근거 적격성: `{evidence_label}`",
+        f"- 미재현 컨텍스트: `{', '.join(evidence['replay_unavailable_context']) or '-'}`",
         "",
         "## 백테스트",
         "",
@@ -264,8 +291,22 @@ def build_comparison_payload(
         },
         "backtest": summarize_sell_records(backtest_trades),
         "live": summarize_sell_records(live_records),
+        "backtest_evidence": {
+            "replay_fidelity": backtest_summary.get("replay_fidelity"),
+            "deployment_evidence_eligible": backtest_summary.get(
+                "deployment_evidence_eligible"
+            ),
+            "replay_confirmation_unit": backtest_summary.get("replay_confirmation_unit"),
+            "replay_unavailable_context": list(
+                backtest_summary.get("replay_unavailable_context") or []
+            ),
+        },
     }
-    payload["comments"] = generate_comments(payload["backtest"], payload["live"])
+    payload["comments"] = generate_comments(
+        payload["backtest"],
+        payload["live"],
+        payload["backtest_evidence"],
+    )
     return payload
 
 
