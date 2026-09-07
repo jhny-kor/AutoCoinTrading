@@ -35,6 +35,56 @@ def analysis_record(symbol: str, collected_at: str, gap_pct: float = 0.1) -> dic
 
 
 class LogWindowingTests(unittest.TestCase):
+    def test_malformed_jsonl_rows_do_not_abort_analysis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "2026-05-24" / "upbit__BTC_KRW.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(analysis_record("BTC/KRW", "2026-05-24T09:00:00"))
+                + "\n{\"truncated\":\n"
+                + json.dumps(analysis_record("BTC/KRW", "2026-05-24T10:00:00", gap_pct=2.0))
+                + "\n",
+                encoding="utf-8",
+            )
+
+            summaries = analyze_logs.build_recent_summaries(root, max_date_dirs=1)
+
+        self.assertEqual(1, len(summaries))
+        self.assertEqual(2, summaries[0].count)
+
+    def test_malformed_strategy_jsonl_rows_do_not_abort_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "2026-05-24" / "upbit_ma_crossover_bot" / "strategy.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "symbol": "BTC/KRW",
+                        "side": "entry",
+                        "stage": "scan",
+                        "result": "seen",
+                    }
+                )
+                + "\n{\"truncated\":\n"
+                + json.dumps(
+                    {
+                        "symbol": "BTC/KRW",
+                        "side": "entry",
+                        "stage": "scan",
+                        "result": "seen",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            rows = analyze_strategy_logs.build_summary_rows(root, max_date_dirs=1)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual(2, rows[0]["scans"])
+
     def test_recent_analysis_summaries_ignore_older_date_dirs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,6 +1,7 @@
 """
 수정 요약
 - 2026-05-24: 텔레그램 리포트가 전체 분석 로그를 읽다 죽지 않도록 최신 날짜/최신 레코드 전용 로더를 추가했다.
+- 2026-09-07: 디스크 부족으로 잘린 JSONL 한 줄이 리포트 전체를 중단시키지 않도록 손상 행을 건너뛰게 보강했다.
 - 확장된 분석 로그 필드에 맞춰 거래량 배수, RSI, 스프레드, 캔들 범위 통계를 함께 요약하도록 개선
 - 공개 기준 매수 준비 횟수와 대표 스킵 사유를 함께 보여주도록 개선
 
@@ -225,12 +226,15 @@ def iter_records(log_dir: Path, max_date_dirs: int | None = None) -> Iterable[di
         return
 
     for path in iter_record_files(log_dir, max_date_dirs=max_date_dirs):
-        with path.open("r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 line = line.strip()
                 if not line:
                     continue
-                yield json.loads(line)
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
 
 def load_records(log_dir: Path, max_date_dirs: int | None = None) -> list[dict]:

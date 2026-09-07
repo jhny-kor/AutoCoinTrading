@@ -1,6 +1,7 @@
 """
 수정 요약
 - 2026-05-24: 텔레그램 분석 명령이 전체 구조화 로그를 읽지 않도록 최신 날짜 제한 옵션을 추가했다.
+- 2026-09-07: 디스크 부족으로 잘린 JSONL 한 줄이 전략 리포트 전체를 중단시키지 않도록 손상 행을 건너뛰게 보강했다.
 - 주문 실행 품질 평균값(API 지연, 슬리피지, 체결 비율)도 거래 품질 요약에 함께 집계하도록 확장
 - MFE/MAE, 트레일링 활성화 소요 시간, 시간대 성과, 필터 기준 부족 폭까지 함께 집계하도록 확장
 - 구조화된 strategy / trade 로그를 읽어 퍼널 병목과 차단 사유를 집계하는 분석 스크립트 추가
@@ -32,12 +33,15 @@ def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     """JSONL 파일을 한 줄씩 흘려보내며 읽는다(메모리 상수)."""
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            yield json.loads(line)
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
